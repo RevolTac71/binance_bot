@@ -18,6 +18,11 @@ class Config:
     BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
     BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
 
+    # Binance Testnet Settings
+    USE_TESTNET = os.getenv("USE_TESTNET", "False").lower() == "true"
+    BINANCE_TESTNET_API_KEY = os.getenv("BINANCE_TESTNET_API_KEY")
+    BINANCE_TESTNET_API_SECRET = os.getenv("BINANCE_TESTNET_API_SECRET")
+
     # Supabase Database Settings
     DB_USER = os.getenv("DB_USER", "postgres.uvqhpiilmameyjortqoc")
     # 비밀번호에 특수문자가 있을 수 있으므로 URL 인코딩 처리

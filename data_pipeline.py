@@ -45,15 +45,33 @@ def with_exponential_backoff(max_retries=5, base_delay=1.0, max_delay=60.0):
 
 class DataPipeline:
     def __init__(self):
-        # 바이낸스 선물(USDⓈ-M Futures) 시장 타겟 (V11)
+        # 바이낸스 선물(USDⓈ-M Futures) 시장 환경 설정 (V11)
+        api_key = (
+            settings.BINANCE_TESTNET_API_KEY
+            if settings.USE_TESTNET
+            else settings.BINANCE_API_KEY
+        )
+        api_secret = (
+            settings.BINANCE_TESTNET_API_SECRET
+            if settings.USE_TESTNET
+            else settings.BINANCE_API_SECRET
+        )
+
         self.exchange = ccxt.binance(
             {
-                "apiKey": settings.BINANCE_API_KEY,
-                "secret": settings.BINANCE_API_SECRET,
+                "apiKey": api_key,
+                "secret": api_secret,
                 "enableRateLimit": True,  # ccxt 내장 속도 제한기 활성화
                 "options": {"defaultType": "future"},  # 현물(spot) -> 선물(future) 변경
             }
         )
+
+        # Testnet (Sandbox) 모드 활성화 처리
+        if settings.USE_TESTNET:
+            self.exchange.set_sandbox_mode(True)
+            logger.info(
+                "🧪 [TESTNET MODE] 바이낸스 선물 테스트넷 환경으로 CCXT 객체 연결이 세팅되었습니다."
+            )
 
     async def close(self):
         """거래소 세션을 안전하게 종료합니다."""
