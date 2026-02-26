@@ -55,22 +55,52 @@ class ExecutionEngine:
 
             # 2. 고립된 진입 대기 주문(Pending Entries) 정리
             # 안전을 위해 봇 재시작 시 포지션이 없는 종목의 미체결 주문은 (이전 세션의 진입 대기일 것이므로) 모두 취소
-            open_orders = await self.exchange.fetch_open_orders()
+            # Rate Limit(과부하) 방지를 위해 전체 조회가 아닌, 개별 Symbol 단위로 순차적 조회/취소 진행
+            try:
+                # 거래소에서 현재 거래 가능한 모든 티커를 가져옴
+                markets = await self.exchange.load_markets()
+                usdt_futures = [
+                    s
+                    for s in markets.keys()
+                    if markets[s].get("linear") and s.endswith("USDT")
+                ]
+            except Exception as e:
+                logger.error(f"거래소 마켓 로드 중 에러: {e}")
+                usdt_futures = []
+
             canceled_count = 0
-            for order in open_orders:
-                symbol = order.get("symbol")
-                # 이미 1번에서 활성 포지션으로 등록된 종목이라면, 이 주문들은 TP/SL 일 것이므로 살려둠.
-                # 포지션이 없는 종목이라면 이전 장에서 체결 안된 진입 찌꺼기이므로 취소.
-                if symbol not in self.active_positions:
-                    order_id = order.get("id")
-                    await self.exchange.cancel_order(order_id, symbol)
-                    canceled_count += 1
-                    logger.info(
-                        f"🧹 [정리 완료] 포지션이 없는 고립 미체결 주문 취소: {symbol} (Order ID: {order_id})"
-                    )
+            # 봇이 모니터링할 Top 티커들을 가져오거나, 전체를 대상으로 빠르게 스캔 (Rate Limit 주의)
+            # 선물 시장 전체를 돌면 수백 초가 소요될 수 있으므로, Open Order가 존재하는지 요약 정보만 먼저 확인
+
+            # 봇이 거래하는 대상(활성화 가능한 선물 코인)들만 추림
+            target_symbols = [s for s in usdt_futures if "USDT" in s][
+                :100
+            ]  # 상위 100개로 축약 가능 (선택)
+
+            for symbol in target_symbols:
+                # 이미 활성 포지션이 있는 경우는 스킵 (해당 코인의 미체결 주문은 TP/SL로 간주하여 살림)
+                if symbol in self.active_positions:
+                    continue
+
+                import asyncio
+
+                await asyncio.sleep(0.2)  # API Rate Limit 보호를 위한 0.2초 딜레이
+
+                try:
+                    open_orders = await self.exchange.fetch_open_orders(symbol=symbol)
+                    for order in open_orders:
+                        order_id = order.get("id")
+                        await self.exchange.cancel_order(order_id, symbol)
+                        canceled_count += 1
+                        logger.info(
+                            f"🧹 [정리 완료] 포지션이 없는 고립 미체결 주문 취소: {symbol} (Order ID: {order_id})"
+                        )
+                except Exception as e:
+                    # 빈번한 조회 중 특정 코인 에러 발생 시 무시하고 다음 코인 진행
+                    pass
 
             logger.info(
-                f"🔄 동기화 완료: 복구된 포지션 {active_count}개, 정리된 대기 주문 {canceled_count}개 유지."
+                f"🔄 동기화 완료: 복구된 포지션 {active_count}개, 순차 스캔으로 정리된 대기 주문 {canceled_count}개."
             )
         except Exception as e:
             logger.error(f"거래소 동기화 중(sync_state_from_exchange) 예외 발생: {e}")
