@@ -1,4 +1,3 @@
-import pandas as pd
 from config import settings, logger
 from data_pipeline import DataPipeline
 
@@ -6,69 +5,77 @@ from data_pipeline import DataPipeline
 class RiskManager:
     def __init__(self, data_pipeline: DataPipeline):
         """
-        리스크 관리를 위해 실시간 가격을 조사해야할 상황이 있으므로
-        DataPipeline 객체를 인젝션받습니다.
+        VWAP V11 고정 비율 자금 관리 모듈입니다.
+        1회 진입 시 선물 계좌 총 자금의 3%에 해당하는 금액을 고정 투입합니다.
+        바이낸스 최소 주문 금액 거절 방지를 위해 5.5 USDT 안전망이 추가되었습니다.
         """
         self.pipeline = data_pipeline
-        self.risk_pct = settings.RISK_PERCENTAGE  # 최대 손실 제한 비율 (기본 0.02 = 2%)
+        self.risk_pct = (
+            0.03  # 거래당 자본의 3% 배팅 (레버리지 1배이므로 그대로 명목금액)
+        )
+        self.min_order_usdt = 5.5  # 바이낸스 선물 최소 주문 금액 (안전 마진 포함)
 
     def calculate_position_size(
-        self, capital: float, entry_price: float, stop_loss: float
-    ) -> float:
+        self, symbol: str, capital: float, entry_price: float
+    ) -> dict:
         """
-        고정 자산 리스크 비율(2%)을 토대로 진입 수량을 산출합니다.
-        (슬리피지 0.05%를 여분 마진으로 추가하여 보수적으로 계산)
+        V11 고정 비율 투입 수량을 계산합니다.
 
-        Args:
-            capital: 가용 총 잔고 (USDT 기준)
-            entry_price: 자산의 진입 예상 가격
-            stop_loss: ATR로 계산한 하드 스탑로스 가격
+        수식:
+            invest_usdt = max(capital * 0.03, 5.5)
+            position_size = invest_usdt / entry_price
+
+        Returns:
+            dict: {size, invest_usdt, min_notional_applied}
         """
-        risk_amount = capital * self.risk_pct
+        if capital <= 0 or entry_price <= 0:
+            return {"size": 0.0, "invest_usdt": 0.0, "min_notional_applied": False}
 
-        # 1주 당 손실 (슬리피지 비용 등 추가 가산)
-        slippage_estimate = entry_price * 0.0005
-        loss_per_coin = abs(entry_price - stop_loss) + slippage_estimate
+        # 기본 3% 투입 금액 산출
+        base_invest = capital * self.risk_pct
+        min_notional_applied = False
 
-        if loss_per_coin <= 0:
-            return 0.0
-
-        size = risk_amount / loss_per_coin
-        return size
-
-    def calculate_stop_loss(self, entry_price: float, atr_14: float) -> float:
-        """
-        진입 시 최근 14주기 ATR의 2배 거리에 위치한 하드 스탑로스를 계산합니다. (Long 진입 기준)
-        """
-        return entry_price - (atr_14 * 2)
-
-    async def is_highly_correlated_with_btc(
-        self, symbol: str, threshold: float = 0.85
-    ) -> bool:
-        """
-        비트코인(BTCUSDT)과의 피어슨 상관계수를 계산하여 특정 값(0.85) 이상이면
-        중복 진입 방지를 위해 True를 반환합니다.
-        """
-        if symbol == "BTCUSDT":
-            return False  # 자기 자신은 필터링하지 않음
-
-        try:
-            btc_df = await self.pipeline.fetch_ohlcv_df("BTCUSDT", limit=100)
-            alt_df = await self.pipeline.fetch_ohlcv_df(symbol, limit=100)
-
-            # 인덱스(시간) 기준으로 공통 데이터 병합 (join)
-            joined = pd.concat([btc_df["close"], alt_df["close"]], axis=1, join="inner")
-            joined.columns = ["BTC", "ALT"]
-
-            # pandas corr 메서드를 이용한 pearson 상관계수 도출
-            corr = joined["BTC"].corr(joined["ALT"], method="pearson")
+        # 5.5 USDT 최소 제한망 적용
+        if base_invest < self.min_order_usdt:
+            invest_usdt = self.min_order_usdt
+            min_notional_applied = True
             logger.info(
-                f"[{symbol}]와 BTC의 피어슨 상관계수 산출: {corr:.3f} (허용치: {threshold})"
+                f"[{symbol}] 산출된 금액({base_invest:.2f})이 최소 주문 금액 미달. {self.min_order_usdt} USDT로 보정 적용."
             )
+        else:
+            invest_usdt = base_invest
 
-            return corr >= threshold
+        # 만약 전체 자본금 자체가 5.5 USDT 미만이면 진입 불가
+        if capital < self.min_order_usdt:
+            logger.warning(
+                f"가용 자본({capital:.2f})이 최소 주문금액({self.min_order_usdt}) 자체를 넘지 못해 진입 불가."
+            )
+            return {"size": 0.0, "invest_usdt": 0.0, "min_notional_applied": False}
 
+        # 진입 코인 수량 산출
+        raw_size = invest_usdt / entry_price
+
+        # 수량 정밀도 포맷팅 (stepSize 적용)
+        try:
+            position_size_str = self.pipeline.exchange.amount_to_precision(
+                symbol, raw_size
+            )
+            position_size = float(position_size_str)
         except Exception as e:
-            logger.error(f"상관관계 계산 중 에러 발생: {e}")
-            # 에러 발생 시, 매매 기회를 놓치지 않도록 필터 통과하는 것을 기본 원칙으로 함 (False 리턴)
-            return False
+            logger.warning(f"[{symbol}] 수량 정밀도 변환 오류: {e}. Raw: {raw_size}")
+            position_size = raw_size  # fallback
+
+        if position_size <= 0:
+            return {"size": 0.0, "invest_usdt": 0.0, "min_notional_applied": False}
+
+        # 리스크 투명성 로깅
+        logger.info(
+            f"[Position Sizing] [{symbol}] 투입: {invest_usdt:.2f} USDT, 수량: {position_size}, "
+            f"Target Risk: {self.risk_pct * 100:.1f}%, 보정 여부: {min_notional_applied}"
+        )
+
+        return {
+            "size": position_size,
+            "invest_usdt": invest_usdt,
+            "min_notional_applied": min_notional_applied,
+        }

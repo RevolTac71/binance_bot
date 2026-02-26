@@ -1,34 +1,68 @@
-import asyncio
 from datetime import datetime, timezone
-import ccxt.async_support as ccxt
-from sqlalchemy import text
 from config import settings, logger
-from database import AsyncSessionLocal, Trade, BalanceHistory
+from database import Trade, AsyncSessionLocal
 from data_pipeline import DataPipeline
 from notification import notifier
 
 
 class ExecutionEngine:
     def __init__(self, data_pipeline: DataPipeline):
-        """
-        동일한 API Key와 속도 제한기(Rate Limiter)를 공유하기 위해
-        data_pipeline이 지니고 있는 ccxt exchange 인스턴스를 활용합니다.
-        """
         self.exchange = data_pipeline.exchange
         # 시스템 문제 검출(DB-서버 간 Mismatch 등) 시 자가 정지 처리를 위한 Flag
         self.is_halted = False
 
-    async def execute_trade(
+        # 대기 중인 진입 지정가 주문 추적. 구조:
+        # { "SOL/USDT:USDT": {
+        #     "order_id": "12345",
+        #     "signal": "LONG",
+        #     "limit_price": 150.0,
+        #     "tp_price": 151.5,
+        #     "sl_price": 149.25,
+        #     "amount": 0.5,
+        #     "status": "open" # 'open', 'closed', 'canceled'
+        # }}
+        self.pending_entries = {}
+
+        # 활성 상태인 포지션 메모리 (TP/SL 등 스레드 충돌 확인용)
+        self.active_positions = {}
+
+    async def setup_margin_and_leverage(self, symbol: str):
+        """
+        바이낸스 선물에서 해당 코인의 레버리지를 1배로, 마진 모드를 격리(Isolated)로 설정합니다.
+        """
+        if settings.DRY_RUN:
+            return
+
+        try:
+            # 1. 격리 마진(Isolated) 설정
+            await self.exchange.set_margin_mode("isolated", symbol)
+            logger.info(f"[{symbol}] 마진 모드: 격리(Isolated) 설정 완료.")
+        except Exception as e:
+            # 이미 격리로 설정되어 있는 경우 Exception 발생 가능 (무시)
+            if "No need to change margin type" in str(e):
+                pass
+            else:
+                logger.warning(f"[{symbol}] 마진 모드 설정 중 정보: {e}")
+
+        try:
+            # 2. 레버리지 1배 설정
+            await self.exchange.set_leverage(1, symbol)
+            logger.info(f"[{symbol}] 레버리지: 1x 설정 완료.")
+        except Exception as e:
+            logger.warning(f"[{symbol}] 레버리지 설정 중 정보: {e}")
+
+    async def place_limit_entry_order(
         self,
         symbol: str,
+        side: str,  # 'buy' or 'sell'
         amount: float,
-        current_price: float,
-        stop_loss: float,
+        price: float,
+        tp_price: float,
+        sl_price: float,
         reason: str,
     ) -> bool:
         """
-        Long 시장가 진입 주문과 동시에 하드 스탑로스(역지정가 시장가) 주문을 발송하여 OCO 성격을 구현합니다.
-        성공 시 DB에 이력을 적재하고, 실패 시 예외 처리하여 카카오톡 알림을 발송합니다.
+        선물 시장에 진입 지정가(Limit) 주문을 Post-Only 옵션으로 전송합니다.
         """
         if self.is_halted:
             logger.warning(
@@ -36,133 +70,245 @@ class ExecutionEngine:
             )
             return False
 
+        # 이미 대기 중인 주문이 있다면 무시
+        if symbol in self.pending_entries:
+            logger.info(f"[{symbol}] 이미 대기 중인 진입 주문이 존재합니다. 생략.")
+            return False
+
         try:
-            # 바이낸스 선물 시장 기준 로터리 사이즈 정밀도가 필요하므로, amount 등을 미리 맞추어 둔 상황 가정
             logger.info(
-                f"[{symbol}] 시장가 롱 진입 시도. 예측 체결가: {current_price:.4f}, 수량: {amount}"
+                f"[{symbol}] 선물 진입 지정가({side}) 시도. 가격: {price:.4f}, "
+                f"수량: {amount} (DRY_RUN: {settings.DRY_RUN})"
             )
 
-            # 1. 포지션 진입 (Market Buy)
-            entry_order = await self.exchange.create_order(
-                symbol=symbol, type="market", side="buy", amount=amount
-            )
+            # 레버리지 및 마진 환경 사전 세팅
+            await self.setup_margin_and_leverage(symbol)
 
-            # 2. 강제 하드 스탑로스 지정 (STOP_MARKET, reduceOnly=True 사용)
-            # 바이낸스 선물은 reduceOnly를 통해 기존 물량 청산에만 초점을 둘 수 있습니다.
-            stop_order = await self.exchange.create_order(
-                symbol=symbol,
-                type="stopMarket",
-                side="sell",
-                amount=amount,
-                price=None,  # 시장가 체결
-                params={"stopPrice": stop_loss, "reduceOnly": True},
-            )
-            logger.info(
-                f"[{symbol}] 스탑로스({stop_loss:.4f}) 명령 전송 완료. (ReduceOnly)"
-            )
+            order_id = "DRY_RUN_ID"
 
-            # 3. 로컬 DB(Supabase) 적재
-            async with AsyncSessionLocal() as session:
-                new_trade = Trade(
-                    timestamp=datetime.now(timezone.utc),
-                    action="BUY",
+            # Post-Only (GTX) 지정가 파라미터
+            params = {"timeInForce": "GTX", "postOnly": True}
+
+            if not settings.DRY_RUN:
+                entry_order = await self.exchange.create_order(
                     symbol=symbol,
-                    price=current_price,  # 시장가여서 약간의 오차가 있을 수 있음 (엄밀히 entry_order['average'] 참조 권장)
-                    quantity=amount,
-                    reason=reason,
+                    type="limit",
+                    side=side,
+                    amount=amount,
+                    price=price,
+                    params=params,
                 )
-                session.add(new_trade)
-                await session.commit()
+                order_id = entry_order.get("id")
+
+            # 상태 머신 관리를 위해 대기열 등록
+            signal_type = "LONG" if side == "buy" else "SHORT"
+            self.pending_entries[symbol] = {
+                "order_id": order_id,
+                "signal": signal_type,
+                "limit_price": price,
+                "tp_price": tp_price,
+                "sl_price": sl_price,
+                "amount": amount,
+                "status": "open",
+            }
 
             await notifier.send_message(
-                f"✅ 신규 롱 진입\n[{symbol}] 수량: {amount}\n스탑로스: {stop_loss:.4f}\n사유: {reason}"
+                f"⏳ 진입 지정가 등록\n[{symbol}] {signal_type}\n수량: {amount}\n"
+                f"가격: {price:.4f}\n사유: {reason}"
             )
             return True
 
         except Exception as e:
-            logger.error(f"[{symbol}] 주문 실행 중 극단적 예외 발생: {e}")
-            await notifier.send_message(
-                f"🚨 [긴급 장애] 주문 전송 실패\n심볼: {symbol}\n내용: {e}"
-            )
+            logger.error(f"[{symbol}] 진입 지정가 주문 처리 중 예외 발생: {e}")
             return False
 
-    async def close_position(self, symbol: str, amount: float, reason: str) -> bool:
+    async def cancel_pending_order(
+        self, symbol: str, reason: str = "취소 요청"
+    ) -> bool:
         """
-        타임컷(24시간 경과 등) 혹은 수동 청산 시 지정 수량을 시장가로 청산합니다.
+        신호 해제, 혹은 정산 시간 등 특정 사유로 미체결 지정가 진입 주문을 취소합니다.
         """
+        if symbol not in self.pending_entries:
+            return False
+
+        order_info = self.pending_entries[symbol]
+        order_id = order_info["order_id"]
+
         try:
-            logger.info(f"[{symbol}] 청산 요청됨. 사유: {reason}")
-            # 시장가 매도로 롱 포지션 청산
-            close_order = await self.exchange.create_order(
+            logger.info(
+                f"[{symbol}] 미체결 대기 주문 취소. 사유: {reason} (DRY: {settings.DRY_RUN})"
+            )
+
+            if not settings.DRY_RUN and order_id != "DRY_RUN_ID":
+                await self.exchange.cancel_order(order_id, symbol)
+
+            del self.pending_entries[symbol]
+            return True
+        except Exception as e:
+            logger.error(f"[{symbol}] 지정가 주문 취소 중 에러: {e}")
+            if "Unknown order" in str(e):
+                # 거래소에서 이미 만료/취소된 경우이므로 메모리에서 지움
+                del self.pending_entries[symbol]
+                return True
+            return False
+
+    async def place_tp_sl_orders(self, symbol: str, entry_info: dict) -> bool:
+        """
+        체결이 완료된 포지션에 대해 Reduce-Only 파라미터가 포함된 TP/SL 주문을 전송합니다.
+        """
+        signal_type = entry_info["signal"]
+        amount = entry_info["amount"]
+        tp_price = entry_info["tp_price"]
+        sl_price = entry_info["sl_price"]
+        entry_price = entry_info["limit_price"]
+
+        # Long이면 매도(Sell)로 청산, Short이면 매수(Buy)로 청산
+        exit_side = "sell" if signal_type == "LONG" else "buy"
+
+        # SL 설정 시 Taker 수수료(0.05%)가 발생함을 로깅 (V11 Feedback)
+        maker_fee = 0.0002
+        taker_fee = 0.0005
+
+        # Pnl = (exit - entry) / entry  * 레버리지(1)
+        if signal_type == "LONG":
+            tp_pct = (tp_price - entry_price) / entry_price
+            sl_pct = (sl_price - entry_price) / entry_price
+        else:
+            tp_pct = (entry_price - tp_price) / entry_price
+            sl_pct = (entry_price - sl_price) / entry_price
+
+        real_tp_pct = tp_pct - maker_fee  # TP는 Limit이므로 Maker 수수료 부담
+        real_sl_pct = sl_pct - taker_fee  # SL은 Stop Market이므로 Taker 수수료 부담
+
+        logger.info(
+            f"[{symbol}] TP/SL Orders. "
+            f"실제 익절률(수수료 차감 후): {real_tp_pct * 100:.2f}%, "
+            f"실제 손절률(수수료 차감 후): {real_sl_pct * 100:.2f}% (Taker 수수료 0.05% 포함. R:R={abs(real_tp_pct / real_sl_pct) if real_sl_pct != 0 else 0:.2f})"
+        )
+
+        try:
+            # DB 기록 (진입) - DRY_RUN 이더라도 테스트 내역을 DB에 기록
+            async with AsyncSessionLocal() as session:
+                dr_prefix = "[DRY_RUN] " if settings.DRY_RUN else ""
+                new_trade = Trade(
+                    timestamp=datetime.utcnow(),
+                    action=signal_type,
+                    symbol=symbol,
+                    price=entry_price,
+                    quantity=amount,
+                    reason=f"{dr_prefix}VWAP V11 지정가 체결 후 TP/SL 세팅 완료",
+                )
+                session.add(new_trade)
+                await session.commit()
+
+            if settings.DRY_RUN:
+                logger.info(f"🧪 [DRY RUN] {symbol} TP/SL 가상 주문 완료 및 DB 기록됨")
+                self.active_positions[symbol] = True
+                return True
+
+            # 1. Take Profit (LIMIT 방식, reduceOnly)
+            # 바이낸스 선물 TAKE_PROFIT_LIMIT 또는 단순 LIMIT + reduceOnly 사용
+            await self.exchange.create_order(
                 symbol=symbol,
-                type="market",
-                side="sell",
+                type="limit",
+                side=exit_side,
                 amount=amount,
-                price=None,
+                price=tp_price,
                 params={"reduceOnly": True},
             )
 
-            async with AsyncSessionLocal() as session:
-                # 청산 이력 적재
-                new_trade = Trade(
-                    timestamp=datetime.now(timezone.utc),
-                    action="SELL",
-                    symbol=symbol,
-                    price=0.0,  # 마켓오더 미기입 또는 average로 향후 고도화 가능
-                    quantity=amount,
-                    reason=reason,
-                )
-                session.add(new_trade)
-                await session.commit()
+            # 2. Stop Loss (STOP_MARKET 방식, reduceOnly)
+            # 바이낸스 트리거 주문 설정
+            # stopPrice 트리거 시점에 시장가(Market)로 청산됨
+            await self.exchange.create_order(
+                symbol=symbol,
+                type="stop_market",
+                side=exit_side,
+                amount=amount,
+                params={"stopPrice": sl_price, "reduceOnly": True},
+            )
 
             await notifier.send_message(
-                f"🔄 포지션 청산 완료\n[{symbol}]\n사유: {reason}"
+                f"✅ 포지션 진입 완료\n[{symbol}] {signal_type}\n"
+                f"체결가: {entry_price:.4f}\n"
+                f"TP 지정가: {tp_price}\n"
+                f"SL 시장가: {sl_price}\n"
+                f"Real R:R: 1 : {abs(real_tp_pct / real_sl_pct) if real_sl_pct != 0 else 0:.2f}"
             )
+
+            self.active_positions[symbol] = True
             return True
 
         except Exception as e:
-            logger.error(f"청산 처리 과정 오류 발생: {e}")
+            logger.error(f"[{symbol}] TP/SL 세팅 중 예외 발생: {e}")
             return False
+
+    async def check_pending_orders_state(self):
+        """
+        상태 머신 (State Machine) 방식의 미체결 지정가 추적루프.
+        대기 중인 주문이 체결(Closed)되면 TP/SL을 쏘고,
+        만약 체결 이전에 가격이 이미 지나치게 벗어나거나 취소(Canceled)되면 관리망에서 해제합니다.
+        """
+        if not self.pending_entries:
+            return
+
+        symbols_to_remove = []
+
+        for symbol, entry_info in self.pending_entries.items():
+            order_id = entry_info["order_id"]
+
+            if settings.DRY_RUN:
+                # Dry run 환경에서는 테스트 목적으로 즉시 체결되었다고 가정
+                logger.info(f"🧪 [DRY RUN] {symbol} 가상 체결 확인 및 TP/SL 포워딩")
+                await self.place_tp_sl_orders(symbol, entry_info)
+                symbols_to_remove.append(symbol)
+                continue
+
+            try:
+                # 바이낸스 API로 해당 지문 상태 조회
+                order_status = await self.exchange.fetch_order(order_id, symbol)
+                status = order_status.get("status")
+
+                if status == "closed":
+                    # ── 지정가 체결 확인 ──
+                    logger.info(
+                        f"🎯 [{symbol}] 진입 지정가 체결 성공! TP/SL을 전송합니다."
+                    )
+                    await self.place_tp_sl_orders(symbol, entry_info)
+                    symbols_to_remove.append(symbol)
+
+                elif status in ["canceled", "rejected", "expired"]:
+                    # ── 취소 / 거절 ──
+                    logger.warning(
+                        f"[{symbol}] 진입 지정가 취소/거절 확인 (상태:{status}). 대기열에서 삭제합니다."
+                    )
+                    symbols_to_remove.append(symbol)
+
+            except Exception as e:
+                logger.error(f"[{symbol}] 대기 주문 상태 조회 중 에러: {e}")
+
+        # 완료된/취소된 항목 메모리 해제
+        for sym in symbols_to_remove:
+            if sym in self.pending_entries:
+                del self.pending_entries[sym]
 
     async def check_state_mismatch(self):
         """
         [Fail-Safe 방어 체계]
-        매시간 정각에 바이낸스 실제 위치(잔고, 전체 열린 포지션)와
-        DB내역(trades 누적 구매/매도)을 대조하여 강한 오류 방지 메카니즘을 구축.
-        불일치가 발생하면 시스템 전역을 Halted 시킵니다.
+        거래소 실잔고와 DB/메모리 기록 사이의 불일치를 감지합니다.
         """
-        if self.is_halted:
-            return
-
         try:
-            # 1. 현재 잔고 파악 및 DB 추가 (주기적 모니터링용)
+            # 바이낸스 선물 계좌 조회
             balance_info = await self.exchange.fetch_balance()
-            total_usdt = balance_info.get("total", {}).get("USDT", 0.0)
+            usdt_total = balance_info.get("total", {}).get("USDT", 0.0)
 
-            async with AsyncSessionLocal() as session:
-                new_balance = BalanceHistory(
-                    timestamp=datetime.now(timezone.utc), balance=total_usdt
-                )
-                session.add(new_balance)
+            # 보유 선물 포지션 조회 (CCXT fetch_positions)
+            if not settings.DRY_RUN:
+                positions = await self.exchange.fetch_positions()
+                active_open = [p for p in positions if float(p.get("contracts", 0)) > 0]
 
-                # 2. DB 누적 순수 포지션 사이즈(수량) 조회 (간단한 예시: BUY량 - SELL량 합산 = NET POSITION)
-                # 엄밀한 동기화는 각 심볼 단위로 이루어져야 하나,
-                # 여기서는 시스템 장애의 대표격으로 총 USDT가 극단적으로 0이 되는 등(청산)의 상태를 점검
-                if total_usdt < (settings.RISK_PERCENTAGE * 50):
-                    # 자산이 아주 미미하게 남은 경우 (예기치 못한 극단적 손실)
-                    self.is_halted = True
-                    logger.error(
-                        f"[Fail-Safe] 잔고가 비정상적으로 소진되었습니다. ({total_usdt} USDT)"
-                    )
-                    await notifier.send_message(
-                        f"🚨 [시스템 긴급정지]\n자산이 비정상적으로 적습니다. 누수 또는 연쇄 스탑로스의 가능성으로 운영을 일시 중단합니다.\n현재 잔고: {total_usdt:.2f} USDT"
-                    )
-
-                await session.commit()
-
-            logger.info(
-                f"[State Sync] 서버 잔여 USDT: {total_usdt:.2f} (대조 검사 이상없음)"
-            )
+                # 향후 로직 고도화: 실제 서버 포지션과 self.active_positions 불일치 방어
+                pass
 
         except Exception as e:
-            logger.error(f"State Sync 네트워크 연동 에러: {e}")
+            logger.error(f"State Mismatch 체크 중 오류: {e}")

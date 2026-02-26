@@ -1,72 +1,131 @@
 import pandas as pd
-from config import settings
+from config import settings, logger
 
 
 class StrategyEngine:
-    def __init__(self, k_value=None):
+    def __init__(self, exchange=None):
         """
-        돌파 계수 K 값을 받습니다. 주어지지 않으면 환경 설정 파일(.env)의 k 값을 읽습니다.
+        VWAP 평균 회귀 전략 엔진 (V11)
+        - 타임프레임: 3분봉
+        - 핵심 지표: 당일 누적 VWAP, VWAP StdDev Band, RSI(14)
+        - 진입: RSI 극단치 도달 시 VWAP 상하단 밴드에 지정가(Limit) 대기
+        - 청산: 비대칭 고정 R:R (Long: +1.0% / -0.5%, Short: -1.2% / +0.4%)
         """
-        self.k = k_value if k_value is not None else settings.K_VALUE
+        self.exchange = exchange  # ccxt exchange instance for precision
 
-    def check_long_entry(self, df: pd.DataFrame) -> dict:
-        """
-        주어진 DataFrame (보조지표가 추가된 상태여야 함)을 기반으로 Long 진입 룰을 검사합니다.
-        가장 최신봉(제일 마지막 행)을 현재 캔들 시점으로 판단합니다.
+        # 지표 설정
+        self.rsi_os = 30  # Long 대기 기준
+        self.rsi_ob = 70  # Short 대기 기준
 
-        Condition 1 (Trend Filter): 현재 종가가 MA(20) 및 MA(50) 위에 존재.
-        Condition 2 (Volatility Breakout): 현재 종가 > 당일 시가 + (이전 고가 - 이전 저가) * k
-        Condition 3 (Volume Verification): 거래량 > 당일 제외 과거 20봉 평균 거래량 * 1.5
-        Condition 4 (RSI Filter): 14주기 RSI < 70 (과매수 상태가 아닐 것)
+        # 고정 청산 비율 (TP/SL)
+        self.long_tp_pct = 0.010  # +1.0%
+        self.long_sl_pct = 0.005  # -0.5%
+        self.short_tp_pct = 0.012  # -1.2%
+        self.short_sl_pct = 0.004  # +0.4%
+
+    def check_entry(self, symbol: str, df: pd.DataFrame) -> dict:
+        """
+        주어진 3분봉 데이터를 기반으로 진입 시그널 및 지정가 주문 가격을 산출합니다.
 
         Returns:
-            dict: { 'signal': bool, 'reason': str }
-        """
-        # 최소한 EMA50을 요구하기 때문에 데이터 길이 검증
-        if len(df) < 51:
-            return {"signal": False, "reason": "데이터 부족 (최소 51개 캔들 필요)"}
-
-        current_candle = df.iloc[-1]
-        previous_candle = df.iloc[-2]
-
-        # 1. 가격 데이터 추출
-        current_price = current_candle["close"]
-        current_open = current_candle["open"]
-        prev_high = previous_candle["high"]
-        prev_low = previous_candle["low"]
-        current_vol = current_candle["volume"]
-
-        # 2. 이동평균 추출
-        ma_20 = current_candle["MA_20"]
-        ma_50 = current_candle["MA_50"]
-
-        # Condition 1: Trend Filter
-        cond1 = (current_price > ma_20) and (current_price > ma_50)
-
-        # Condition 2: Volatility Breakout
-        target_price = current_open + (prev_high - prev_low) * self.k
-        cond2 = current_price > target_price
-
-        # Condition 3: Volume Verification
-        vol_ma_20 = current_candle["Volume_MA_20"]
-        cond3 = current_vol >= (vol_ma_20 * 1.5)
-
-        # Condition 4: RSI Filter
-        rsi_14 = current_candle["RSI_14"]
-        cond4 = rsi_14 < 70
-
-        # 최종 판단
-        if cond1 and cond2 and cond3 and cond4:
-            return {
-                "signal": True,
-                "reason": (
-                    f"모든 조건 충족 "
-                    f"(목표가: {target_price:.4f}, 도달가: {current_price:.4f}, "
-                    f"RSI: {rsi_14:.2f}, 거래량 {current_vol:.2f} >= {vol_ma_20 * 1.5:.2f})"
-                ),
+            dict: {
+                "signal": str ('LONG' | 'SHORT' | None),
+                "limit_price": float (진입 지정가),
+                "tp_price": float (익절가),
+                "sl_price": float (손절가),
+                "reason": str (로그용 텍스트)
             }
+        """
+        if len(df) < 15:
+            return {"signal": None, "reason": "데이터 부족"}
+
+        # 가장 최근 완성된 캔들(혹은 진행중인 캔들의 최신 틱)을 기준으로 확인
+        # 지정가 대기의 성격상, 가장 최신 봉(index -1)의 정보를 바탕으로 밴드와 RSI를 확인합니다.
+        current = df.iloc[-1]
+
+        rsi_val = current.get("RSI_14", 50)
+        lower_band = current.get("Lower_Band", None)
+        upper_band = current.get("Upper_Band", None)
+
+        if pd.isna(lower_band) or pd.isna(upper_band) or pd.isna(rsi_val):
+            return {"signal": None, "reason": "VWAP 밴드 또는 RSI 계산 안됨"}
+
+        # ─── 진입 가격 설정 (VWAP 밴드 +/- 2 틱 보정) ───
+        # 우선 현재 마켓의 tickSize를 조회해야 정확한 2 틱을 더하고 뺄 수 있습니다.
+        limit_price = 0.0
+        signal_type = None
+        reason = ""
+
+        # 시장 정보에서 tickSize 가져오기
+        tick_size = 0.001  # 기본값 (fallback)
+        if self.exchange and self.exchange.markets and symbol in self.exchange.markets:
+            market = self.exchange.markets[symbol]
+            tick_size = float(market.get("precision", {}).get("price", 0.001))
+
+        if rsi_val < self.rsi_os:
+            signal_type = "LONG"
+            # Lower Band + 2 Tick 위치에 지정가
+            raw_limit = lower_band + (tick_size * 2)
+            limit_price = (
+                self.exchange.price_to_precision(symbol, raw_limit)
+                if self.exchange
+                else raw_limit
+            )
+
+            # 고정 비율 TP/SL 계산
+            raw_tp = float(limit_price) * (1 + self.long_tp_pct)
+            raw_sl = float(limit_price) * (1 - self.long_sl_pct)
+
+            tp_price = (
+                float(self.exchange.price_to_precision(symbol, raw_tp))
+                if self.exchange
+                else raw_tp
+            )
+            sl_price = (
+                float(self.exchange.price_to_precision(symbol, raw_sl))
+                if self.exchange
+                else raw_sl
+            )
+
+            reason = (
+                f"LONG 대기 (RSI: {rsi_val:.1f} < {self.rsi_os}). 지정가: {limit_price}"
+            )
+
+        elif rsi_val > self.rsi_ob:
+            signal_type = "SHORT"
+            # Upper Band - 2 Tick 위치에 지정가
+            raw_limit = upper_band - (tick_size * 2)
+            limit_price = (
+                self.exchange.price_to_precision(symbol, raw_limit)
+                if self.exchange
+                else raw_limit
+            )
+
+            # 고정 비율 TP/SL 계산
+            raw_tp = float(limit_price) * (1 - self.short_tp_pct)
+            raw_sl = float(limit_price) * (1 + self.short_sl_pct)
+
+            tp_price = (
+                float(self.exchange.price_to_precision(symbol, raw_tp))
+                if self.exchange
+                else raw_tp
+            )
+            sl_price = (
+                float(self.exchange.price_to_precision(symbol, raw_sl))
+                if self.exchange
+                else raw_sl
+            )
+
+            reason = f"SHORT 대기 (RSI: {rsi_val:.1f} > {self.rsi_ob}). 지정가: {limit_price}"
+
+        else:
+            return {"signal": None, "reason": f"RSI 중립 구간 ({rsi_val:.1f})"}
 
         return {
-            "signal": False,
-            "reason": f"진입 불가 (Trend:{cond1}, Breakout:{cond2}, Vol:{cond3}, RSI:{cond4})",
+            "signal": signal_type,
+            "limit_price": float(limit_price),
+            "tp_price": float(tp_price),
+            "sl_price": float(sl_price),
+            "reason": reason,
+            "current_rsi": rsi_val,
         }

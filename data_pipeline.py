@@ -2,6 +2,8 @@ import asyncio
 import functools
 import ccxt.async_support as ccxt
 import pandas as pd
+import numpy as np
+import pandas_ta as ta
 import pandas_ta as ta
 from ccxt.base.errors import RateLimitExceeded, RequestTimeout, NetworkError
 from config import settings, logger
@@ -43,13 +45,13 @@ def with_exponential_backoff(max_retries=5, base_delay=1.0, max_delay=60.0):
 
 class DataPipeline:
     def __init__(self):
-        # 바이낸스 선물 시장을 타겟으로 가정 (현물인 경우 defaultType: 'spot')
+        # 바이낸스 선물(USDⓈ-M Futures) 시장 타겟 (V11)
         self.exchange = ccxt.binance(
             {
                 "apiKey": settings.BINANCE_API_KEY,
                 "secret": settings.BINANCE_API_SECRET,
                 "enableRateLimit": True,  # ccxt 내장 속도 제한기 활성화
-                "options": {"defaultType": "future"},
+                "options": {"defaultType": "future"},  # 현물(spot) -> 선물(future) 변경
             }
         )
 
@@ -58,14 +60,15 @@ class DataPipeline:
         await self.exchange.close()
 
     @with_exponential_backoff(max_retries=5)
-    async def fetch_ohlcv_df(
-        self, symbol: str, timeframe: str = "1h", limit: int = 150
+    async def fetch_ohlcv_since(
+        self, symbol: str, timeframe: str = "3m", since: int = None
     ) -> pd.DataFrame:
         """
         주어진 심볼의 바이낸스 캔들 데이터를 비동기로 불러와 DataFrame으로 변환합니다.
-        (limit은 EMA 50, RSI 14 등 과거치를 충분히 포함하기 위해 150 이상 지정)
+        (V11: since 파라미터를 사용하여 09:00 KST 부터의 모든 데이터를 가져옵니다)
         """
-        candles = await self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+        # limit 없이 since부터 현재까지 모두 가져와야 VWAP 누적이 정확함 (기본 500개 1500분=25시간이므로 당일 커버 가능)
+        candles = await self.exchange.fetch_ohlcv(symbol, timeframe, since=since)
 
         df = pd.DataFrame(
             candles, columns=["timestamp", "open", "high", "low", "close", "volume"]
@@ -74,44 +77,70 @@ class DataPipeline:
         df.set_index("datetime", inplace=True)
         return df
 
-    def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+    def calculate_vwap_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        pandas_ta 모듈을 사용하여 매매 전략 판단에 필요한 보조지표를 일괄 계산합니다.
+        당일 누적 VWAP (Anchored VWAP) 및 표준편차 밴드 계산 (V11).
+        주의: df는 반드시 당일 09:00 KST 이후의 데이터만 포함하거나,
+        여기서 Session 기준 Groupby 연산을 해야 하지만,
+        fetch_ohlcv_since 에서 이미 09:00 KST 이후 데이터만 넘겨준다고 가정합니다.
         """
-        # 1. 추세 식별을 위한 이동평균선(MA)
-        df.ta.sma(length=20, append=True, col_names=("MA_20",))
-        df.ta.sma(length=50, append=True, col_names=("MA_50",))
+        if len(df) == 0:
+            return df
 
-        # 2. RSI 필터
+        df["hlc3"] = (df["high"] + df["low"] + df["close"]) / 3
+        df["vol_hlc3"] = df["hlc3"] * df["volume"]
+        df["vol_hlc3_sq"] = df["hlc3"] ** 2 * df["volume"]
+
+        # 누적 합계 계산
+        df["cum_vol"] = df["volume"].cumsum()
+        df["cum_vol_hlc3"] = df["vol_hlc3"].cumsum()
+        df["cum_vol_hlc3_sq"] = df["vol_hlc3_sq"].cumsum()
+
+        # VWAP 계산
+        df["VWAP"] = df["cum_vol_hlc3"] / df["cum_vol"]
+
+        # 분산(Variance) 계산 = (누적(가격^2 * 거래량) / 누적거래량) - VWAP^2
+        variance = (df["cum_vol_hlc3_sq"] / df["cum_vol"]) - (df["VWAP"] ** 2)
+        # 음수 분산 방지 (부동소수점 오차)
+        variance = np.maximum(0, variance)
+
+        # 표준편차 및 밴드 (VWAP 멀티플라이어 2.0 고정 혹은 설정값)
+        vwap_mult = 2.0
+        df["StdDev"] = np.sqrt(variance)
+        df["Upper_Band"] = df["VWAP"] + df["StdDev"] * vwap_mult
+        df["Lower_Band"] = df["VWAP"] - df["StdDev"] * vwap_mult
+
+        # 과매도/과매수 판단을 위한 RSI (14)
         df.ta.rsi(length=14, append=True, col_names=("RSI_14",))
-
-        # 3. ATR 필터 (변동성 파악 및 역지정가(스탑로스) 계산 용도)
-        df.ta.atr(length=14, append=True, col_names=("ATR_14",))
-
-        # 4. 거래량 검증용 20봉 평균 거래량
-        # 마지막 로우 직전 캔들 포함하여 과거 20개 이동평균
-        df["Volume_MA_20"] = df["volume"].rolling(window=20).mean()
-
-        # 결측치가 포함된 과거 데이터 일부 삭제 (필요 시)
-        # df.dropna(inplace=True)
 
         return df
 
-    # Top 10 알트코인 동적 추출을 이 곳에 구현 (risk_management에도 연계 사용)
+    # Top 5 알트코인 동적 추출
     @with_exponential_backoff(max_retries=3)
     async def fetch_top_altcoins_by_volume(
-        self, limit: int = 10, exclude_symbols: list = ["BTCUSDT"]
+        self,
+        limit: int = 5,
+        exclude_symbols: list = [
+            "BTC/USDT:USDT",
+            "ETH/USDT:USDT",
+            "USDC/USDT:USDT",
+            "FDUSD/USDT:USDT",
+            "TUSD/USDT:USDT",
+            "EUR/USDT:USDT",
+            "USDP/USDT:USDT",
+        ],
     ) -> list:
         """
         바이낸스 선물 시장에서 24시간 거래금액(Quote Volume) 기준으로 상위 알트코인을 추출합니다.
+        스테이블코인이나 무거운 비트, 이더리움은 제외합니다.
         """
         tickers = await self.exchange.fetch_tickers()
 
-        # USDT 페어 거래소 티커 필터링
+        # USDT 기반 선형 선물 티커 필터링 (선물은 "ADA/USDT:USDT" 형태)
         usdt_pairs = {
             k: v
             for k, v in tickers.items()
-            if k.endswith("USDT") and k not in exclude_symbols
+            if k.endswith("/USDT:USDT") and k not in exclude_symbols
         }
 
         # 24시간 거래대금 (quoteVolume) 내림차순 정렬

@@ -17,6 +17,9 @@ class Trade(Base):
     symbol = Column(String(20))  # 예: 'BTCUSDT'
     price = Column(Float)
     quantity = Column(Float)
+    realized_pnl = Column(
+        Float, nullable=True
+    )  # 추가된 필드: 실현손익 (매도 시에만 기록)
     reason = Column(Text)  # 추가적인 정보 (예: 'ATR Stop', 'Trend Signal 진입' 등)
 
 
@@ -28,13 +31,24 @@ class BalanceHistory(Base):
     balance = Column(Float)  # 달러 등 환산치 (또는 USDT 잔량)
 
 
-# Supabase 등의 TCP 끊김이나 Transaction Pooler 환경을 대비해
-# pool_pre_ping과 짧은 주기의 pool_recycle 적용.
+from sqlalchemy.pool import NullPool
+import uuid
+
+# Supabase PgBouncer (Transaction mode) 연결 호환성 설정
+# - SQLAlchemy 자체 Pool을 비활성화 (NullPool) 하고 PgBouncer가 전담하도록 위임
+# - prepared_statement 캐시 기능을 완전 비활성화하여 충돌 방지
+# - UUID를 활용해 asyncpg가 생성하는 PreparedStatement 이름을 매번 다르게 고유 적용
 engine = create_async_engine(
     settings.SQLALCHEMY_DATABASE_URI,
-    pool_pre_ping=True,
-    pool_recycle=1800,  # 30분 마다 connection 자동 리프레시로 끊김 방지
+    poolclass=NullPool,
     echo=False,
+    connect_args={
+        "statement_cache_size": 0,
+        "prepared_statement_cache_size": 0,
+        "server_settings": {"application_name": "binance_bot"},
+        "prepared_statement_name_func": lambda: f"__asyncpg_{uuid.uuid4().hex}__",
+    },
+    execution_options={"prepared_statement_cache_size": 0, "compiled_cache": None},
 )
 
 AsyncSessionLocal = sessionmaker(
