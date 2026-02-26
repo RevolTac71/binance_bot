@@ -62,7 +62,10 @@ class DataPipeline:
                 "apiKey": api_key,
                 "secret": api_secret,
                 "enableRateLimit": True,  # ccxt 내장 속도 제한기 활성화
-                "options": {"defaultType": "future"},  # 현물(spot) -> 선물(future) 변경
+                "options": {
+                    "defaultType": "future",
+                    "warnOnFetchOpenOrdersWithoutSymbol": False,  # 초기 동기화 시 전체 대기주문 조회 경고 무시
+                },  # 현물(spot) -> 선물(future) 변경
             }
         )
 
