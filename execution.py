@@ -292,6 +292,107 @@ class ExecutionEngine:
             if sym in self.pending_entries:
                 del self.pending_entries[sym]
 
+    async def check_active_positions_state(self):
+        """
+        활성 포지션을 주기적으로 점검하여, TP/SL에 의해 포지션이 종료되었는지 확인하고
+        종료되었다면 잔여 주문(TP/SL 중 미발동분)을 일괄 취소한 뒤 DB에 매도(청산) 기록과 최신 PnL을 남깁니다.
+        """
+        if not self.active_positions:
+            return
+
+        symbols_to_remove = []
+
+        if not settings.DRY_RUN:
+            try:
+                positions = await self.exchange.fetch_positions()
+                position_map = {
+                    p["symbol"]: float(p.get("contracts", 0)) for p in positions
+                }
+            except Exception as e:
+                logger.error(f"활성 포지션 검증 중 거래소 조회 에러: {e}")
+                return
+        else:
+            position_map = {}
+
+        for symbol in self.active_positions.keys():
+            if settings.DRY_RUN:
+                logger.info(f"🧪 [DRY RUN] {symbol} 포지션 가상 청산 및 DB 기록 완료")
+                async with AsyncSessionLocal() as session:
+                    new_trade = Trade(
+                        timestamp=datetime.utcnow(),
+                        action="CLOSED",
+                        symbol=symbol,
+                        price=0.0,
+                        quantity=0.0,
+                        reason="[DRY_RUN] 가상 매도 청산",
+                        realized_pnl=0.0,
+                    )
+                    session.add(new_trade)
+                    await session.commit()
+                symbols_to_remove.append(symbol)
+                continue
+
+            current_contracts = position_map.get(symbol, 0.0)
+            if current_contracts == 0.0:
+                try:
+                    # 포지션이 청산됨 -> 반대쪽 찌꺼기 잔여 주문(TP or SL 중 발동 안된 쪽) 일괄 취소
+                    try:
+                        await self.exchange.cancel_all_orders(symbol)
+                        logger.info(
+                            f"[{symbol}] 포지션 청산으로 인한 잔여 대기주문 일괄 취소 완료."
+                        )
+                    except Exception as cancel_e:
+                        logger.warning(
+                            f"[{symbol}] 잔여 주문 자동 취소 실패 (무시 가능): {cancel_e}"
+                        )
+
+                    trades = await self.exchange.fetch_my_trades(symbol, limit=5)
+                    realized_pnl = 0.0
+                    close_price = 0.0
+                    close_qty = 0.0
+
+                    if trades:
+                        last_trade = trades[-1]
+                        close_price = float(last_trade.get("price", 0.0))
+                        close_qty = float(last_trade.get("amount", 0.0))
+                        # 선물의 실현 손익 정보는 info 객체의 필드로 들어옵니다.
+                        info = last_trade.get("info", {})
+                        realized_pnl = float(info.get("realizedPnl", 0.0))
+
+                    logger.info(
+                        f"🏁 [{symbol}] 포지션 자동 청산 확인. DB 기록: PnL {realized_pnl:.4f} USDT"
+                    )
+
+                    async with AsyncSessionLocal() as session:
+                        new_trade = Trade(
+                            timestamp=datetime.utcnow(),
+                            action="SELL",
+                            symbol=symbol,
+                            price=close_price,
+                            quantity=close_qty,
+                            reason=f"TP 또는 SL에 의한 자동 청산 처리 완료",
+                            realized_pnl=realized_pnl,
+                        )
+                        session.add(new_trade)
+                        await session.commit()
+
+                        await notifier.send_message(
+                            f"🏁 포지션 청산 자동 감지\n[{symbol}]\n"
+                            f"종료가: {close_price:.4f}\n"
+                            f"실현손익(PnL): {realized_pnl:.4f} USDT"
+                        )
+
+                    symbols_to_remove.append(symbol)
+
+                except Exception as e:
+                    logger.error(
+                        f"[{symbol}] 포지션 청산 확인 및 DB 기록 중 예외 발생: {e}"
+                    )
+
+        # 처리 완료된 포지션은 메모리 감시열에서 제거
+        for sym in symbols_to_remove:
+            del self.active_positions[sym]
+
     async def check_state_mismatch(self):
         """
         [Fail-Safe 방어 체계]

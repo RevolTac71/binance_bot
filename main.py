@@ -206,6 +206,7 @@ async def state_machine_loop(execution: ExecutionEngine):
     while True:
         try:
             await execution.check_pending_orders_state()
+            await execution.check_active_positions_state()
             # 서버 미스매치 점검 (잔고 고립 등)
             await execution.check_state_mismatch()
 
