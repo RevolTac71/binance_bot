@@ -239,6 +239,9 @@ async def main():
     execution = ExecutionEngine(pipeline)
 
     try:
+        # 진행 중이던 포지션 복구 및 쓰레기 대기주문 정리
+        await execution.sync_state_from_exchange()
+
         # 비동기 병렬 태스크(Task) 스케줄링
         task_state = asyncio.create_task(state_machine_loop(execution))
         task_trade = asyncio.create_task(

@@ -26,6 +26,55 @@ class ExecutionEngine:
         # 활성 상태인 포지션 메모리 (TP/SL 등 스레드 충돌 확인용)
         self.active_positions = {}
 
+    async def sync_state_from_exchange(self):
+        """
+        봇 재시작 시, 거래소의 실제 상태(포지션, 미체결 주문)를 읽어와 내부 상태를 복구합니다.
+        프로그램 종료/장애 발생 후 재기동 시 포지션을 이어받기 위해 반드시 필요한 절차입니다.
+        """
+        if settings.DRY_RUN:
+            logger.info(
+                "🧪 [DRY RUN] 가상 실행 중이므로 거래소 초기 동기화를 생략합니다."
+            )
+            return
+
+        try:
+            logger.info("🔄 거래소 서버와 기존 상태 동기화 중...")
+
+            # 1. 활성 포지션 복구
+            positions = await self.exchange.fetch_positions()
+            active_count = 0
+            for p in positions:
+                symbol = p.get("symbol")
+                contracts = float(p.get("contracts", 0.0))
+                if contracts > 0:
+                    self.active_positions[symbol] = True
+                    active_count += 1
+                    logger.info(
+                        f"✅ [복구 완료] 진행 중인 기존 포지션 감지: {symbol} (계약 수: {contracts})"
+                    )
+
+            # 2. 고립된 진입 대기 주문(Pending Entries) 정리
+            # 안전을 위해 봇 재시작 시 포지션이 없는 종목의 미체결 주문은 (이전 세션의 진입 대기일 것이므로) 모두 취소
+            open_orders = await self.exchange.fetch_open_orders()
+            canceled_count = 0
+            for order in open_orders:
+                symbol = order.get("symbol")
+                # 이미 1번에서 활성 포지션으로 등록된 종목이라면, 이 주문들은 TP/SL 일 것이므로 살려둠.
+                # 포지션이 없는 종목이라면 이전 장에서 체결 안된 진입 찌꺼기이므로 취소.
+                if symbol not in self.active_positions:
+                    order_id = order.get("id")
+                    await self.exchange.cancel_order(order_id, symbol)
+                    canceled_count += 1
+                    logger.info(
+                        f"🧹 [정리 완료] 포지션이 없는 고립 미체결 주문 취소: {symbol} (Order ID: {order_id})"
+                    )
+
+            logger.info(
+                f"🔄 동기화 완료: 복구된 포지션 {active_count}개, 정리된 대기 주문 {canceled_count}개 유지."
+            )
+        except Exception as e:
+            logger.error(f"거래소 동기화 중(sync_state_from_exchange) 예외 발생: {e}")
+
     async def setup_margin_and_leverage(self, symbol: str):
         """
         바이낸스 선물에서 해당 코인의 레버리지를 1배로, 마진 모드를 격리(Isolated)로 설정합니다.
