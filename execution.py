@@ -130,9 +130,9 @@ class ExecutionEngine:
 
                     # 고립된 Algo 주문 정리
                     await self.exchange.request(
-                        path="cancelAlgoOrder",
+                        path="algoOrder",
                         api="fapiPrivate",
-                        method="POST",
+                        method="DELETE",
                         params={"symbol": symbol, "algoId": algo_id},
                     )
                     canceled_count += 1
