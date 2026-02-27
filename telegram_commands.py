@@ -28,6 +28,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/pause - 매매 신규 진입 일시정지\n"
         "/resume - 매매 재개\n"
         "/leverage [N] - 레버리지 N배로 변경 (영구)\n"
+        "/k_value [숫자] - K-Value 변경 (예: 0.5)\n"
+        "/risk [숫자] - 리스크 비율 변경 (예: 0.1)\n"
         "/mode [dry_run|real] - 매매 모드 변경 (영구)\n"
         "/panic - 비상! 모든 주문 취소 및 시장가 전량 청산 후 정지\n"
         "/restart - 봇 재부팅 (nohup 효과)"
@@ -45,6 +47,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔹 /pause : 새로운 매매 진입을 일시정지합니다 (기존 포지션의 수익실현/손절 감시는 유지됨).\n"
         "🔹 /resume : 일시정지된 봇의 매매 진입을 다시 재개합니다.\n"
         "🔹 /leverage [숫자] : 거래 레버리지를 주어진 숫자로 영구 변경합니다 (예: /leverage 5).\n"
+        "🔹 /k_value [숫자] : 전략 진입 시 참조되는 K-Value 상수값을 변경합니다 (예: /k_value 0.5).\n"
+        "🔹 /risk [숫자] : 계좌 잔고 대비 포지션 진입 비율을 변경합니다 (예: /risk 0.1).\n"
         "🔹 /mode [dry_run|real] : 모의투자(dry_run) 또는 실전매매(real) 모드로 영구 전환합니다.\n"
         "🔹 /panic : [위급상황] 모든 미체결 주문을 취소하고, 보유 포지션을 전부 시장가로 전량 청산한 후 봇을 일시정지(pause) 상태로 만듭니다.\n"
         "🔹 /restart : 봇 애플리케이션 프로세스를 강제 재부팅합니다."
@@ -77,6 +81,8 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"- 매매 모드: {mode}\n"
         f"- 봇 동작: {status_str}\n"
         f"- 레버리지: {settings.LEVERAGE}x\n"
+        f"- K-Value: {settings.K_VALUE}\n"
+        f"- 진입 리스크: {settings.RISK_PERCENTAGE}\n"
         f"- 생존 시간: {days}일 {hours}시간 {minutes}분\n"
         f"- 총 잔고: {capital} USDT\n\n"
         f"✅ 활성 포지션: {len(execution.active_positions)} 개\n"
@@ -144,11 +150,53 @@ async def mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def k_value_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_admin(update):
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "💡 사용법: /k_value [숫자]\n예시: /k_value 0.5"
+        )
+        return
+
+    try:
+        new_val = float(args[0])
+        settings.K_VALUE = new_val
+        update_env_variable("K_VALUE", str(new_val))
+        await update.message.reply_text(
+            f"✅ K-Value가 {new_val} 로 변경되었습니다. (DB 환경변수 영구 반영 완료)"
+        )
+    except ValueError:
+        await update.message.reply_text("❌ K-Value에는 숫자를 입력해주세요 (예: 0.5)")
+
+
+async def risk_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_admin(update):
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "� 사용법: /risk [숫자]\n예시: /risk 0.1"
+        )
+        return
+
+    try:
+        new_val = float(args[0])
+        settings.RISK_PERCENTAGE = new_val
+        update_env_variable("RISK_PERCENTAGE", str(new_val))
+        await update.message.reply_text(
+            f"✅ 진입 리스크 비율이 {new_val} 로 변경되었습니다. (DB 환경변수 영구 반영 완료)"
+        )
+    except ValueError:
+        await update.message.reply_text("❌ 리스크 비율에는 숫자를 입력해주세요 (예: 0.1)")
+
+
 async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
     await update.message.reply_text(
-        "🔄 봇 프로세스를 완전히 재부팅합니다... (잠시 후 상태를 확인하세요!)"
+        "�🔄 봇 프로세스를 완전히 재부팅합니다... (잠시 후 상태를 확인하세요!)"
     )
 
     # 2초 뒤에 파이썬 프로세스 자체를 시스템 적으로 재가동합니다.
@@ -240,6 +288,8 @@ def setup_telegram_bot(execution_engine):
     application.add_handler(CommandHandler("pause", pause_cmd))
     application.add_handler(CommandHandler("resume", resume_cmd))
     application.add_handler(CommandHandler("leverage", leverage_cmd))
+    application.add_handler(CommandHandler("k_value", k_value_cmd))
+    application.add_handler(CommandHandler("risk", risk_cmd))
     application.add_handler(CommandHandler("mode", mode_cmd))
     application.add_handler(CommandHandler("restart", restart_cmd))
     application.add_handler(CommandHandler("panic", panic_cmd))
