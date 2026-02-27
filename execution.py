@@ -124,9 +124,9 @@ class ExecutionEngine:
                 logger.warning(f"[{symbol}] 마진 모드 설정 중 정보: {e}")
 
         try:
-            # 2. 레버리지 1배 설정
-            await self.exchange.set_leverage(1, symbol)
-            logger.info(f"[{symbol}] 레버리지: 1x 설정 완료.")
+            # 2. 레버리지 설정 (Config 파일에서 설정한 값으로 적용)
+            await self.exchange.set_leverage(settings.LEVERAGE, symbol)
+            logger.info(f"[{symbol}] 레버리지: {settings.LEVERAGE}x 설정 완료.")
         except Exception as e:
             logger.warning(f"[{symbol}] 레버리지 설정 중 정보: {e}")
 

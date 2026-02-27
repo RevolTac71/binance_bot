@@ -44,7 +44,8 @@ class Config:
 
     # Strategy Global Parameters
     K_VALUE = float(os.getenv("K_VALUE", "0.5"))
-    RISK_PERCENTAGE = float(os.getenv("RISK_PERCENTAGE", "0.02"))
+    RISK_PERCENTAGE = float(os.getenv("RISK_PERCENTAGE", "0.10"))
+    LEVERAGE = int(os.getenv("LEVERAGE", "3"))
 
     # Dry Run Mode (True면 실제 매매하지 않고 DB 기록만 함)
     DRY_RUN = os.getenv("DRY_RUN", "True").lower() == "true"
