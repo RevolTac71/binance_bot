@@ -73,6 +73,43 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         capital = "조회 실패"
 
+    position_details = ""
+    try:
+        positions = await execution.exchange.fetch_positions()
+        active_pos_list = []
+        for p in positions:
+            amt = float(p.get("contracts", 0))
+            if amt > 0:
+                sym = p.get("symbol", "Unknown")
+                side = p.get("side", "long")
+                entry_price = float(p.get("entryPrice", 0))
+                mark_price = float(p.get("markPrice", 0))
+                leverage = p.get("leverage", 1)
+                unrealized_pnl = float(p.get("unrealizedPnl", 0))
+                percentage = p.get("percentage")
+
+                # ccxt percentage가 제공되지 않을 경우 수동 계산: (미실현 손익 / (포지션 규모 / 레버리지)) * 100
+                if percentage is None or percentage == 0:
+                    cost = (amt * entry_price) / float(leverage) if leverage else 0
+                    percentage = (unrealized_pnl / cost * 100) if cost > 0 else 0
+
+                side_str = "🟢LONG" if side == "long" else "🔴SHORT"
+
+                detail = (
+                    f"[{sym}] {side_str} ({leverage}x)\n"
+                    f" ├ 진입가: {entry_price:.4f}\n"
+                    f" ├ 현재가: {mark_price:.4f}\n"
+                    f" └ 수익률: {unrealized_pnl:.2f} USDT ({percentage:.2f}%)"
+                )
+                active_pos_list.append(detail)
+
+        if active_pos_list:
+            position_details = "\n\n".join(active_pos_list)
+        else:
+            position_details = "활성 포지션 없음"
+    except Exception as e:
+        position_details = f"포지션 상세 조회 실패: {e}"
+
     mode = "DRY_RUN (모의투자)" if settings.DRY_RUN else "REAL (실전 매매)"
     status_str = "일시정지됨 ⏸️" if settings.IS_PAUSED else "가동 중 🟢"
 
@@ -80,13 +117,15 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📊 [봇 상태 요약]\n"
         f"- 매매 모드: {mode}\n"
         f"- 봇 동작: {status_str}\n"
-        f"- 레버리지: {settings.LEVERAGE}x\n"
+        f"- 기본 레버리지: {settings.LEVERAGE}x\n"
         f"- K-Value: {settings.K_VALUE}\n"
         f"- 진입 리스크: {settings.RISK_PERCENTAGE}\n"
         f"- 생존 시간: {days}일 {hours}시간 {minutes}분\n"
         f"- 총 잔고: {capital} USDT\n\n"
-        f"✅ 활성 포지션: {len(execution.active_positions)} 개\n"
-        f"⏳ 대기중 진입: {len(execution.pending_entries)} 개\n"
+        f"✅ 기동중 포지션(메모리): {len(execution.active_positions)} 개\n"
+        f"⏳ 대기중 주문(메모리): {len(execution.pending_entries)} 개\n\n"
+        f"📋 [현재 포지션 상세 (실제 거래소)]\n"
+        f"{position_details}"
     )
     await update.message.reply_text(msg)
 
@@ -176,9 +215,7 @@ async def risk_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     args = context.args
     if not args:
-        await update.message.reply_text(
-            "� 사용법: /risk [숫자]\n예시: /risk 0.1"
-        )
+        await update.message.reply_text("� 사용법: /risk [숫자]\n예시: /risk 0.1")
         return
 
     try:
@@ -189,7 +226,9 @@ async def risk_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ 진입 리스크 비율이 {new_val} 로 변경되었습니다. (DB 환경변수 영구 반영 완료)"
         )
     except ValueError:
-        await update.message.reply_text("❌ 리스크 비율에는 숫자를 입력해주세요 (예: 0.1)")
+        await update.message.reply_text(
+            "❌ 리스크 비율에는 숫자를 입력해주세요 (예: 0.1)"
+        )
 
 
 async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
