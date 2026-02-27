@@ -222,6 +222,23 @@ class ExecutionEngine:
             if not settings.DRY_RUN and order_id != "DRY_RUN_ID":
                 await self.exchange.cancel_order(order_id, symbol)
 
+            # DB에 취소 기록 남기기
+            try:
+                async with AsyncSessionLocal() as session:
+                    new_trade = Trade(
+                        timestamp=(datetime.utcnow() + timedelta(hours=9)),
+                        action="CANCELED",
+                        symbol=symbol,
+                        price=order_info.get("limit_price", 0.0),
+                        quantity=order_info.get("amount", 0.0),
+                        reason=f"진입 주문 취소: {reason}",
+                        realized_pnl=0.0,
+                    )
+                    session.add(new_trade)
+                    await session.commit()
+            except Exception as db_err:
+                logger.error(f"[{symbol}] 주문 취소 DB 기록 중 에러 (무시됨): {db_err}")
+
             del self.pending_entries[symbol]
             return True
         except Exception as e:
