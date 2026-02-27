@@ -37,15 +37,14 @@ class Config:
         f"postgresql+asyncpg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     )
 
-    # Kakao Settings
-    KAKAO_ACCESS_TOKEN = os.getenv("KAKAO_ACCESS_TOKEN")
-    KAKAO_REFRESH_TOKEN = os.getenv("KAKAO_REFRESH_TOKEN")
-    KAKAO_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY")
+    # Telegram Settings
+    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
     # Strategy Global Parameters
     K_VALUE = float(os.getenv("K_VALUE", "0.5"))
     RISK_PERCENTAGE = float(os.getenv("RISK_PERCENTAGE", "0.10"))
-    LEVERAGE = int(os.getenv("LEVERAGE", "3"))
+    LEVERAGE = int(os.getenv("LEVERAGE", "5"))
 
     # Dry Run Mode (True면 실제 매매하지 않고 DB 기록만 함)
     DRY_RUN = os.getenv("DRY_RUN", "True").lower() == "true"

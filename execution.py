@@ -536,6 +536,35 @@ class ExecutionEngine:
                             f"[{symbol}] 잔여 주문 자동 취소 실패 (무시 가능): {cancel_e}"
                         )
 
+                    # 신규 추가: 포지션 청산 시 조건부 Algo 주문(STOP_MARKET) 찌꺼기도 강제 파쇄
+                    try:
+                        algo_orders = await self.exchange.request(
+                            path="openAlgoOrders",
+                            api="fapiPrivate",
+                            method="GET",
+                            params={"symbol": symbol},
+                        )
+                        algo_items = (
+                            algo_orders.get("orders", algo_orders)
+                            if isinstance(algo_orders, dict)
+                            else algo_orders
+                        )
+                        for algo in algo_items:
+                            await self.exchange.request(
+                                path="algoOrder",
+                                api="fapiPrivate",
+                                method="DELETE",
+                                params={"symbol": symbol, "algoId": algo.get("algoId")},
+                            )
+                        if algo_items:
+                            logger.info(
+                                f"[{symbol}] 포지션 청산으로 인한 잔여 조건부(Algo) 대기주문 일괄 취소 완료."
+                            )
+                    except Exception as algo_cancel_e:
+                        logger.warning(
+                            f"[{symbol}] 잔여 조건부(Algo) 주문 취소 실패 (무시 가능): {algo_cancel_e}"
+                        )
+
                     trades = await self.exchange.fetch_my_trades(symbol, limit=5)
                     realized_pnl = 0.0
                     close_price = 0.0
