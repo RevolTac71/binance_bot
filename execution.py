@@ -70,14 +70,29 @@ class ExecutionEngine:
                     symbol = order.get("symbol")
                     order_id = order.get("id")
 
-                    # 이미 활성 포지션이 있는 경우는 스킵 (해당 코인의 미체결 주문은 TP/SL로 간주하여 살림)
-                    if symbol in self.active_positions:
+                    # 진짜 TP/SL 주문인지 식별하기 위해 reduceOnly 속성 확인
+                    is_reduce_only = order.get("reduceOnly")
+                    if str(is_reduce_only).lower() == "true":
+                        is_reduce_only = True
+                    elif order.get("info", {}).get("reduceOnly") in [
+                        True,
+                        "true",
+                        "True",
+                    ]:
+                        is_reduce_only = True
+                    else:
+                        is_reduce_only = False
+
+                    # 판단 로직:
+                    # 1. 이미 활성 포지션이 있고, 해당 주문이 '포지션 축소용(reduceOnly)'이라면 -> 정상적인 TP/SL이므로 살림
+                    if symbol in self.active_positions and is_reduce_only:
                         continue
 
+                    # 그 외: 포지션이 없거나, 포지션이 있더라도 reduceOnly가 아닌 '순수 신규 진입' 타점이 그대로 남은 경우 -> 찌꺼기이므로 파쇄
                     await self.exchange.cancel_order(order_id, symbol)
                     canceled_count += 1
                     logger.info(
-                        f"🧹 [정리 완료] 포지션이 없는 고립 미체결 주문 취소: {symbol} (Order ID: {order_id})"
+                        f"🧹 [정리 완료] 찌꺼기 진입 주문 강제 취소 (포지션 유무 무관): {symbol} (Order ID: {order_id})"
                     )
             except Exception as e:
                 logger.error(f"내 계좌 전체 대기 주문 조회 중 에러: {e}")
