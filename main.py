@@ -94,13 +94,11 @@ async def process_single_symbol(
         decision = strategy.check_entry(symbol, df_3m)
 
         if decision["signal"]:
-            limit_price = decision["limit_price"]
-            tp_price = decision["tp_price"]
-            sl_price = decision["sl_price"]
+            market_price = decision["market_price"]
             reason = decision["reason"]
 
-            # 진입가격(limit_price)을 전달하여 고정비율 수량 계산 시 참조
-            sizing = risk.calculate_position_size(symbol, capital, limit_price)
+            # 진입 가격 예측치(market_price)를 전달하여 고정비율 수량 계산 시 참조
+            sizing = risk.calculate_position_size(symbol, capital, market_price)
 
             if sizing["size"] <= 0:
                 logger.info(f"[{symbol}] 포지션 사이징 불가(수량 0 산출). 진입 생략.")
@@ -110,14 +108,12 @@ async def process_single_symbol(
             side = "buy" if decision["signal"] == "LONG" else "sell"
 
             logger.info(
-                f"[Execute] 🎯 {symbol} 지정가 타점 포착! "
-                f"{side.upper()}(수량={qty}, 대기 지정가={limit_price}, 투입={sizing['invest_usdt']:.2f} USDT)"
+                f"[Execute] 🎯 {symbol} 진입 타점 포착! "
+                f"{side.upper()}(수량={qty}, 목표 시장가={market_price}, 투입={sizing['invest_usdt']:.2f} USDT)"
             )
 
-            # Post-Only 한정가 API 주문 전송
-            await execution.place_limit_entry_order(
-                symbol, side, qty, limit_price, tp_price, sl_price, reason
-            )
+            # 시장가(Market) 즉각 진입 및 동기적 TP/SL 발사
+            await execution.place_market_entry_order(symbol, side, qty, reason)
 
     except Exception as e:
         logger.error(f"[{symbol}] 개별 스캔 중 에러: {e}")

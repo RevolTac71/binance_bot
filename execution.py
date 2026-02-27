@@ -8,6 +8,7 @@ from notification import notifier
 class ExecutionEngine:
     def __init__(self, data_pipeline: DataPipeline):
         self.exchange = data_pipeline.exchange
+        self.strategy = data_pipeline  # strategy 모듈의 퍼센트를 참조하기 위한 포인터용 설계 대비 (임시)
         # 시스템 문제 검출(DB-서버 간 Mismatch 등) 시 자가 정지 처리를 위한 Flag
         self.is_halted = False
 
@@ -173,18 +174,16 @@ class ExecutionEngine:
         except Exception as e:
             logger.warning(f"[{symbol}] 레버리지 설정 중 정보: {e}")
 
-    async def place_limit_entry_order(
+    async def place_market_entry_order(
         self,
         symbol: str,
         side: str,  # 'buy' or 'sell'
         amount: float,
-        price: float,
-        tp_price: float,
-        sl_price: float,
         reason: str,
     ) -> bool:
         """
-        선물 시장에 진입 지정가(Limit) 주문을 Post-Only 옵션으로 전송합니다.
+        선물 시장에 신규 포지션을 시장가(Market)로 즉각 진입합니다.
+        체결 성공 시, 실제 체결가(average price)를 기반으로 TP/SL 주문을 연이어 등록합니다.
         """
         if self.is_halted:
             logger.warning(
@@ -192,57 +191,103 @@ class ExecutionEngine:
             )
             return False
 
-        # 이미 대기 중인 주문이 있다면 무시
-        if symbol in self.pending_entries:
-            logger.info(f"[{symbol}] 이미 대기 중인 진입 주문이 존재합니다. 생략.")
+        # 포지션이 이미 존재하면 추가 진입 억제
+        if symbol in self.active_positions:
+            logger.info(f"[{symbol}] 이미 활성 포지션이 존재합니다. 진입 생략.")
             return False
 
         try:
             logger.info(
-                f"[{symbol}] 선물 진입 지정가({side}) 시도. 가격: {price:.4f}, "
+                f"[{symbol}] 선물 시장가({side}) 즉각 진입 시도. "
                 f"수량: {amount} (DRY_RUN: {settings.DRY_RUN})"
             )
 
             # 레버리지 및 마진 환경 사전 세팅
             await self.setup_margin_and_leverage(symbol)
 
-            order_id = "DRY_RUN_ID"
-
-            # Post-Only (GTX) 지정가 파라미터
-            params = {"timeInForce": "GTX", "postOnly": True}
+            signal_type = "LONG" if side == "buy" else "SHORT"
+            average_price = 0.0
 
             if not settings.DRY_RUN:
+                # 시장가 진입
                 entry_order = await self.exchange.create_order(
                     symbol=symbol,
-                    type="limit",
+                    type="market",
                     side=side,
                     amount=amount,
-                    price=price,
-                    params=params,
                 )
-                order_id = entry_order.get("id")
 
-            # 상태 머신 관리를 위해 대기열 등록
-            signal_type = "LONG" if side == "buy" else "SHORT"
-            self.pending_entries[symbol] = {
-                "order_id": order_id,
+                # 거래소에서 방금 체결한 주문을 다시 조회하여 정확한 average price를 추출
+                order_id = entry_order.get("id")
+                filled_order = await self.exchange.fetch_order(order_id, symbol)
+
+                average_price = float(
+                    filled_order.get("average", filled_order.get("price", 0.0))
+                )
+                if average_price == 0.0:
+                    trades = await self.exchange.fetch_my_trades(symbol, limit=1)
+                    if trades:
+                        average_price = float(trades[-1].get("price", 0.0))
+
+            else:
+                # DRY RUN 일 경우 현재 시장가(Ticker)를 체결가로 임시 가정
+                ticker = await self.exchange.fetch_ticker(symbol)
+                average_price = float(ticker.get("last", 0.0))
+
+            if average_price <= 0:
+                logger.error(
+                    f"[{symbol}] 시장가 체결 단가를 확인할 수 없습니다! TP/SL을 전송할 수 없습니다."
+                )
+                return False
+
+            # 체결 완료 로깅 및 알림
+            logger.info(
+                f"🎯 [{symbol}] 시장가 진입 체결 성공! 평균 단가: {average_price:.4f}. TP/SL 즉각 계산 및 전송 개시."
+            )
+
+            # strategy 모듈 기준의 TP/SL 비율 (하드코딩된 값 대신 상수 관리 고려)
+            long_tp_pct = 0.010
+            long_sl_pct = 0.005
+            short_tp_pct = 0.012
+            short_sl_pct = 0.004
+
+            if signal_type == "LONG":
+                raw_tp = average_price * (1 + long_tp_pct)
+                raw_sl = average_price * (1 - long_sl_pct)
+            else:
+                raw_tp = average_price * (1 - short_tp_pct)
+                raw_sl = average_price * (1 + short_sl_pct)
+
+            # 호가 단위(precisions) 보정
+            tp_price = (
+                float(self.exchange.price_to_precision(symbol, raw_tp))
+                if self.exchange
+                else raw_tp
+            )
+            sl_price = (
+                float(self.exchange.price_to_precision(symbol, raw_sl))
+                if self.exchange
+                else raw_sl
+            )
+
+            # TP/SL 생성 코루틴으로 정보 패스
+            entry_info = {
                 "signal": signal_type,
-                "limit_price": price,
+                "amount": amount,
+                "limit_price": average_price,  # reference name maintained for internal calculation
                 "tp_price": tp_price,
                 "sl_price": sl_price,
-                "amount": amount,
-                "status": "open",
-                "created_at": datetime.now(timezone.utc),
             }
 
-            await notifier.send_message(
-                f"⏳ 진입 지정가 등록\n[{symbol}] {signal_type}\n수량: {amount}\n"
-                f"가격: {price:.4f}\n사유: {reason}"
-            )
+            # 동기적(await)으로 TP/SL 즉시 생성 (대기열 통하지 않음)
+            success = await self.place_tp_sl_orders(symbol, entry_info)
+            if success:
+                self.active_positions[symbol] = True
+
             return True
 
         except Exception as e:
-            logger.error(f"[{symbol}] 진입 지정가 주문 처리 중 예외 발생: {e}")
+            logger.error(f"[{symbol}] 시장가 진입 및 TP/SL 세팅 중 예외 발생: {e}")
             return False
 
     async def cancel_pending_order(
@@ -419,67 +464,9 @@ class ExecutionEngine:
 
     async def check_pending_orders_state(self):
         """
-        상태 머신 (State Machine) 방식의 미체결 지정가 추적루프.
-        대기 중인 주문이 체결(Closed)되면 TP/SL을 쏘고,
-        만약 체결 이전에 가격이 이미 지나치게 벗어나거나 취소(Canceled)되면 관리망에서 해제합니다.
+        (더 이상 신규 진입 시 사용되지 않으나, 기존 대기 주문 잔여물 정리를 위해 빈 메서드로 유지)
         """
-        if not self.pending_entries:
-            return
-
-        symbols_to_remove = []
-
-        for symbol, entry_info in list(self.pending_entries.items()):
-            order_id = entry_info["order_id"]
-
-            if settings.DRY_RUN:
-                # Dry run 환경에서는 테스트 목적으로 즉시 체결되었다고 가정
-                logger.info(f"🧪 [DRY RUN] {symbol} 가상 체결 확인 및 TP/SL 포워딩")
-                await self.place_tp_sl_orders(symbol, entry_info)
-                symbols_to_remove.append(symbol)
-                continue
-
-            # ── 타임아웃(Timeout) 검사: 지정가 매수 후 15분이 지나도 안 잡히면 거래 취소 (시장가 우회 금지) ──
-            created_at = entry_info.get("created_at")
-            if (
-                created_at
-                and (datetime.now(timezone.utc) - created_at).total_seconds() > 15 * 60
-            ):
-                logger.warning(
-                    f"⏰ [{symbol}] 지정가 진입 주문 시간 초과(15분). 추세 이탈로 간주하여 주문을 강제 취소합니다."
-                )
-                await self.cancel_pending_order(
-                    symbol, reason="진입 대기 시간 초과(15분)"
-                )
-                symbols_to_remove.append(symbol)
-                continue
-
-            try:
-                # 바이낸스 API로 해당 주문 상태 조회
-                order_status = await self.exchange.fetch_order(order_id, symbol)
-                status = order_status.get("status")
-
-                if status == "closed":
-                    # ── 지정가 체결 확인 ──
-                    logger.info(
-                        f"🎯 [{symbol}] 진입 지정가 체결 성공! TP/SL을 전송합니다."
-                    )
-                    await self.place_tp_sl_orders(symbol, entry_info)
-                    symbols_to_remove.append(symbol)
-
-                elif status in ["canceled", "rejected", "expired"]:
-                    # ── 취소 / 거절 ──
-                    logger.warning(
-                        f"[{symbol}] 진입 지정가 취소/거절 확인 (상태:{status}). 대기열에서 삭제합니다."
-                    )
-                    symbols_to_remove.append(symbol)
-
-            except Exception as e:
-                logger.error(f"[{symbol}] 대기 주문 상태 조회 중 에러: {e}")
-
-        # 완료된/취소된 항목 메모리 해제
-        for sym in symbols_to_remove:
-            if sym in self.pending_entries:
-                del self.pending_entries[sym]
+        pass
 
     async def check_active_positions_state(self):
         """
