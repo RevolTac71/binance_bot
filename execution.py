@@ -54,54 +54,36 @@ class ExecutionEngine:
                     )
 
             # 2. 고립된 진입 대기 주문(Pending Entries) 정리
-            # 안전을 위해 봇 재시작 시 포지션이 없는 종목의 미체결 주문은 (이전 세션의 진입 대기일 것이므로) 모두 취소
-            # Rate Limit(과부하) 방지를 위해 전체 조회가 아닌, 개별 Symbol 단위로 순차적 조회/취소 진행
-            try:
-                # 거래소에서 현재 거래 가능한 모든 티커를 가져옴
-                markets = await self.exchange.load_markets()
-                usdt_futures = [
-                    s
-                    for s in markets.keys()
-                    if markets[s].get("linear") and s.endswith("USDT")
-                ]
-            except Exception as e:
-                logger.error(f"거래소 마켓 로드 중 에러: {e}")
-                usdt_futures = []
+            # 안전을 위해 봇 재시작 시 포지션이 없는 종목의 미체결 주문은 모두 취소합니다.
 
+            logger.info(
+                "내 계좌의 전체 대기 주문을 스캔하여 고립된 찌꺼기 주문을 정리합니다..."
+            )
             canceled_count = 0
 
-            logger.info("순차적 대기 주문 스캔을 시작합니다 (Rate Limit 보호 모드)...")
-            logger.info(
-                f"선물 마켓 전체({len(usdt_futures)}개) 대상 스캔 중... (시작까지 약 1분이 소요됩니다)"
-            )
+            try:
+                # CCXT의 warnOnFetchOpenOrdersWithoutSymbol 옵션을 껐기 때문에 Rate Limit 경고 없이
+                # 현재 내 계좌의 모든 Open Order를 한 번의 호출로 매우 빠르게 가져옵니다.
+                open_orders = await self.exchange.fetch_open_orders()
 
-            # 봇이 거래하는 대상(활성화 가능한 모든 USDT 선물 코인) 전체 추림
-            target_symbols = [s for s in usdt_futures if "USDT" in s]
+                for order in open_orders:
+                    symbol = order.get("symbol")
+                    order_id = order.get("id")
 
-            for symbol in target_symbols:
-                # 이미 활성 포지션이 있는 경우는 스킵 (해당 코인의 미체결 주문은 TP/SL로 간주하여 살림)
-                if symbol in self.active_positions:
-                    continue
+                    # 이미 활성 포지션이 있는 경우는 스킵 (해당 코인의 미체결 주문은 TP/SL로 간주하여 살림)
+                    if symbol in self.active_positions:
+                        continue
 
-                import asyncio
-
-                await asyncio.sleep(0.2)  # API Rate Limit 보호를 위한 0.2초 딜레이
-
-                try:
-                    open_orders = await self.exchange.fetch_open_orders(symbol=symbol)
-                    for order in open_orders:
-                        order_id = order.get("id")
-                        await self.exchange.cancel_order(order_id, symbol)
-                        canceled_count += 1
-                        logger.info(
-                            f"🧹 [정리 완료] 포지션이 없는 고립 미체결 주문 취소: {symbol} (Order ID: {order_id})"
-                        )
-                except Exception as e:
-                    # 빈번한 조회 중 특정 코인 에러 발생 시 무시하고 다음 코인 진행
-                    pass
+                    await self.exchange.cancel_order(order_id, symbol)
+                    canceled_count += 1
+                    logger.info(
+                        f"🧹 [정리 완료] 포지션이 없는 고립 미체결 주문 취소: {symbol} (Order ID: {order_id})"
+                    )
+            except Exception as e:
+                logger.error(f"내 계좌 전체 대기 주문 조회 중 에러: {e}")
 
             logger.info(
-                f"🔄 동기화 완료: 복구된 포지션 {active_count}개, 순차 스캔으로 정리된 대기 주문 {canceled_count}개."
+                f"🔄 동기화 완료: 복구된 포지션 {active_count}개, 정리된 찌꺼기 대기 주문 {canceled_count}개."
             )
         except Exception as e:
             logger.error(f"거래소 동기화 중(sync_state_from_exchange) 예외 발생: {e}")
