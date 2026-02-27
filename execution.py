@@ -69,13 +69,14 @@ class ExecutionEngine:
                 usdt_futures = []
 
             canceled_count = 0
-            # 봇이 모니터링할 Top 티커들을 가져오거나, 전체를 대상으로 빠르게 스캔 (Rate Limit 주의)
-            # 선물 시장 전체를 돌면 수백 초가 소요될 수 있으므로, Open Order가 존재하는지 요약 정보만 먼저 확인
 
-            # 봇이 거래하는 대상(활성화 가능한 선물 코인)들만 추림
-            target_symbols = [s for s in usdt_futures if "USDT" in s][
-                :100
-            ]  # 상위 100개로 축약 가능 (선택)
+            logger.info("순차적 대기 주문 스캔을 시작합니다 (Rate Limit 보호 모드)...")
+            logger.info(
+                f"선물 마켓 전체({len(usdt_futures)}개) 대상 스캔 중... (시작까지 약 1분이 소요됩니다)"
+            )
+
+            # 봇이 거래하는 대상(활성화 가능한 모든 USDT 선물 코인) 전체 추림
+            target_symbols = [s for s in usdt_futures if "USDT" in s]
 
             for symbol in target_symbols:
                 # 이미 활성 포지션이 있는 경우는 스킵 (해당 코인의 미체결 주문은 TP/SL로 간주하여 살림)
