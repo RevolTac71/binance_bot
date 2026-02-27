@@ -95,7 +95,52 @@ class ExecutionEngine:
                         f"🧹 [정리 완료] 찌꺼기 진입 주문 강제 취소 (포지션 유무 무관): {symbol} (Order ID: {order_id})"
                     )
             except Exception as e:
-                logger.error(f"내 계좌 전체 대기 주문 조회 중 에러: {e}")
+                logger.error(f"내 계좌 전체 대기 주문(일반) 조회 중 에러: {e}")
+
+            # 2.2 고립된 Algo 주문 (STOP_MARKET 등) 정리 로직 추가
+            # 바이낸스 퓨처스 업데이트로 일반 OpenOrders 통신망과 Algo 통신망이 분리됨.
+            try:
+                algo_orders = await self.exchange.request(
+                    path="openAlgoOrders",
+                    api="fapiPrivate",
+                    method="GET",
+                    params={},
+                )
+
+                # 반환형이 배열 또는 {'orders': [...]} 인지 확인 후 정리
+                algo_items = (
+                    algo_orders.get("orders", algo_orders)
+                    if isinstance(algo_orders, dict)
+                    else algo_orders
+                )
+
+                for algo in algo_items:
+                    symbol = algo.get("symbol")
+                    algo_id = algo.get("algoId")
+
+                    is_reduce_only = algo.get("reduceOnly")
+                    if str(is_reduce_only).lower() == "true":
+                        is_reduce_only = True
+                    else:
+                        is_reduce_only = False
+
+                    # 포지션이 있으면서 reduce_only 파라미터가 켜진(조건부 청산) 주문은 살림
+                    if symbol in self.active_positions and is_reduce_only:
+                        continue
+
+                    # 고립된 Algo 주문 정리
+                    await self.exchange.request(
+                        path="cancelAlgoOrder",
+                        api="fapiPrivate",
+                        method="POST",
+                        params={"symbol": symbol, "algoId": algo_id},
+                    )
+                    canceled_count += 1
+                    logger.info(
+                        f"🧹 [Algo 정리 완료] 고립된 조건부(SL 등) 찌꺼기 알고 주문 취소: {symbol} (Algo ID: {algo_id})"
+                    )
+            except Exception as e:
+                logger.error(f"내 계좌 전체 대기 주문(Algo) 조회 중 에러: {e}")
 
             logger.info(
                 f"🔄 동기화 완료: 복구된 포지션 {active_count}개, 정리된 찌꺼기 대기 주문 {canceled_count}개."
@@ -313,15 +358,47 @@ class ExecutionEngine:
             )
 
             # 2. Stop Loss (STOP_MARKET 방식, reduceOnly)
-            # 바이낸스 트리거 주문 설정
-            # stopPrice 트리거 시점에 시장가(Market)로 청산됨
-            await self.exchange.create_order(
-                symbol=symbol,
-                type="stop_market",
-                side=exit_side,
-                amount=amount,
-                params={"stopPrice": sl_price, "reduceOnly": True},
-            )
+            # 바이낸스 퓨처스 API 업데이트로 인해 일반 엔드포인트에서 예외(-4120)가 발생할 수 있습니다.
+            # 이 경우 AlgoOrder 전용 엔드포인트를 우회 호출하는 폴백 로직을 가동합니다.
+            try:
+                await self.exchange.create_order(
+                    symbol=symbol,
+                    type="stop_market",
+                    side=exit_side,
+                    amount=amount,
+                    params={"stopPrice": sl_price, "reduceOnly": True},
+                )
+            except Exception as e:
+                err_msg = str(e)
+                if "-4120" in err_msg or "Algo Order API endpoints" in err_msg:
+                    logger.warning(
+                        f"[{symbol}] 일반 Stop Market 거절됨(-4120). 신규 AlgoOrder 전용 엔드포인트로 SL(손절) 전송을 재시도합니다."
+                    )
+
+                    # 수량과 호가단위를 거래소 규격에 맞는 문자열 형태로 포맷팅
+                    formatted_amount = self.exchange.amount_to_precision(symbol, amount)
+                    formatted_price = self.exchange.price_to_precision(symbol, sl_price)
+                    raw_symbol = self.exchange.market(symbol)["id"]
+
+                    req = {
+                        "symbol": raw_symbol,
+                        "side": exit_side.upper(),
+                        "type": "STOP_MARKET",
+                        "quantity": formatted_amount,
+                        "triggerPrice": formatted_price,
+                        "reduceOnly": "true",
+                        "algoType": "CONDITIONAL",
+                    }
+                    await self.exchange.request(
+                        path="algoOrder",
+                        api="fapiPrivate",
+                        method="POST",
+                        params=req,
+                        headers={},
+                    )
+                else:
+                    # 다른 일반적인 에러일 시 상단 try문으로 에러 넘김
+                    raise e
 
             await notifier.send_message(
                 f"✅ 포지션 진입 완료\n[{symbol}] {signal_type}\n"
