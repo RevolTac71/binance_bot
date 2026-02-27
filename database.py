@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import declarative_base, sessionmaker
-from sqlalchemy import Column, Integer, String, Float, DateTime, Text, text
+from sqlalchemy import Column, Integer, String, Float, DateTime, Text, text, Boolean
 from config import settings, logger
 
 # 명시적으로 기존 DataBase 스키마를 선언합니다 (Reflection 대신 사용)
@@ -21,6 +21,7 @@ class Trade(Base):
         Float, nullable=True
     )  # 추가된 필드: 실현손익 (매도 시에만 기록)
     reason = Column(Text)  # 추가적인 정보 (예: 'ATR Stop', 'Trend Signal 진입' 등)
+    dry_run = Column(Boolean, default=True)  # 테스트 거래 여부 구분자
 
 
 class BalanceHistory(Base):

@@ -276,6 +276,7 @@ class ExecutionEngine:
                         quantity=order_info.get("amount", 0.0),
                         reason=f"진입 주문 취소: {reason}",
                         realized_pnl=0.0,
+                        dry_run=settings.USE_TESTNET,
                     )
                     session.add(new_trade)
                     await session.commit()
@@ -337,6 +338,7 @@ class ExecutionEngine:
                     price=entry_price,
                     quantity=amount,
                     reason=f"{dr_prefix}VWAP V11 지정가 체결 후 TP/SL 세팅 완료",
+                    dry_run=settings.USE_TESTNET,
                 )
                 session.add(new_trade)
                 await session.commit()
@@ -513,6 +515,7 @@ class ExecutionEngine:
                         quantity=0.0,
                         reason="[DRY_RUN] 가상 매도 청산",
                         realized_pnl=0.0,
+                        dry_run=settings.USE_TESTNET,
                     )
                     session.add(new_trade)
                     await session.commit()
@@ -559,6 +562,7 @@ class ExecutionEngine:
                             quantity=close_qty,
                             reason=f"TP 또는 SL에 의한 자동 청산 처리 완료",
                             realized_pnl=realized_pnl,
+                            dry_run=settings.USE_TESTNET,
                         )
                         session.add(new_trade)
                         await session.commit()
