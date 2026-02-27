@@ -8,6 +8,7 @@ from strategy import StrategyEngine
 from risk_management import RiskManager
 from execution import ExecutionEngine
 from notification import notifier
+from telegram_commands import setup_telegram_bot
 
 
 def get_today_0900_kst_timestamp() -> int:
@@ -141,6 +142,11 @@ async def trading_loop(
 
     while True:
         try:
+            # === 0. 텔레그램 명령으로 인한 강제 일시정지 체크 (Pause/Panic 모드) ===
+            if getattr(settings, "IS_PAUSED", False):
+                await asyncio.sleep(5)
+                continue
+
             # === 1. 시간 필터 체크 (펀딩비 컷오프) ===
             if is_funding_fee_cutoff():
                 logger.warning(
@@ -242,6 +248,13 @@ async def main():
         # 진행 중이던 포지션 복구 및 쓰레기 대기주문 정리
         await execution.sync_state_from_exchange()
 
+        # 텔레그램 인터랙티브 커맨더 백그라운드 구동 (asyncio)
+        app = setup_telegram_bot(execution)
+        if app:
+            await app.initialize()
+            await app.start()
+            await app.updater.start_polling()
+
         # 비동기 병렬 태스크(Task) 스케줄링
         task_state = asyncio.create_task(state_machine_loop(execution))
         task_trade = asyncio.create_task(
@@ -252,6 +265,12 @@ async def main():
     except KeyboardInterrupt:
         logger.warning("CTRL+C(키보드 인터럽트)로 시스템이 정지되었습니다.")
     finally:
+        if "app" in locals() and app:
+            logger.info("텔레그램 인터랙티브 커맨더를 안전하게 종료합니다...")
+            await app.updater.stop()
+            await app.stop()
+            await app.shutdown()
+
         await pipeline.close()
         logger.info("거래소 API 객체 릴리즈 및 시스템 종료 절차 통과 완료.")
 

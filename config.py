@@ -3,11 +3,24 @@ import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key
 import urllib.parse
 
 # Load environment variables
-load_dotenv()
+dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
+load_dotenv(dotenv_path)
+
+
+def update_env_variable(key: str, value: str):
+    """
+    실행 중 메모리의 환경변수를 갱신하고 동시에 .env 파일에도 덮어씁니다.
+    """
+    os.environ[key] = str(value)
+    if os.path.exists(dotenv_path):
+        set_key(dotenv_path, key, str(value))
+    else:
+        logger.warning(f".env 파일을 찾을 수 없어 {key} 설정이 영구 저장되지 않습니다.")
+
 
 # KST Timezone 설정
 KST = ZoneInfo("Asia/Seoul")
@@ -48,6 +61,9 @@ class Config:
 
     # Dry Run Mode (True면 실제 매매하지 않고 DB 기록만 함)
     DRY_RUN = os.getenv("DRY_RUN", "True").lower() == "true"
+
+    # Telegram Interactive Pause Mode
+    IS_PAUSED = False
 
 
 def get_logger(name="BinanceBot"):
