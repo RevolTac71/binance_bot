@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from config import settings, logger
 from database import Trade, AsyncSessionLocal
 from data_pipeline import DataPipeline
@@ -270,7 +270,7 @@ class ExecutionEngine:
             async with AsyncSessionLocal() as session:
                 dr_prefix = "[DRY_RUN] " if settings.DRY_RUN else ""
                 new_trade = Trade(
-                    timestamp=datetime.utcnow(),
+                    timestamp=(datetime.utcnow() + timedelta(hours=9)),
                     action=signal_type,
                     symbol=symbol,
                     price=entry_price,
@@ -398,7 +398,7 @@ class ExecutionEngine:
                 logger.info(f"🧪 [DRY RUN] {symbol} 포지션 가상 청산 및 DB 기록 완료")
                 async with AsyncSessionLocal() as session:
                     new_trade = Trade(
-                        timestamp=datetime.utcnow(),
+                        timestamp=(datetime.utcnow() + timedelta(hours=9)),
                         action="CLOSED",
                         symbol=symbol,
                         price=0.0,
@@ -444,7 +444,7 @@ class ExecutionEngine:
 
                     async with AsyncSessionLocal() as session:
                         new_trade = Trade(
-                            timestamp=datetime.utcnow(),
+                            timestamp=(datetime.utcnow() + timedelta(hours=9)),
                             action="SELL",
                             symbol=symbol,
                             price=close_price,
