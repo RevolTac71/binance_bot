@@ -267,11 +267,25 @@ async def main():
     finally:
         if "app" in locals() and app:
             logger.info("텔레그램 인터랙티브 커맨더를 안전하게 종료합니다...")
-            await app.updater.stop()
-            await app.stop()
-            await app.shutdown()
+            try:
+                # Updater가 실행 중일 때만 중지 시도 (RuntimeError 방지)
+                if app.updater and app.updater.running:
+                    await app.updater.stop()
+            except Exception as e:
+                logger.warning(f"Telegram Updater 종료 중 예외 발생: {e}")
 
-        await pipeline.close()
+            try:
+                await app.stop()
+                await app.shutdown()
+            except Exception as e:
+                logger.warning(f"Telegram App 종료 중 예외 발생: {e}")
+
+        try:
+            # 여기서 CCXT의 exchange.close()가 호출되어 Unclosed connector 방지
+            await pipeline.close()
+        except Exception as e:
+            logger.warning(f"거래소 연결 종료 중 예외 발생: {e}")
+
         logger.info("거래소 API 객체 릴리즈 및 시스템 종료 절차 통과 완료.")
 
 
