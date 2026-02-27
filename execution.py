@@ -189,6 +189,7 @@ class ExecutionEngine:
                 "sl_price": sl_price,
                 "amount": amount,
                 "status": "open",
+                "created_at": datetime.now(timezone.utc),
             }
 
             await notifier.send_message(
@@ -333,7 +334,7 @@ class ExecutionEngine:
 
         symbols_to_remove = []
 
-        for symbol, entry_info in self.pending_entries.items():
+        for symbol, entry_info in list(self.pending_entries.items()):
             order_id = entry_info["order_id"]
 
             if settings.DRY_RUN:
@@ -343,8 +344,23 @@ class ExecutionEngine:
                 symbols_to_remove.append(symbol)
                 continue
 
+            # ── 타임아웃(Timeout) 검사: 지정가 매수 후 15분이 지나도 안 잡히면 거래 취소 (시장가 우회 금지) ──
+            created_at = entry_info.get("created_at")
+            if (
+                created_at
+                and (datetime.now(timezone.utc) - created_at).total_seconds() > 15 * 60
+            ):
+                logger.warning(
+                    f"⏰ [{symbol}] 지정가 진입 주문 시간 초과(15분). 추세 이탈로 간주하여 주문을 강제 취소합니다."
+                )
+                await self.cancel_pending_order(
+                    symbol, reason="진입 대기 시간 초과(15분)"
+                )
+                symbols_to_remove.append(symbol)
+                continue
+
             try:
-                # 바이낸스 API로 해당 지문 상태 조회
+                # 바이낸스 API로 해당 주문 상태 조회
                 order_status = await self.exchange.fetch_order(order_id, symbol)
                 status = order_status.get("status")
 
