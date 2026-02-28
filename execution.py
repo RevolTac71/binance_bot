@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone, timedelta
 from config import settings, logger
 from database import Trade, AsyncSessionLocal
