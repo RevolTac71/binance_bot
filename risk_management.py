@@ -31,31 +31,29 @@ class RiskManager:
         if capital <= 0 or entry_price <= 0 or atr_val <= 0:
             return {"size": 0.0, "invest_usdt": 0.0, "tp_dist": 0.0, "sl_dist": 0.0}
 
-        # 1. 1회 손실 허용액 산출 (복리 효과: 자본 성장에 비례)
-        risk_amount = capital * self.risk_pct
+        # 1. 1회 투입 증거금 액수 산출 (총 자본금 * 사용자가 설정한 투입 비율)
+        # (이전의 Kelly-Risk Parity 방식이 아닌 단순 증거금 분할 투입 방식)
+        margin_invest = capital * self.risk_pct
 
-        # 2. 거래당 스탑폭/익절폭 금액 (1코인당 잃을 수 있는 달러가치)
+        # 2. 거래당 스탑폭/익절폭 금액 산출 (진입 단가 대비 달러가치)
         sl_distance = atr_val * 1.5
         tp_distance = atr_val * 2.5
 
-        # 3. 목표 수량: 내가 감내할 총 손실액 / 1코인당 손절폭
-        calc_size = risk_amount / sl_distance if sl_distance > 0 else 0.0
+        # 3. 최대 레버리지를 곱한 명목 진입 금액 (Notional Value)
+        notional_value = margin_invest * self.leverage
 
-        # 4. 최대 레버리지 한도 방어막 적용 (Max Notional)
-        max_notional = capital * self.leverage
-        current_notional = calc_size * entry_price
+        # 4. 바이낸스 최소 주문 한도(5.5~6.0 USDT) 방어
+        if notional_value < self.min_order_usdt:
+            notional_value = self.min_order_usdt
+            margin_invest = notional_value / self.leverage
 
-        if current_notional > max_notional:
-            logger.warning(
-                f"⚠️ 진입 금액({current_notional:.2f})이 최대 레버리지 한도({max_notional:.2f})를 초과하여 강제 조정됩니다."
-            )
-            calc_size = max_notional / entry_price
-            current_notional = calc_size * entry_price
+        # 5. 가용 증거금 초과(풀시드 초과) 안전장치 (가용 잔고의 95%까지만 최대 허용)
+        if margin_invest > capital * 0.95:
+            margin_invest = capital * 0.95
+            notional_value = margin_invest * self.leverage
 
-        # 보호 로직: 바이낸스 5.5~6.0 USDT 미만 진입 거절 방어
-        if current_notional < self.min_order_usdt:
-            calc_size = self.min_order_usdt / entry_price
-            current_notional = self.min_order_usdt
+        # 6. 최종 계약 수량 산정
+        calc_size = notional_value / entry_price
 
         # 수량 정밀도 포맷 관리 (바이낸스 규격 소수점)
         try:
@@ -64,11 +62,16 @@ class RiskManager:
         except Exception as e:
             final_size = calc_size
 
-        actual_margin_invest = current_notional / self.leverage
+        # 실제 투입 증거금 재계산 (소수점 절사 등에 의해 미미하게 달라질 수 있음)
+        actual_margin_invest = (final_size * entry_price) / self.leverage
+
+        # 예상되는 달러 손절 금액 (수량 * 스탑폭)
+        expected_loss = final_size * sl_distance
 
         logger.info(
-            f"[Position Sizing] {symbol} | 예상 손실액: {risk_amount:.2f} USDT ({self.risk_pct * 100:.2f}%) | 투입 증거금: {actual_margin_invest:.2f} USDT | "
-            f"수량: {final_size} | TP: +{tp_distance:.4f} / SL: -{sl_distance:.4f} (ATR: {atr_val:.4f})"
+            f"[Position Sizing] {symbol} | 증거금 투입 설정: {self.risk_pct * 100:.2f}% | "
+            f"실투입 증거금: {actual_margin_invest:.2f} USDT | 수량: {final_size} | "
+            f"TP: +{tp_distance:.4f} / SL: -{sl_distance:.4f} (예상손실: {expected_loss:.2f} USDT)"
         )
 
         return {
