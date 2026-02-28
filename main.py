@@ -1,6 +1,9 @@
 import asyncio
 import time
+import json
+import aiohttp
 from datetime import datetime, timezone, timedelta
+import pandas as pd
 from config import logger, settings
 from database import check_db_connection, Trade, AsyncSessionLocal
 from data_pipeline import DataPipeline
@@ -13,24 +16,17 @@ from telegram_commands import setup_telegram_bot
 
 def get_today_0900_kst_timestamp() -> int:
     """
-    현재 시각을 기준으로 가장 최근의 09:00 KST (00:00 UTC) 타임스탬프(ms)를 계산합니다.
-    (Anchored VWAP 계산의 Base Time)
+    현재 시각을 기준으로 가장 최근의 당일 09:00 KST (00:00 UTC) 타임스탬프(ms)를 계산합니다.
+    (V15.0 Anchored VWAP 계산 베이스 타임)
     """
     now_utc = datetime.now(timezone.utc)
-
-    # KST 기준 변환 (+9 시간)
     kst_offset = timedelta(hours=9)
     now_kst = now_utc + kst_offset
 
-    # 당일 09:00 KST 생성
     target_kst = now_kst.replace(hour=9, minute=0, second=0, microsecond=0)
-
-    # 만약 현재 KST가 09:00 이전이라면(예: KST 08:00),
-    # 직전 기준일은 하루 전 09:00 KST가 되어야 함.
     if now_kst < target_kst:
         target_kst -= timedelta(days=1)
 
-    # 다시 UTC로 변환
     target_utc = target_kst - kst_offset
     return int(target_utc.timestamp() * 1000)
 
@@ -38,7 +34,7 @@ def get_today_0900_kst_timestamp() -> int:
 def is_funding_fee_cutoff() -> bool:
     """
     펀딩비 체결 (매 01:00, 09:00, 17:00 KST)에 따른 리스크 회피 시간 필터.
-    해당 정각의 5분 전 (XX:55:00) 부터 정각 후 30초 (XX:00:30) 까지는 True(위험 구역)를 반환.
+    해당 정각의 5분 전 (XX:55:00) 부터 정각 후 30초 (XX:00:30) 까지
     """
     now_utc = datetime.now(timezone.utc)
     now_kst = now_utc + timedelta(hours=9)
@@ -47,61 +43,130 @@ def is_funding_fee_cutoff() -> bool:
     minute = now_kst.minute
     second = now_kst.second
 
-    # 정산 시간 리스트 (KST)
     funding_hours = [1, 9, 17]
 
-    # 1) 정산 시간 직전의 55분 ~ 59분
     if minute >= 55:
         next_hour = (hour + 1) % 24
         if next_hour in funding_hours:
             return True
 
-    # 2) 정산 정각 후 30초 이내 (변동성/Latency 버퍼)
     if hour in funding_hours and minute == 0 and second <= 30:
         return True
 
     return False
 
 
-async def process_single_symbol(
+# In-memory DataFrame Storage for 15 symbols
+df_map = {}
+
+
+async def warm_up_data(symbols: list, pipeline: DataPipeline):
+    """최초 접속 혹은 재접속 시 이전 데이터를 로드하여 지표 연속성을 확보합니다."""
+    global df_map
+    since_ts = get_today_0900_kst_timestamp() - (
+        100 * 60 * 1000
+    )  # 09:00부터지만, 지표들 계산을 위해 100봉 정도 더 여유있게 가져옴
+
+    tasks = []
+    for sym in symbols:
+        # V15.2 동적 타임프레임 데이터 로드 (최대 1500 가져와서 장기 ATR 계산도 충당)
+        tasks.append(
+            pipeline.fetch_ohlcv_since(
+                sym, timeframe=settings.TIMEFRAME, since=since_ts
+            )
+        )
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for sym, res in zip(symbols, results):
+        if isinstance(res, Exception):
+            logger.error(f"[{sym}] 웜업 데이터 로딩 실패: {res}")
+            continue
+
+        df_map[sym] = res
+        logger.info(
+            f"[{sym}] {settings.TIMEFRAME} 캔들 초기 데이터 {len(res)}개 장전 완료."
+        )
+
+
+async def process_closed_kline(
     symbol: str,
+    kline: dict,
     pipeline: DataPipeline,
     strategy: StrategyEngine,
     risk: RiskManager,
     execution: ExecutionEngine,
-    capital: float,
 ):
-    """
-    개별 코인에 대한 VWAP 계산 및 전략 진입 판별 코루틴.
-    """
-    # 진행 중인 포지션이 있거나 대기 주문이 있다면 스킵
+    """웹소켓으로 수신된 '마감된(x: True)' 캔들을 기존 df에 병합하고 판단을 내립니다."""
+    if symbol not in df_map:
+        return
+
+    # 이미 활성 포지션 처리 중이거나 대기 중이면 생략
     if symbol in execution.active_positions or symbol in execution.pending_entries:
         return
 
     try:
-        # 1. 동적 타임스탬프를 이용해 기준 시간(09:00 KST)부터 현재까지의 3분봉 모두 가져오기
-        since_ts = get_today_0900_kst_timestamp()
+        new_ts = int(kline["t"])
+        new_dt = pd.to_datetime(new_ts, unit="ms")
 
-        df_3m = await pipeline.fetch_ohlcv_since(symbol, timeframe="3m", since=since_ts)
+        # 새 캔들 row
+        new_row = pd.DataFrame(
+            [
+                {
+                    "datetime": new_dt,
+                    "open": float(kline["o"]),
+                    "high": float(kline["h"]),
+                    "low": float(kline["l"]),
+                    "close": float(kline["c"]),
+                    "volume": float(kline["v"]),
+                }
+            ]
+        ).set_index("datetime")
 
-        if df_3m.empty:
+        df = df_map[symbol]
+
+        # 캔들 병합 (웹소켓 중복 수신 방어)
+        if new_dt in df.index:
+            df.loc[new_dt] = new_row.iloc[0]
+        else:
+            # pd.concat 대신 간단히 loc 추가 (성능 이점 위함)
+            df.loc[new_dt] = new_row.iloc[0]
+
+        # 최대 1500개 유지 (당일 1440개 커버)
+        df_map[symbol] = df.tail(1500)
+        curr_df = df_map[symbol]
+
+        if is_funding_fee_cutoff():
+            # 펀딩비 시간대면 캔들 저장만 하고 진입은 하지 않음
             return
 
-        # 2. 당일 누적 VWAP, 밴드, RSI 계산
-        df_3m = pipeline.calculate_vwap_indicators(df_3m)
+        # 1. 지표 연산
+        df_ind = pipeline.calculate_vwap_indicators(curr_df.copy())
 
-        # 3. 전략 엔진을 통해 지정가 대기 타점(Band +-2 ticks) 확인
-        decision = strategy.check_entry(symbol, df_3m)
+        # 2. V15.0 전략 엔진 의사결정
+        decision = strategy.check_entry(symbol, df_ind)
 
         if decision["signal"]:
+            balance_info = await pipeline.exchange.fetch_balance()
+            capital = balance_info.get("total", {}).get("USDT", 0.0)
+
+            if settings.DRY_RUN:
+                capital = 1000.0
+
+            if capital < risk.min_order_usdt:
+                logger.warning(f"⚠️ 전체 선물 잔고 부족({capital:.2f} USDT). 패스.")
+                return
+
             market_price = decision["market_price"]
             reason = decision["reason"]
+            atr_val = decision.get("atr_val", market_price * 0.005)
 
-            # 진입 가격 예측치(market_price)를 전달하여 고정비율 수량 계산 시 참조
-            sizing = risk.calculate_position_size(symbol, capital, market_price)
+            # 3. 투입 사이즈 산출 (V15는 고정 자본 10% 사용)
+            sizing = risk.calculate_position_size(
+                symbol, capital, market_price, atr_val
+            )
 
             if sizing["size"] <= 0:
-                logger.info(f"[{symbol}] 포지션 사이징 불가(수량 0 산출). 진입 생략.")
                 return
 
             qty = sizing["size"]
@@ -109,96 +174,106 @@ async def process_single_symbol(
 
             logger.info(
                 f"[Execute] 🎯 {symbol} 진입 타점 포착! "
-                f"{side.upper()}(수량={qty}, 목표 시장가={market_price}, 투입={sizing['invest_usdt']:.2f} USDT)"
+                f"{side.upper()} (qty={qty}, price={market_price})"
             )
 
-            # 시장가(Market) 즉각 진입 및 동기적 TP/SL 발사
-            await execution.place_market_entry_order(symbol, side, qty, reason)
+            # 4. 시장가 즉시 진입 및 Time Exit 타이머 동시 스케줄링
+            await execution.place_market_entry_order(
+                symbol=symbol,
+                side=side,
+                amount=qty,
+                reason=reason,
+                tp_dist=sizing["tp_dist"],
+                sl_dist=sizing["sl_dist"],
+            )
 
     except Exception as e:
-        logger.error(f"[{symbol}] 개별 스캔 중 에러: {e}")
+        logger.error(f"[{symbol}] KLINE 마감 처리 중 에러: {e}")
 
 
-async def trading_loop(
+async def websocket_loop(
     pipeline: DataPipeline,
     strategy: StrategyEngine,
     risk: RiskManager,
     execution: ExecutionEngine,
 ):
     """
-    VWAP 선물 메인 매매 폴링 루프:
-    - 5분 전 펀딩비 컷오프 확인 및 대기주문 취소
-    - 잔고 부족 시 스킵
-    - Top 5 알트코인 병렬 조회 및 로직 병렬 실행 (asyncio.gather)
+    [V15.2] Aiohttp를 활용한 동적 타임프레임(15종목) 무지연 이벤트 루프
     """
-    # 1. 추출
-    top_alts = await pipeline.fetch_top_altcoins_by_volume(limit=5)
-    logger.info(f"[Initial] 24H 거래량 Top 5 (선물): {top_alts}")
-    last_alts_update = datetime.now()
+    base_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+
+    # 볼륨 최상위 13개 알트코인 동적 추출
+    alts = await pipeline.fetch_top_altcoins_by_volume(
+        limit=13, exclude_symbols=base_symbols
+    )
+    target_symbols = base_symbols + alts
+
+    logger.info(f"📡 [V15.0] 포트폴리오 15종목 동적 선정 결과: {target_symbols}")
+
+    # 웜업 (당일 캔들 누적)
+    await warm_up_data(target_symbols, pipeline)
+
+    # CCXT 심볼 포맷('BTC/USDT:USDT') <-> 바이낸스 소켓 포맷('btcusdt') 상호 변환기
+    ccxt_to_binance = {
+        sym: sym.split("/")[0].lower() + "usdt" for sym in target_symbols
+    }
+    binance_to_ccxt = {v: k for k, v in ccxt_to_binance.items()}
+
+    # 바이낸스 Streams 생성
+    tf = getattr(settings, "TIMEFRAME", "3m")
+    streams = [f"{v}@kline_{tf}" for v in ccxt_to_binance.values()]
+    ws_url = "wss://fstream.binance.com/stream?streams=" + "/".join(streams)
 
     while True:
         try:
-            # === 0. 텔레그램 명령으로 인한 강제 일시정지 체크 (Pause/Panic 모드) ===
-            if getattr(settings, "IS_PAUSED", False):
-                await asyncio.sleep(5)
-                continue
+            logger.info(f"⚡ 무지연 WebSocket 스트림({tf} 15종목) 접속 시도 중...")
+            async with aiohttp.ClientSession() as session:
+                # Binance 푸시핑에 응답하기 위한 heartbeat
+                async with session.ws_connect(ws_url, heartbeat=20.0) as ws:
+                    logger.info("🟢 웹소켓 연결 완료! 실시간 트레이딩 봇 가동 시작.")
 
-            # === 1. 시간 필터 체크 (펀딩비 컷오프) ===
-            if is_funding_fee_cutoff():
-                logger.warning(
-                    "⏱️ [Time Filter] 펀딩비 컷오프 적용 구간. 신규 스캔 정지 및 대기 주문 취소."
-                )
+                    async for msg in ws:
+                        if getattr(settings, "IS_PAUSED", False):
+                            continue
 
-                # 미체결 지정가 주문이 있다면 전면 취소
-                pending_symbols = list(execution.pending_entries.keys())
-                for sym in pending_symbols:
-                    await execution.cancel_pending_order(
-                        sym, reason="펀딩비 타임 필터에 의한 강제 취소"
-                    )
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            data = json.loads(msg.data)
+                            if "data" in data and "k" in data["data"]:
+                                # 캔들 페이로드 파싱
+                                kline = data["data"]["k"]
+                                is_closed = kline["x"]  # 1분봉 캔들 마감 여부
 
-                await asyncio.sleep(10)  # 10초 대기 후 재점검
-                continue
+                                # 마감캔들에 대해서만 후행성 제거 및 확정 스캔을 수행합니다
+                                if is_closed:
+                                    binance_sym = kline["s"].lower()
+                                    ccxt_sym = binance_to_ccxt.get(binance_sym)
+                                    if ccxt_sym:
+                                        # 블로킹 방지를 위한 독립 태스크(Task) 스핀업
+                                        asyncio.create_task(
+                                            process_closed_kline(
+                                                ccxt_sym,
+                                                kline,
+                                                pipeline,
+                                                strategy,
+                                                risk,
+                                                execution,
+                                            )
+                                        )
 
-            # === 2. 종목 리스트 갱신 (4시간마다) ===
-            if (datetime.now() - last_alts_update).total_seconds() >= 14400:
-                top_alts = await pipeline.fetch_top_altcoins_by_volume(limit=5)
-                last_alts_update = datetime.now()
-                logger.info(f"🔄 Top 5 관심 종목 갱신: {top_alts}")
-
-            # === 3. 잔고 조회 ===
-            balance_info = await pipeline.exchange.fetch_balance()
-            capital = balance_info.get("total", {}).get("USDT", 0.0)
-
-            # --- FOR DRY RUN TESTING ONLY ---
-            if settings.DRY_RUN:
-                capital = 1000.0
-
-            if capital < risk.min_order_usdt:
-                logger.warning(
-                    f"⚠️ 전체 선물 잔고 부족({capital:.2f} USDT). 신규 진입/스캔 중지."
-                )
-                await asyncio.sleep(60)
-                continue
-
-            # === 4. 병렬 진입 스캔 (상태 관리된 종목 제외) ===
-            tasks = []
-            for symbol in top_alts:
-                tasks.append(
-                    process_single_symbol(
-                        symbol, pipeline, strategy, risk, execution, capital
-                    )
-                )
-
-            # 약간의 간격을 두며 병렬 실행 (Rate Limit 보호 목적)
-            if tasks:
-                await asyncio.gather(*tasks)
-
-            # 1사이클 스캔 휴식 (Rate Limit 및 CPU 자원 보호)
-            await asyncio.sleep(5)
+                        elif msg.type in (
+                            aiohttp.WSMsgType.CLOSED,
+                            aiohttp.WSMsgType.ERROR,
+                        ):
+                            logger.error(
+                                f"웹소켓 끊어짐 (Code: {ws.close_code}). 5초 후 재시도..."
+                            )
+                            break
 
         except Exception as e:
-            logger.error(f"[Main-Loop Error] 예외 발생: {e}")
-            await asyncio.sleep(10)
+            logger.error(f"웹소켓 루프 최상위 오류: {e}. 5초 후 재접속 시도...")
+            await asyncio.sleep(5)
+            # 재접속 시 중간 데이터 공백(Gap)을 메꾸기 위해 웜업을 재수행
+            await warm_up_data(target_symbols, pipeline)
 
 
 async def state_machine_loop(execution: ExecutionEngine):
@@ -209,19 +284,16 @@ async def state_machine_loop(execution: ExecutionEngine):
         try:
             await execution.check_pending_orders_state()
             await execution.check_active_positions_state()
-            # 서버 미스매치 점검 (잔고 고립 등)
             await execution.check_state_mismatch()
-
-            await asyncio.sleep(3)  # 상태 조회를 3초 단위로 타이트하게
+            await asyncio.sleep(3)
         except Exception as e:
             logger.error(f"[State Machine Error]: {e}")
             await asyncio.sleep(5)
 
 
 async def main():
-    logger.info("============== BINANCE 24/7 AUTO TRADER START ==============")
+    logger.info("============== BINANCE V15.0 HFT AUTO TRADER START ==============")
 
-    # DB 및 사전 세팅 체커
     is_db_connected = await check_db_connection()
     if not is_db_connected:
         logger.error(
@@ -229,42 +301,38 @@ async def main():
         )
         return
 
-    # 초기 카톡 메시지 송신
     await notifier.send_message(
-        "🚀 [시작] 바이낸스 현물(Spot) 스캘핑 봇 서버가 부팅되었습니다."
+        f"🚀 [시작] 바이낸스 V15.2 {settings.TIMEFRAME} 스캘핑 봇 웹소켓 대기열 접속 중..."
     )
 
-    # 핵심 컴포넌트 준비
     pipeline = DataPipeline()
     strategy = StrategyEngine()
     risk = RiskManager(pipeline)
     execution = ExecutionEngine(pipeline)
 
     try:
-        # 진행 중이던 포지션 복구 및 쓰레기 대기주문 정리
         await execution.sync_state_from_exchange()
 
-        # 텔레그램 인터랙티브 커맨더 백그라운드 구동 (asyncio)
         app = setup_telegram_bot(execution)
         if app:
             await app.initialize()
             await app.start()
             await app.updater.start_polling()
 
-        # 비동기 병렬 태스크(Task) 스케줄링
+        # [V15.2] 메인 웹소켓 루프와 스테이트 머신 병렬 가동
         task_state = asyncio.create_task(state_machine_loop(execution))
         task_trade = asyncio.create_task(
-            trading_loop(pipeline, strategy, risk, execution)
+            websocket_loop(pipeline, strategy, risk, execution)
         )
 
         await asyncio.gather(task_state, task_trade)
+
     except KeyboardInterrupt:
         logger.warning("CTRL+C(키보드 인터럽트)로 시스템이 정지되었습니다.")
     finally:
         if "app" in locals() and app:
             logger.info("텔레그램 인터랙티브 커맨더를 안전하게 종료합니다...")
             try:
-                # Updater가 실행 중일 때만 중지 시도 (RuntimeError 방지)
                 if app.updater and app.updater.running:
                     await app.updater.stop()
             except Exception as e:
@@ -277,7 +345,6 @@ async def main():
                 logger.warning(f"Telegram App 종료 중 예외 발생: {e}")
 
         try:
-            # 여기서 CCXT의 exchange.close()가 호출되어 Unclosed connector 방지
             await pipeline.close()
         except Exception as e:
             logger.warning(f"거래소 연결 종료 중 예외 발생: {e}")
@@ -286,7 +353,6 @@ async def main():
 
 
 if __name__ == "__main__":
-    # Windows 등 환경에서 async RuntimeError 우연 방어
     import sys
 
     if sys.platform == "win32":

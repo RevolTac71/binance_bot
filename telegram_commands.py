@@ -1,6 +1,7 @@
 import os
 import sys
 import asyncio
+import psutil
 from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -30,6 +31,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/leverage [N] - 레버리지 N배로 변경 (영구)\n"
         "/k_value [숫자] - K-Value 변경 (예: 0.5)\n"
         "/risk [숫자] - 리스크 비율 변경 (예: 0.1)\n"
+        "/time_exit [숫자] - 강제 청산 시간(분) 변경 (0은 비활성)\n"
+        "/timeframe [타임프레임] - 캔들 차트 기준 시간 변경 (예: 1m, 3m, 5m)\n"
         "/mode [dry_run|real] - 매매 모드 변경 (영구)\n"
         "/panic - 비상! 모든 주문 취소 및 시장가 전량 청산 후 정지\n"
         "/restart - 봇 재부팅 (nohup 효과)"
@@ -49,6 +52,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔹 /leverage [숫자] : 거래 레버리지를 주어진 숫자로 영구 변경합니다 (예: /leverage 5).\n"
         "🔹 /k_value [숫자] : 전략 진입 시 참조되는 K-Value 상수값을 변경합니다 (예: /k_value 0.5).\n"
         "🔹 /risk [숫자] : 계좌 잔고 대비 포지션 진입 비율을 변경합니다 (예: /risk 0.1).\n"
+        "🔹 /time_exit [숫자] : 포지션 진입 후 자리를 이탈한 경우 강제 탈출할 시간을 분 단위로 설정합니다. (예: /time_exit 10. 0으로 설정 시 꺼짐)\n"
         "🔹 /mode [dry_run|real] : 모의투자(dry_run) 또는 실전매매(real) 모드로 영구 전환합니다.\n"
         "🔹 /panic : [위급상황] 모든 미체결 주문을 취소하고, 보유 포지션을 전부 시장가로 전량 청산한 후 봇을 일시정지(pause) 상태로 만듭니다.\n"
         "🔹 /restart : 봇 애플리케이션 프로세스를 강제 재부팅합니다."
@@ -118,8 +122,10 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"- 매매 모드: {mode}\n"
         f"- 봇 동작: {status_str}\n"
         f"- 기본 레버리지: {settings.LEVERAGE}x\n"
+        f"- 타임프레임(캔들): {getattr(settings, 'TIMEFRAME', '3m')}\n"
         f"- K-Value: {settings.K_VALUE}\n"
-        f"- 진입 리스크: {settings.RISK_PERCENTAGE}\n"
+        f"- 진입 리스크: {settings.RISK_PERCENTAGE * 100:.1f}%\n"
+        f"- Time Exit: {getattr(settings, 'TIME_EXIT_MINUTES', 0)}분\n"
         f"- 생존 시간: {days}일 {hours}시간 {minutes}분\n"
         f"- 총 잔고: {capital} USDT\n\n"
         f"✅ 기동중 포지션(메모리): {len(execution.active_positions)} 개\n"
@@ -231,14 +237,70 @@ async def risk_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def time_exit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_admin(update):
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "💡 사용법: /time_exit [숫자]\n예시: /time_exit 10"
+        )
+        return
+
+    try:
+        new_val = int(args[0])
+        settings.TIME_EXIT_MINUTES = new_val
+        update_env_variable("TIME_EXIT_MINUTES", str(new_val))
+        status = f"{new_val}분" if new_val > 0 else "비활성화(0)"
+        await update.message.reply_text(
+            f"✅ Time Exit 타이머가 {status}로 변경되었습니다. (DB 환경변수 영구 반영 완료)"
+        )
+    except ValueError:
+        await update.message.reply_text("❌ 시간은 정수(분)로 입력해주세요 (예: 10)")
+
+
+async def timeframe_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_admin(update):
+        return
+    args = context.args
+    if not args or args[0].lower() not in ["1m", "3m", "5m", "15m"]:
+        await update.message.reply_text(
+            "💡 사용법: /timeframe [1m|3m|5m|15m]\n예시: /timeframe 3m"
+        )
+        return
+
+    new_tf = args[0].lower()
+    settings.TIMEFRAME = new_tf
+    update_env_variable("TIMEFRAME", new_tf)
+    await update.message.reply_text(
+        f"✅ 타임프레임이 {new_tf}로 변경되었습니다. 웹소켓 스트림 재생성을 위해 반드시 '/restart' 명령어를 실행해주세요!"
+    )
+
+
 async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
     await update.message.reply_text(
-        "�🔄 봇 프로세스를 완전히 재부팅합니다... (잠시 후 상태를 확인하세요!)"
+        "🔄 봇 프로세스를 완전히 재부팅합니다... 여러 개가 켜져 있다면 모두 종료한 뒤 하나만 새로 기동합니다!"
     )
 
-    # 2초 뒤에 파이썬 프로세스 자체를 시스템 적으로 재가동합니다.
+    current_pid = os.getpid()
+    killed_count = 0
+    
+    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+        try:
+            cmdline = proc.info.get('cmdline')
+            if cmdline and len(cmdline) > 0 and 'python' in proc.info.get('name', '').lower():
+                cmd_str = " ".join(cmdline)
+                if 'main.py' in cmd_str and proc.info['pid'] != current_pid:
+                    proc.kill()
+                    killed_count += 1
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            pass
+            
+    if killed_count > 0:
+        logger.info(f"동일한 main.py 프로세스 {killed_count}개를 강제 종료했습니다.")
+
     loop = asyncio.get_running_loop()
     loop.call_later(2, lambda: os.execv(sys.executable, ["python"] + sys.argv))
 
@@ -329,6 +391,8 @@ def setup_telegram_bot(execution_engine):
     application.add_handler(CommandHandler("leverage", leverage_cmd))
     application.add_handler(CommandHandler("k_value", k_value_cmd))
     application.add_handler(CommandHandler("risk", risk_cmd))
+    application.add_handler(CommandHandler("time_exit", time_exit_cmd))
+    application.add_handler(CommandHandler("timeframe", timeframe_cmd))
     application.add_handler(CommandHandler("mode", mode_cmd))
     application.add_handler(CommandHandler("restart", restart_cmd))
     application.add_handler(CommandHandler("panic", panic_cmd))

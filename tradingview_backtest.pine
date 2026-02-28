@@ -1,178 +1,127 @@
 // ═══════════════════════════════════════════════════════════════
-// 📊 EMA Pullback Scalper v4 — 수수료 현실 반영 & 리페인팅 제거
+// 📊 VWAP V15.2 (3분봉 최적화 & 동적 ATR 적용 완료)
 // ═══════════════════════════════════════════════════════════════
-// 주력 TF: 5분봉 (ATR이 수수료를 소화할 수 있는 최소 단위)
-// 추세 TF: 15분봉 EMA (lookahead 리페인팅 차단)
-// 진입: 매도세 고갈형 눌림목 (거래량 감소 + 밑꼬리 양봉)
-// 청산: ATR TP/SL (R:R 1:2) + Chandelier Trailing
-// 자금: 1% 고정 리스크, 15% 캡
-// ═══════════════════════════════════════════════════════════════
-//@version=5
-strategy("EMA Pullback Scalper v4", overlay=true,
-     default_qty_type=strategy.percent_of_equity,
-     default_qty_value=10,
-     initial_capital=100,
-     commission_type=strategy.commission.percent,
-     commission_value=0.1,
-     slippage=1,
-     calc_on_every_tick=false,
-     process_orders_on_close=false)
+//@version=6
+strategy("VWAP V15.2 스캘핑 멀티", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=10, initial_capital=1000, commission_type=strategy.commission.percent, commission_value=0.04, slippage=1)
 
 // ─── 입력 파라미터 ───
-// 추세 필터 (15분봉)
-ema_fast_len   = input.int(50,  "추세 EMA Fast", group="추세 필터")
-ema_slow_len   = input.int(100, "추세 EMA Slow", group="추세 필터")
-trend_tf       = input.timeframe("15", "추세 타임프레임", group="추세 필터")
+k_value = input.float(2.0, "K-Value (VWAP 밴드)", step=0.1)
 
-// 눌림목 진입 조건 (5분봉)
-ema_pullback   = input.int(20,  "Pullback EMA", group="진입 조건")
-rsi_len        = input.int(14,  "RSI Length",    group="진입 조건")
-rsi_threshold  = input.int(45,  "RSI 과매도 기준", group="진입 조건")
-rsi_lookback   = input.int(5,   "RSI 윈도우 (봉수)", group="진입 조건")
-wick_ratio     = input.float(0.6, "밑꼬리 비율 (body 대비)", group="진입 조건", step=0.1)
+rsi_len = input.int(14, "RSI 기간")
+rsi_ob  = input.int(70, "RSI 과매수")
+rsi_os  = input.int(30, "RSI 과매도")
 
-// ATR TP/SL (수수료를 소화할 수 있도록 넓힘)
-atr_len        = input.int(14,  "ATR Length",     group="TP/SL")
-atr_tp_mult    = input.float(3.0,  "TP 배수 (ATR×)", group="TP/SL", step=0.5)
-atr_sl_mult    = input.float(1.5, "SL 배수 (ATR×)", group="TP/SL", step=0.25)
+vol_sma_len = input.int(20, "Volume SMA 기간")
+vol_mult    = input.float(1.5, "Volume Spike 배수", step=0.1)
 
-// Chandelier Trailing (여유있게 조정)
-trail_activate = input.float(1.5, "Trailing 활성화 (ATR×)", group="Trailing", step=0.1)
-trail_offset   = input.float(0.8, "Trailing SL 거리 (ATR×)", group="Trailing", step=0.1)
-fee_pct        = input.float(0.22, "왕복 수수료+슬리피지 (%)", group="Trailing", step=0.01)
+atr_ratio_mult = input.float(1.2, "동적 변동성 돌파 비율 (장기 대비 단기 ATR 배수)", step=0.1)
+atr_long_len   = input.int(200, "장기 ATR 기간")
 
-// 자금 관리
-risk_pct       = input.float(1.0, "리스크 비율 (%)", group="자금관리", step=0.1)
-max_invest_pct = input.float(15.0, "최대 투입 캡 (%)", group="자금관리", step=1.0)
+sl_atr_mult = input.float(1.5, "SL 스탑 거리 (ATR 배수)")
+tp_atr_mult = input.float(2.5, "TP 익절 목표 (ATR 배수)")
 
-// ─── 15분봉 추세 필터 (리페인팅 차단) ───
-// [1]과 lookahead_on을 함께 사용하여 완성된 직전 15분봉 기준
-ema_fast_htf = request.security(syminfo.tickerid, trend_tf,
-     ta.ema(close, ema_fast_len)[1], lookahead=barmerge.lookahead_on)
-ema_slow_htf = request.security(syminfo.tickerid, trend_tf,
-     ta.ema(close, ema_slow_len)[1], lookahead=barmerge.lookahead_on)
-trend_up = ema_fast_htf > ema_slow_htf
+true_risk_pct = input.float(0.5, "1회 거래 감수 리스크(%)", step=0.1) / 100
 
-// ─── 5분봉 진입 지표 ───
-ema20      = ta.ema(close, ema_pullback)
-rsi_val    = ta.rsi(close, rsi_len)
-atr_val    = ta.atr(atr_len)
-vol_ma     = ta.sma(volume, 20)
+use_time_exit = input.bool(true, "타임 엑시트 활성화")
+time_exit_bars = input.int(30, "타임 엑시트 한계봉 수 (3분봉 기준 30봉=90분)")
 
-// ─── 직전 완성 캔들 기준 조건 (Repainting 방지) ───
-// 모든 조건은 [1] (직전 완성봉)을 참조
+leverage = input.int(5, "최대 허용 레버리지 캡")
 
-// 1. RSI 윈도우: 최근 N봉 이내에 RSI < threshold 터치 이력
-rsi_touched = false
-for i = 1 to rsi_lookback
-    if rsi_val[i] < rsi_threshold
-        rsi_touched := true
-        break
+// ─── 지표 계산 ───
+atr_val = ta.atr(14)
+rsi_val = ta.rsi(close, rsi_len)
+vol_sma = ta.sma(volume, vol_sma_len)
 
-// 2. 직전봉이 EMA20 아래에서 마감 (눌림목 영역 진입)
-pullback_zone = close[1] < ema20[1]
+// ─── 당일 누적 VWAP (Anchored VWAP) ───
+isNewDay = ta.change(time("D")) != 0
 
-// 3. 매도세 고갈: 직전봉 거래량이 평균 이하 (= 매도 압력 소진)
-vol_exhaustion = volume[1] < vol_ma[1]
+var float sum_pv = 0.0
+var float sum_v  = 0.0
+var float sum_pv2 = 0.0
 
-// 4. 밑꼬리 양봉 (하단 위크가 길고 실체가 양봉 = 매수세 유입 시작)
-body_size  = math.abs(close[1] - open[1])
-lower_wick = math.min(close[1], open[1]) - low[1]
-is_bullish = close[1] > open[1]
-has_wick   = body_size > 0 ? (lower_wick / body_size >= wick_ratio) : (lower_wick > 0)
-wick_bullish = is_bullish and has_wick
+typ_price = hlc3 
+vol = volume
 
-// ─── 매수 시그널 종합 ───
-long_signal = trend_up and rsi_touched and pullback_zone and vol_exhaustion and wick_bullish
-
-// ─── ATR 기반 동적 TP/SL ───
-tp_distance = atr_val * atr_tp_mult
-sl_distance = atr_val * atr_sl_mult
-fee_buffer  = close * (fee_pct / 100)
-
-// ─── 고정 리스크 모델 포지션 사이징 ───
-equity_val   = strategy.equity
-risk_amount  = equity_val * (risk_pct / 100)
-sl_per_unit  = sl_distance
-qty_risk     = sl_per_unit > 0 ? risk_amount / sl_per_unit : 0
-
-// 투입금 제한 (15% 캡)
-max_invest   = equity_val * (max_invest_pct / 100)
-invest_usdt  = qty_risk * close
-qty_final    = invest_usdt > max_invest ? max_invest / close : qty_risk
-
-// ─── Chandelier Trailing 상태 변수 ───
-var float trail_entry = na
-var float trail_atr   = na
-var float trail_fee   = na
-var float trail_high  = na
-var bool  trail_on    = false
-
-// ─── 진입 실행 ───
-if long_signal and strategy.position_size == 0 and qty_final > 0
-    entry_price = close
-    tp_price    = entry_price + tp_distance
-    sl_price    = entry_price - sl_distance
-
-    strategy.entry("Long", strategy.long, qty=qty_final)
-    strategy.exit("TP/SL", "Long", limit=tp_price, stop=sl_price)
-
-    trail_entry := entry_price
-    trail_atr   := atr_val
-    trail_fee   := fee_buffer
-    trail_high  := entry_price
-    trail_on    := false
-
-// ─── Chandelier Trailing Stop 관리 ───
-if strategy.position_size > 0
-    trail_high := math.max(nz(trail_high), high)
-
-    // 활성화: 현재가 ≥ entry + ATR×1.5 + fee_buffer
-    chandelier_threshold = nz(trail_entry) + nz(trail_atr) * trail_activate + nz(trail_fee)
-    if not trail_on and close >= chandelier_threshold
-        trail_on := true
-
-    // 활성화 후: SL = max(기존SL, 최고가 - ATR×0.8 - fee_buffer)
-    if trail_on
-        new_sl       = nz(trail_high) - nz(trail_atr) * trail_offset - nz(trail_fee)
-        orig_sl      = nz(trail_entry) - nz(trail_atr) * atr_sl_mult
-        effective_sl = math.max(orig_sl, new_sl)
-        tp_target    = nz(trail_entry) + nz(trail_atr) * atr_tp_mult
-        strategy.exit("Chandelier", "Long", limit=tp_target, stop=effective_sl)
+if isNewDay
+    sum_pv  := typ_price * vol
+    sum_v   := vol
+    sum_pv2 := math.pow(typ_price, 2) * vol
 else
-    trail_entry := na
-    trail_atr   := na
-    trail_fee   := na
-    trail_high  := na
-    trail_on    := false
+    sum_pv  += typ_price * vol
+    sum_v   += vol
+    sum_pv2 += math.pow(typ_price, 2) * vol
 
-// ─── 시각화 ───
-plot(ema_fast_htf, "EMA50 (15m)", color=color.new(color.blue, 30), linewidth=2)
-plot(ema_slow_htf, "EMA100 (15m)", color=color.new(color.orange, 30), linewidth=2)
-plot(ema20, "EMA20 (5m)", color=color.new(color.white, 40), linewidth=1)
+vwap_val = sum_v > 0 ? sum_pv / sum_v : close
+variance = sum_v > 0 ? (sum_pv2 / sum_v) - math.pow(vwap_val, 2) : 0
+std_dev  = variance > 0 ? math.sqrt(variance) : 0
 
-plotshape(long_signal and strategy.position_size == 0,
-     title="Buy Signal", style=shape.triangleup,
-     location=location.belowbar, color=color.lime, size=size.small)
+upper_band = vwap_val + (std_dev * k_value)
+lower_band = vwap_val - (std_dev * k_value)
 
-bgcolor(trend_up ? color.new(color.green, 95) : color.new(color.red, 95))
+// ─── Session Filter (초기화 후 노이즈 방지) ───
+var int bars_since_reset = 0
+if isNewDay
+    bars_since_reset := 0
+else
+    bars_since_reset += 1
 
-// ─── 정보 테이블 ───
-var table infoTable = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 80))
-if barstate.islast
-    table.cell(infoTable, 0, 0, "ATR (14)", text_color=color.gray, text_size=size.small)
-    table.cell(infoTable, 1, 0, str.tostring(atr_val, "#.####"), text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 0, 1, "TP (ATR×" + str.tostring(atr_tp_mult) + ")", text_color=color.gray, text_size=size.small)
-    table.cell(infoTable, 1, 1, str.tostring(tp_distance, "#.####"), text_color=color.green, text_size=size.small)
-    table.cell(infoTable, 0, 2, "SL (ATR×" + str.tostring(atr_sl_mult) + ")", text_color=color.gray, text_size=size.small)
-    table.cell(infoTable, 1, 2, str.tostring(sl_distance, "#.####"), text_color=color.red, text_size=size.small)
-    table.cell(infoTable, 0, 3, "R:R", text_color=color.gray, text_size=size.small)
-    table.cell(infoTable, 1, 3, "1 : " + str.tostring(atr_tp_mult / atr_sl_mult, "#.#"), text_color=color.yellow, text_size=size.small)
-    table.cell(infoTable, 0, 4, "RSI", text_color=color.gray, text_size=size.small)
-    table.cell(infoTable, 1, 4, str.tostring(rsi_val, "#.##"), text_color=rsi_val < rsi_threshold ? color.lime : color.white, text_size=size.small)
-    table.cell(infoTable, 0, 5, "Trail", text_color=color.gray, text_size=size.small)
-    table.cell(infoTable, 1, 5, trail_on ? "🟢 ON" : "⚪ OFF", text_color=trail_on ? color.lime : color.gray, text_size=size.small)
-    table.cell(infoTable, 0, 6, "추세 (15m)", text_color=color.gray, text_size=size.small)
-    table.cell(infoTable, 1, 6, trend_up ? "🔼 상승" : "🔽 하락", text_color=trend_up ? color.lime : color.red, text_size=size.small)
-    table.cell(infoTable, 0, 7, "전략", text_color=color.gray, text_size=size.small)
-    table.cell(infoTable, 1, 7, "매도세 고갈 눌림목", text_color=color.aqua, text_size=size.small)
+is_session_safe = bars_since_reset >= 30
+
+// ─── 동적 변동성 & 거래량 필터 ───
+atr_long = ta.atr(atr_long_len)
+is_volatile = atr_val > (atr_long * atr_ratio_mult)
+
+// 삭제되었던 거래량 스파이크 변수 복구
+is_vol_spike = volume > (vol_sma * vol_mult)
+is_extreme_vol = volume > (vol_sma * 2.5)
+
+// ─── 가격 리젝션 로직 ───
+long_rejection = (low <= lower_band) and (close > lower_band)
+short_rejection = (high >= upper_band) and (close < upper_band)
+
+// 진입 트리거 조합 (명확한 괄호 처리)
+long_signal = is_session_safe and is_volatile and (rsi_val <= rsi_os) and ((is_vol_spike and long_rejection) or (is_extreme_vol and low <= lower_band))
+short_signal = is_session_safe and is_volatile and (rsi_val >= rsi_ob) and ((is_vol_spike and short_rejection) or (is_extreme_vol and high >= upper_band))
+
+// ─── ATR 기반 동적 사이즈 산출 (복리 & 리스크 패리티) ───
+risk_amount = strategy.equity * true_risk_pct
+sl_dist = atr_val * sl_atr_mult
+tp_dist = atr_val * tp_atr_mult
+
+target_qty = sl_dist > 0 ? (risk_amount / sl_dist) : 0
+max_notional = strategy.equity * leverage
+trade_qty = math.min(target_qty, close > 0 ? max_notional / close : 0)
+
+// ─── 포지션 진입 및 TP/SL 지정가 세팅 ───
+if long_signal and strategy.position_size == 0
+    strategy.entry("Long", strategy.long, qty=trade_qty)
+    tp_lvl = close + tp_dist
+    sl_lvl = close - sl_dist
+    strategy.exit("Exit L", "Long", limit=tp_lvl, stop=sl_lvl)
+
+if short_signal and strategy.position_size == 0
+    strategy.entry("Short", strategy.short, qty=trade_qty)
+    tp_lvl = close - tp_dist
+    sl_lvl = close + sl_dist
+    strategy.exit("Exit S", "Short", limit=tp_lvl, stop=sl_lvl)
+
+// ─── 타임 엑시트 방어막 (Logical Exit) ───
+var int bars_in_pos = 0
+if strategy.position_size != 0
+    bars_in_pos += 1
+else
+    bars_in_pos := 0
+
+if use_time_exit and strategy.position_size > 0 and bars_in_pos >= time_exit_bars
+    strategy.close("Long", comment="Time Exit (Long)")
+if use_time_exit and strategy.position_size < 0 and bars_in_pos >= time_exit_bars
+    strategy.close("Short", comment="Time Exit (Short)")
+
+// ─── 시각화 구역 ───
+plot(vwap_val, title="VWAP", color=color.purple, linewidth=2)
+p_upper = plot(upper_band, title="Upper Band", color=color.new(color.red, 30))
+p_lower = plot(lower_band, title="Lower Band", color=color.new(color.lime, 30))
+fill(p_upper, p_lower, color=color.new(color.gray, 90), title="VWAP Channel")
+
+plotshape(long_signal and strategy.position_size == 0, style=shape.triangleup, location=location.belowbar, color=color.lime, size=size.small, title="Long Signal")
+plotshape(short_signal and strategy.position_size == 0, style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, title="Short Signal")

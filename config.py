@@ -5,6 +5,8 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv, set_key
 import urllib.parse
+import threading
+import requests
 
 # Load environment variables
 dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
@@ -55,9 +57,16 @@ class Config:
     TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
     # Strategy Global Parameters
-    K_VALUE = float(os.getenv("K_VALUE", "0.5"))
-    RISK_PERCENTAGE = float(os.getenv("RISK_PERCENTAGE", "0.10"))
+    TIMEFRAME = os.getenv("TIMEFRAME", "3m")
+    K_VALUE = float(os.getenv("K_VALUE", "2.0"))
+    RISK_PERCENTAGE = float(os.getenv("RISK_PERCENTAGE", "0.005"))
     LEVERAGE = int(os.getenv("LEVERAGE", "5"))
+    TIME_EXIT_MINUTES = int(os.getenv("TIME_EXIT_MINUTES", "90"))  # 3분봉 30봉 = 90분
+
+    # V15.2 New Parameters
+    VOL_MULT = float(os.getenv("VOL_MULT", "1.5"))
+    ATR_RATIO_MULT = float(os.getenv("ATR_RATIO_MULT", "1.2"))
+    ATR_LONG_LEN = int(os.getenv("ATR_LONG_LEN", "200"))
 
     # Dry Run Mode (True면 실제 매매하지 않고 DB 기록만 함)
     DRY_RUN = os.getenv("DRY_RUN", "True").lower() == "true"
@@ -66,9 +75,42 @@ class Config:
     IS_PAUSED = False
 
 
+class TelegramLogHandler(logging.Handler):
+    """
+    에러 발생 시 텔레그램으로 메세지를 전송하는 커스텀 로깅 핸들러입니다.
+    비동기 웹소켓 충돌 방지를 위해 별도 스레드(threading)를 사용하여 requests로 전송합니다.
+    """
+
+    def emit(self, record):
+        if record.levelno < logging.ERROR:
+            return
+
+        bot_token = getattr(settings, "TELEGRAM_BOT_TOKEN", None)
+        chat_id = getattr(settings, "TELEGRAM_CHAT_ID", None)
+
+        if not bot_token or not chat_id:
+            return
+
+        try:
+            msg = self.format(record)
+            if len(msg) > 3500:
+                msg = msg[:3500] + "\n...[생략됨]"
+
+            text = f"🚨 <b>[BOT ERROR LOG]</b>\n<pre>{msg}</pre>"
+            url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+            payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+
+            # 메인 루프 블로킹을 막기 위해 데몬 스레드로 발송 처리
+            threading.Thread(
+                target=requests.post, args=(url,), kwargs={"json": payload}, daemon=True
+            ).start()
+        except Exception:
+            pass
+
+
 def get_logger(name="BinanceBot"):
     """
-    KST 타임존 기반으로 콘솔 및 파일 로그를 동시 출력하는 로거 생성 반환
+    KST 타임존 기반으로 콘솔 및 파일 로그를 동시 출력하는 로거 생성 반환 (Telegram 전송 추가)
     """
     logger = logging.getLogger(name)
     if logger.handlers:
@@ -98,12 +140,18 @@ def get_logger(name="BinanceBot"):
     c_handler.setFormatter(formatter)
     logger.addHandler(c_handler)
 
-    # File Handler (10MB max, keep 5 backups)
     f_handler = RotatingFileHandler(
         "app.log", maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
     )
     f_handler.setFormatter(formatter)
     logger.addHandler(f_handler)
+
+    # Telegram Error Handler (최상위 ERROR 등급 전용)
+    tg_handler = TelegramLogHandler()
+    tg_handler.setLevel(logging.ERROR)
+    # 별도 포맷을 사용하거나 기본 포맷을 사용 (여기서는 기본 포맷)
+    tg_handler.setFormatter(formatter)
+    logger.addHandler(tg_handler)
 
     return logger
 

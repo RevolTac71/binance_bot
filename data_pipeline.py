@@ -82,14 +82,15 @@ class DataPipeline:
 
     @with_exponential_backoff(max_retries=5)
     async def fetch_ohlcv_since(
-        self, symbol: str, timeframe: str = "3m", since: int = None
+        self, symbol: str, timeframe: str = "1m", since: int = None
     ) -> pd.DataFrame:
         """
         주어진 심볼의 바이낸스 캔들 데이터를 비동기로 불러와 DataFrame으로 변환합니다.
-        (V11: since 파라미터를 사용하여 09:00 KST 부터의 모든 데이터를 가져옵니다)
+        (V15: 1분봉 당일 누적 데이터 수집을 위해 최대 한도 1500개를 끌어옵니다)
         """
-        # limit 없이 since부터 현재까지 모두 가져와야 VWAP 누적이 정확함 (기본 500개 1500분=25시간이므로 당일 커버 가능)
-        candles = await self.exchange.fetch_ohlcv(symbol, timeframe, since=since)
+        candles = await self.exchange.fetch_ohlcv(
+            symbol, timeframe, since=since, limit=1500
+        )
 
         df = pd.DataFrame(
             candles, columns=["timestamp", "open", "high", "low", "close", "volume"]
@@ -100,10 +101,8 @@ class DataPipeline:
 
     def calculate_vwap_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        당일 누적 VWAP (Anchored VWAP) 및 표준편차 밴드 계산 (V11).
-        주의: df는 반드시 당일 09:00 KST 이후의 데이터만 포함하거나,
-        여기서 Session 기준 Groupby 연산을 해야 하지만,
-        fetch_ohlcv_since 에서 이미 09:00 KST 이후 데이터만 넘겨준다고 가정합니다.
+        [V15.0] 일자별(Daily) 00:00 UTC(09:00 KST) 기준 누적 그룹화된 Anchored VWAP 및 제반 지표 연산
+        (수집된 전체 1분봉 데이터 프레임을 대상으로 한번에 계산합니다)
         """
         if len(df) == 0:
             return df
@@ -112,27 +111,44 @@ class DataPipeline:
         df["vol_hlc3"] = df["hlc3"] * df["volume"]
         df["vol_hlc3_sq"] = df["hlc3"] ** 2 * df["volume"]
 
-        # 누적 합계 계산
-        df["cum_vol"] = df["volume"].cumsum()
-        df["cum_vol_hlc3"] = df["vol_hlc3"].cumsum()
-        df["cum_vol_hlc3_sq"] = df["vol_hlc3_sq"].cumsum()
+        # KST 타임존 적용된 index 기준으로 date를 추출하여 일자별 누적합 계산 (09:00 기준 리셋 효과)
+        # 웹소켓 환경 등에서 여러 날짜의 데이터가 섞여 있어도 일자별로 VWAP이 정상 초기화됩니다.
+        grouped = df.groupby(df.index.date)
+        df["cum_vol"] = grouped["volume"].cumsum()
+        df["cum_vol_hlc3"] = grouped["vol_hlc3"].cumsum()
+        df["cum_vol_hlc3_sq"] = grouped["vol_hlc3_sq"].cumsum()
 
         # VWAP 계산
         df["VWAP"] = df["cum_vol_hlc3"] / df["cum_vol"]
 
         # 분산(Variance) 계산 = (누적(가격^2 * 거래량) / 누적거래량) - VWAP^2
         variance = (df["cum_vol_hlc3_sq"] / df["cum_vol"]) - (df["VWAP"] ** 2)
-        # 음수 분산 방지 (부동소수점 오차)
-        variance = np.maximum(0, variance)
+        variance = np.maximum(0, variance)  # 음수 방지
 
-        # 표준편차 및 밴드 (VWAP 멀티플라이어 2.0 고정 혹은 설정값)
-        vwap_mult = 2.0
+        # V15.0 표준편차 밴드 멀티플라이어 (K = 2.5)
+        vwap_mult = (
+            float(settings.K_VALUE) if getattr(settings, "K_VALUE", 2.5) else 2.5
+        )
         df["StdDev"] = np.sqrt(variance)
         df["Upper_Band"] = df["VWAP"] + df["StdDev"] * vwap_mult
         df["Lower_Band"] = df["VWAP"] - df["StdDev"] * vwap_mult
 
         # 과매도/과매수 판단을 위한 RSI (14)
         df.ta.rsi(length=14, append=True, col_names=("RSI_14",))
+        # V15.0 거래량 스파이크 판별을 위한 Volume SMA (20)
+        df.ta.sma(close=df["volume"], length=20, append=True, col_names=("Vol_SMA_20",))
+        # 변동성 필터 및 동적 익손절 거리를 위한 단기 ATR (14)
+        df.ta.atr(length=14, append=True, col_names=("ATR_14",))
+
+        # [V15.2] 동적 변동성 필터를 위한 장기 ATR 계산 (기본 200)
+        atr_long_len = getattr(settings, "ATR_LONG_LEN", 200)
+        # 데이터가 충분하지 않을 경우를 대비해 계산
+        if len(df) > atr_long_len:
+            df.ta.atr(
+                length=atr_long_len, append=True, col_names=(f"ATR_{atr_long_len}",)
+            )
+        else:
+            df[f"ATR_{atr_long_len}"] = df["ATR_14"]
 
         return df
 

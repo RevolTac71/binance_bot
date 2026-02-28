@@ -180,6 +180,8 @@ class ExecutionEngine:
         side: str,  # 'buy' or 'sell'
         amount: float,
         reason: str,
+        tp_dist: float = 0.0,
+        sl_dist: float = 0.0,
     ) -> bool:
         """
         선물 시장에 신규 포지션을 시장가(Market)로 즉각 진입합니다.
@@ -245,18 +247,13 @@ class ExecutionEngine:
                 f"🎯 [{symbol}] 시장가 진입 체결 성공! 평균 단가: {average_price:.4f}. TP/SL 즉각 계산 및 전송 개시."
             )
 
-            # strategy 모듈 기준의 TP/SL 비율 (하드코딩된 값 대신 상수 관리 고려)
-            long_tp_pct = 0.010
-            long_sl_pct = 0.005
-            short_tp_pct = 0.012
-            short_sl_pct = 0.004
-
+            # V12: 진입 단가에서 ATR 거리(tp_dist, sl_dist)만큼 가감산
             if signal_type == "LONG":
-                raw_tp = average_price * (1 + long_tp_pct)
-                raw_sl = average_price * (1 - long_sl_pct)
+                raw_tp = average_price + tp_dist
+                raw_sl = average_price - sl_dist
             else:
-                raw_tp = average_price * (1 - short_tp_pct)
-                raw_sl = average_price * (1 + short_sl_pct)
+                raw_tp = average_price - tp_dist
+                raw_sl = average_price + sl_dist
 
             # 호가 단위(precisions) 보정
             tp_price = (
@@ -283,6 +280,14 @@ class ExecutionEngine:
             success = await self.place_tp_sl_orders(symbol, entry_info)
             if success:
                 self.active_positions[symbol] = True
+
+                # V15: 설정된 시간이 경과하면 제자리에 돌려놓지 않은 포지션을 논리적 시장가 매각 (스캘핑 전용)
+                if getattr(settings, "TIME_EXIT_MINUTES", 0) > 0:
+                    asyncio.create_task(
+                        self._time_exit_daemon(
+                            symbol, side, amount, settings.TIME_EXIT_MINUTES
+                        )
+                    )
 
             return True
 
@@ -620,3 +625,83 @@ class ExecutionEngine:
 
         except Exception as e:
             logger.error(f"State Mismatch 체크 중 오류: {e}")
+
+    async def _time_exit_daemon(
+        self, symbol: str, entry_side: str, amount: float, wait_minutes: int
+    ):
+        """
+        [V15.0] 스캘핑 특화: 진입 후 일정 시간(기본 10분)이 지나도 TP/SL에 닿아 청산되지 않은 포지션은,
+        평균회귀(Mean Reversion) 모멘텀이 죽은 것으로 간주하여 즉각 시장가로 강제 청산합니다.
+        """
+        logger.info(
+            f"⏳ [{symbol}] Time Exit 데몬 시작. {wait_minutes}분 뒤 체류 상태 확인 예정."
+        )
+        await asyncio.sleep(wait_minutes * 60)
+
+        # 지정된 분 경과 후, 여전히 포지션이 살아있는지 확인
+        if symbol in self.active_positions:
+            logger.warning(
+                f"⏰ [{symbol}] 설정된 시간({wait_minutes}분) 경과! 모멘텀 고갈 판단하여 시장가 강제 탈출 시도."
+            )
+
+            # 반대 방향 주문(매도/매수)
+            exit_side = "sell" if entry_side == "buy" else "buy"
+
+            try:
+                # 1. 찌꺼기 펜딩 주문(조건부 SL 포함) 일괄 취소
+                await self.exchange.cancel_all_orders(symbol)
+
+                algo_orders = await self.exchange.request(
+                    path="openAlgoOrders",
+                    api="fapiPrivate",
+                    method="GET",
+                    params={"symbol": symbol},
+                )
+                algo_items = (
+                    algo_orders.get("orders", algo_orders)
+                    if isinstance(algo_orders, dict)
+                    else algo_orders
+                )
+                for algo in algo_items:
+                    await self.exchange.request(
+                        path="algoOrder",
+                        api="fapiPrivate",
+                        method="DELETE",
+                        params={"symbol": symbol, "algoId": algo.get("algoId")},
+                    )
+
+                # 2. 시장가 시장 던지기
+                if not settings.DRY_RUN:
+                    await self.exchange.create_order(
+                        symbol=symbol,
+                        type="market",
+                        side=exit_side,
+                        amount=amount,
+                        params={"reduceOnly": True},
+                    )
+                else:
+                    logger.info(f"🧪 [DRY RUN] {symbol} Time Exit 가상 시장가 탈출.")
+
+                # DB 기록
+                async with AsyncSessionLocal() as session:
+                    new_trade = Trade(
+                        timestamp=(datetime.utcnow() + timedelta(hours=9)),
+                        action="TIME_EXIT",
+                        symbol=symbol,
+                        price=0.0,
+                        quantity=amount,
+                        reason=f"TIME_EXIT ({wait_minutes}분 모멘텀 이탈) 탈출",
+                        realized_pnl=0.0,  # 정확한 PNL은 거래소 싱크 통해 보정됨
+                        dry_run=settings.DRY_RUN,
+                    )
+                    session.add(new_trade)
+                    await session.commit()
+
+                # 알림 발송
+                await notifier.send_message(
+                    f"🚨 <b>TIME EXIT 발동</b> 🚨\n[{symbol}] {wait_minutes}분 경과로 포지션 스크래치(강제 시장가 청산) 완료."
+                )
+                del self.active_positions[symbol]
+
+            except Exception as e:
+                logger.error(f"[{symbol}] Time Exit 탈출 로직 중 에러: {e}")
