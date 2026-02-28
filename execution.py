@@ -485,10 +485,8 @@ class ExecutionEngine:
         """
         활성 포지션을 주기적으로 점검하여, TP/SL에 의해 포지션이 종료되었는지 확인하고
         종료되었다면 잔여 주문(TP/SL 중 미발동분)을 일괄 취소한 뒤 DB에 매도(청산) 기록과 최신 PnL을 남깁니다.
+        또한 수동으로 진입한 포지션을 추적 망에 자동으로 끌어옵니다.
         """
-        if not self.active_positions:
-            return
-
         symbols_to_remove = []
 
         if not settings.DRY_RUN:
@@ -497,13 +495,48 @@ class ExecutionEngine:
                 position_map = {
                     p["symbol"]: float(p.get("contracts", 0)) for p in positions
                 }
+
+                # 수동(외부) 진입 포지션 색출
+                for p in positions:
+                    sym = p["symbol"]
+                    contracts = float(p.get("contracts", 0))
+                    if contracts > 0 and sym not in self.active_positions:
+                        self.active_positions[sym] = True
+                        entry_price = float(p.get("entryPrice", 0))
+                        side = p.get("side", "long").upper()
+
+                        logger.info(
+                            f"[{sym}] 수동/외부 진입 감지. 봇 메모리에 편입합니다."
+                        )
+                        async with AsyncSessionLocal() as session:
+                            new_trade = Trade(
+                                timestamp=(datetime.utcnow() + timedelta(hours=9)),
+                                action="MANUAL_ENTRY",
+                                symbol=sym,
+                                price=entry_price,
+                                quantity=contracts,
+                                reason=f"외부/수동 진입 감지 ({side})",
+                                realized_pnl=0.0,
+                                dry_run=settings.DRY_RUN,
+                            )
+                            session.add(new_trade)
+                            await session.commit()
+
+                        await notifier.send_message(
+                            f"✋ 수동 포지션 진입 감지\n[{sym}] {side}\n"
+                            f"계약 수: {contracts}\n"
+                            f"진입 단가: {entry_price:.4f}\n"
+                            f"봇 시스템(DB) 추적망에 편입되었습니다."
+                        )
             except Exception as e:
                 logger.error(f"활성 포지션 검증 중 거래소 조회 에러: {e}")
                 return
         else:
             position_map = {}
+            if not self.active_positions:
+                return
 
-        for symbol in self.active_positions.keys():
+        for symbol in list(self.active_positions.keys()):
             if settings.DRY_RUN:
                 logger.info(f"🧪 [DRY RUN] {symbol} 포지션 가상 청산 및 DB 기록 완료")
                 async with AsyncSessionLocal() as session:
@@ -589,11 +622,11 @@ class ExecutionEngine:
                     async with AsyncSessionLocal() as session:
                         new_trade = Trade(
                             timestamp=(datetime.utcnow() + timedelta(hours=9)),
-                            action="SELL",
+                            action="CLOSED",
                             symbol=symbol,
                             price=close_price,
                             quantity=close_qty,
-                            reason=f"TP 또는 SL에 의한 자동 청산 처리 완료",
+                            reason="포지션 종료 감지 (개입/자동)",
                             realized_pnl=realized_pnl,
                             dry_run=settings.DRY_RUN,
                         )
