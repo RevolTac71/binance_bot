@@ -116,7 +116,7 @@ class ExecutionEngine:
                 )
 
                 for algo in algo_items:
-                    symbol = algo.get("symbol")
+                    raw_binance_symbol = algo.get("symbol")
                     algo_id = algo.get("algoId")
 
                     is_reduce_only = algo.get("reduceOnly")
@@ -125,8 +125,16 @@ class ExecutionEngine:
                     else:
                         is_reduce_only = False
 
+                    # Map raw_binance_symbol back to CCXT symbol
+                    ccxt_matched_sym = None
+                    for ap_sym in self.active_positions.keys():
+                        # Market 객체에서 id를 추출하거나 /를 제거해 비교
+                        if ap_sym.replace("/", "").split(":")[0] == raw_binance_symbol:
+                            ccxt_matched_sym = ap_sym
+                            break
+
                     # 포지션이 있으면서 reduce_only 파라미터가 켜진(조건부 청산) 주문은 살림
-                    if symbol in self.active_positions and is_reduce_only:
+                    if ccxt_matched_sym and is_reduce_only:
                         continue
 
                     # 고립된 Algo 주문 정리
@@ -134,11 +142,11 @@ class ExecutionEngine:
                         path="algoOrder",
                         api="fapiPrivate",
                         method="DELETE",
-                        params={"symbol": symbol, "algoId": algo_id},
+                        params={"symbol": raw_binance_symbol, "algoId": algo_id},
                     )
                     canceled_count += 1
                     logger.info(
-                        f"🧹 [Algo 정리 완료] 고립된 조건부(SL 등) 찌꺼기 알고 주문 취소: {symbol} (Algo ID: {algo_id})"
+                        f"🧹 [Algo 정리 완료] 고립된 조건부(SL 등) 찌꺼기 알고 주문 취소: {raw_binance_symbol} (Algo ID: {algo_id})"
                     )
             except Exception as e:
                 logger.error(f"내 계좌 전체 대기 주문(Algo) 조회 중 에러: {e}")
@@ -530,11 +538,12 @@ class ExecutionEngine:
 
                     # 신규 추가: 포지션 청산 시 조건부 Algo 주문(STOP_MARKET) 찌꺼기도 강제 파쇄
                     try:
+                        raw_sym = self.exchange.market(symbol)["id"]
                         algo_orders = await self.exchange.request(
                             path="openAlgoOrders",
                             api="fapiPrivate",
                             method="GET",
-                            params={"symbol": symbol},
+                            params={"symbol": raw_sym},
                         )
                         algo_items = (
                             algo_orders.get("orders", algo_orders)
@@ -546,7 +555,10 @@ class ExecutionEngine:
                                 path="algoOrder",
                                 api="fapiPrivate",
                                 method="DELETE",
-                                params={"symbol": symbol, "algoId": algo.get("algoId")},
+                                params={
+                                    "symbol": raw_sym,
+                                    "algoId": algo.get("algoId"),
+                                },
                             )
                         if algo_items:
                             logger.info(
@@ -651,11 +663,12 @@ class ExecutionEngine:
                 # 1. 찌꺼기 펜딩 주문(조건부 SL 포함) 일괄 취소
                 await self.exchange.cancel_all_orders(symbol)
 
+                raw_sym = self.exchange.market(symbol)["id"]
                 algo_orders = await self.exchange.request(
                     path="openAlgoOrders",
                     api="fapiPrivate",
                     method="GET",
-                    params={"symbol": symbol},
+                    params={"symbol": raw_sym},
                 )
                 algo_items = (
                     algo_orders.get("orders", algo_orders)
@@ -667,7 +680,7 @@ class ExecutionEngine:
                         path="algoOrder",
                         api="fapiPrivate",
                         method="DELETE",
-                        params={"symbol": symbol, "algoId": algo.get("algoId")},
+                        params={"symbol": raw_sym, "algoId": algo.get("algoId")},
                     )
 
                 # 2. 시장가 시장 던지기

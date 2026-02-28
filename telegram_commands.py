@@ -286,18 +286,22 @@ async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     current_pid = os.getpid()
     killed_count = 0
-    
-    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+
+    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
         try:
-            cmdline = proc.info.get('cmdline')
-            if cmdline and len(cmdline) > 0 and 'python' in proc.info.get('name', '').lower():
+            cmdline = proc.info.get("cmdline")
+            if (
+                cmdline
+                and len(cmdline) > 0
+                and "python" in proc.info.get("name", "").lower()
+            ):
                 cmd_str = " ".join(cmdline)
-                if 'main.py' in cmd_str and proc.info['pid'] != current_pid:
+                if "main.py" in cmd_str and proc.info["pid"] != current_pid:
                     proc.kill()
                     killed_count += 1
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             pass
-            
+
     if killed_count > 0:
         logger.info(f"동일한 main.py 프로세스 {killed_count}개를 강제 종료했습니다.")
 
@@ -324,12 +328,13 @@ async def panic_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1. 모든 대기주문 (일반 + Algo) 삭제
     for sym in target_symbols:
         try:
+            raw_sym = execution.exchange.market(sym)["id"]
             await execution.exchange.cancel_all_orders(sym)
             algo_orders = await execution.exchange.request(
                 path="openAlgoOrders",
                 api="fapiPrivate",
                 method="GET",
-                params={"symbol": sym},
+                params={"symbol": raw_sym},
             )
             algo_items = (
                 algo_orders.get("orders", algo_orders)
@@ -341,7 +346,7 @@ async def panic_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     path="algoOrder",
                     api="fapiPrivate",
                     method="DELETE",
-                    params={"symbol": sym, "algoId": algo.get("algoId")},
+                    params={"symbol": raw_sym, "algoId": algo.get("algoId")},
                 )
         except Exception as e:
             logger.error(f"Panic Cancel Error [{sym}]: {e}")
