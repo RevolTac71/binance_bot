@@ -320,12 +320,28 @@ async def main():
             await app.updater.start_polling()
 
         # [V15.2] 메인 웹소켓 루프와 스테이트 머신 병렬 가동
-        task_state = asyncio.create_task(state_machine_loop(execution))
+        # return_exceptions=True: 하나의 태스크 예외가 전체 봇을 종료하지 않도록 보호
+        async def guarded(coro, name):
+            try:
+                await coro
+            except Exception as e:
+                logger.error(f"[{name}] 태스크 비정상 종료: {e}")
+                # 크리티컬 태스크 종료 시 전체 봇을 비정상 종료코드로 내려서 watchdog이 재시작하도록 유도
+                raise
+
+        task_state = asyncio.create_task(
+            guarded(state_machine_loop(execution), "StateMachine")
+        )
         task_trade = asyncio.create_task(
-            websocket_loop(pipeline, strategy, risk, execution)
+            guarded(
+                websocket_loop(pipeline, strategy, risk, execution), "WebSocketLoop"
+            )
         )
 
-        await asyncio.gather(task_state, task_trade)
+        results = await asyncio.gather(task_state, task_trade, return_exceptions=True)
+        for r in results:
+            if isinstance(r, Exception):
+                logger.critical(f"[Main] 핵심 태스크 예외로 인해 봇이 종료됩니다: {r}")
 
     except KeyboardInterrupt:
         logger.warning("CTRL+C(키보드 인터럽트)로 시스템이 정지되었습니다.")
