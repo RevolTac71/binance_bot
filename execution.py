@@ -285,24 +285,26 @@ class ExecutionEngine:
                 "sl_price": sl_price,
             }
 
+            # --- [HOTFIX] 진입 직후 봇 추적망에 즉각 편입하여 수동진입 감지(오작동) 방지 ---
+            self.active_positions[symbol] = True
+
+            # V15: 설정된 시간이 경과하면 제자리에 돌려놓지 않은 포지션을 논리적 시장가 매각 (스캘핑 전용)
+            if getattr(settings, "TIME_EXIT_MINUTES", 0) > 0:
+                asyncio.create_task(
+                    self._time_exit_daemon(
+                        symbol, side, amount, settings.TIME_EXIT_MINUTES
+                    )
+                )
+
             # 동기적(await)으로 TP/SL 즉시 생성 (대기열 통하지 않음)
             success = await self.place_tp_sl_orders(symbol, entry_info)
-            if success:
-                self.active_positions[symbol] = True
-
-                # V15: 설정된 시간이 경과하면 제자리에 돌려놓지 않은 포지션을 논리적 시장가 매각 (스캘핑 전용)
-                if getattr(settings, "TIME_EXIT_MINUTES", 0) > 0:
-                    asyncio.create_task(
-                        self._time_exit_daemon(
-                            symbol, side, amount, settings.TIME_EXIT_MINUTES
-                        )
-                    )
 
             return True
 
         except Exception as e:
-            logger.error(f"[{symbol}] 시장가 진입 및 TP/SL 세팅 중 예외 발생: {e}")
-            return False
+            logger.error(f"[{symbol}] 시장가 진입 로직 처리 중 예외 발생: {e}")
+            # TP/SL 생성 도중 에러가 나더라도 포지션은 체결되어 있으므로 봇 루프에서 관리되도록 True 반환
+            return True
 
     async def cancel_pending_order(
         self, symbol: str, reason: str = "취소 요청"
@@ -407,16 +409,56 @@ class ExecutionEngine:
                 self.active_positions[symbol] = True
                 return True
 
-            # 1. Take Profit (LIMIT 방식, reduceOnly)
-            # 바이낸스 선물 TAKE_PROFIT_LIMIT 또는 단순 LIMIT + reduceOnly 사용
-            await self.exchange.create_order(
-                symbol=symbol,
-                type="limit",
-                side=exit_side,
-                amount=amount,
-                price=tp_price,
-                params={"reduceOnly": True},
-            )
+            # 1. Take Profit (LIMIT 방식)
+            # -4164(Order's notional) 혹은 Margin insufficient 에러 거절 방지를 위해 예외 감지 기능 탑재
+            try:
+                await self.exchange.create_order(
+                    symbol=symbol,
+                    type="limit",
+                    side=exit_side,
+                    amount=amount,
+                    price=tp_price,
+                    params={"reduceOnly": True},
+                )
+            except Exception as tp_err:
+                logger.warning(
+                    f"[{symbol}] 지정가(Limit) TP 생성 거절됨. 시장가 우회(TAKE_PROFIT_MARKET)로 재시도합니다. 사유: {tp_err}"
+                )
+                try:
+                    await self.exchange.create_order(
+                        symbol=symbol,
+                        type="take_profit_market",
+                        side=exit_side,
+                        amount=amount,
+                        params={"stopPrice": tp_price, "reduceOnly": True},
+                    )
+                except Exception as tp_algo_err:
+                    err_msg = str(tp_algo_err)
+                    if "-4120" in err_msg or "Algo Order API" in err_msg:
+                        formatted_amount_tp = self.exchange.amount_to_precision(
+                            symbol, amount
+                        )
+                        formatted_price_tp = self.exchange.price_to_precision(
+                            symbol, tp_price
+                        )
+                        raw_sym = self.exchange.market(symbol)["id"]
+                        req_tp = {
+                            "symbol": raw_sym,
+                            "side": exit_side.upper(),
+                            "type": "TAKE_PROFIT_MARKET",
+                            "quantity": formatted_amount_tp,
+                            "stopPrice": formatted_price_tp,
+                            "reduceOnly": "true",
+                            "algoType": "CONDITIONAL",
+                        }
+                        await self.exchange.request(
+                            path="algoOrder",
+                            api="fapiPrivate",
+                            method="POST",
+                            params=req_tp,
+                        )
+                    else:
+                        raise tp_algo_err
 
             # 2. Stop Loss (STOP_MARKET 방식, reduceOnly)
             # 바이낸스 퓨처스 API 업데이트로 인해 일반 엔드포인트에서 예외(-4120)가 발생할 수 있습니다.
