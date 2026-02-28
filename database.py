@@ -13,15 +13,16 @@ class Trade(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     timestamp = Column(DateTime)
-    action = Column(String(10))  # 'BUY' or 'SELL', 'STOPLOSS' 등의 구분자
-    symbol = Column(String(20))  # 예: 'BTCUSDT'
+    action = Column(String(10))  # 'BUY' or 'SELL', 'MANUAL', 'CLOSED' 등의 구분자
+    symbol = Column(String(20))  # 예: 'BTC/USDT:USDT'
     price = Column(Float)
     quantity = Column(Float)
-    realized_pnl = Column(
-        Float, nullable=True
-    )  # 추가된 필드: 실현손익 (매도 시에만 기록)
-    reason = Column(Text)  # 추가적인 정보 (예: 'ATR Stop', 'Trend Signal 진입' 등)
+    realized_pnl = Column(Float, nullable=True)  # 실현손익 (청산 시에만 기록)
+    reason = Column(Text)  # 진입/청산 사유
     dry_run = Column(Boolean, default=True)  # 테스트 거래 여부 구분자
+    # 거래 당시의 전략 파라미터 스냅샷 (JSON 문자열)
+    # 예: {"k_value": 2.0, "vol_mult": 1.5, "atr_ratio": 1.2, "leverage": 10, "timeframe": "3m", ...}
+    params = Column(Text, nullable=True)
 
 
 class BalanceHistory(Base):

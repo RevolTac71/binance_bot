@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import datetime, timezone, timedelta
 from config import settings, logger
 from database import Trade, AsyncSessionLocal
@@ -23,10 +24,29 @@ class ExecutionEngine:
         #     "amount": 0.5,
         #     "status": "open" # 'open', 'closed', 'canceled'
         # }}
-        self.pending_entries = {}
+        self.pending_entries: dict = {}
 
         # 활성 상태인 포지션 메모리 (TP/SL 등 스레드 충돌 확인용)
-        self.active_positions = {}
+        self.active_positions: dict = {}
+
+    def _snapshot_params(self) -> str:
+        """
+        거래 시점의 전략 파라미터를 JSON 문자열로 직렬화하여 반환합니다.
+        나중에 백테스트 / ML 모델링 시 각 거래의 환경 변수를 재현하는 데 활용됩니다.
+        """
+        return json.dumps(
+            {
+                "k_value": getattr(settings, "K_VALUE", None),
+                "vol_mult": getattr(settings, "VOL_MULT", None),
+                "atr_ratio": getattr(settings, "ATR_RATIO_MULT", None),
+                "atr_long_len": getattr(settings, "ATR_LONG_LEN", None),
+                "leverage": getattr(settings, "LEVERAGE", None),
+                "risk_pct": getattr(settings, "RISK_PERCENTAGE", None),
+                "timeframe": getattr(settings, "TIMEFRAME", None),
+                "time_exit_min": getattr(settings, "TIME_EXIT_MINUTES", None),
+            },
+            ensure_ascii=False,
+        )
 
     async def sync_state_from_exchange(self):
         """
@@ -398,8 +418,9 @@ class ExecutionEngine:
                     symbol=symbol,
                     price=entry_price,
                     quantity=amount,
-                    reason=f"{dr_prefix}VWAP V11 지정가 체결 후 TP/SL 세팅 완료",
-                    dry_run=settings.USE_TESTNET,
+                    reason=f"{dr_prefix}V15 시장가 진입 완료",
+                    dry_run=settings.DRY_RUN,
+                    params=self._snapshot_params(),
                 )
                 session.add(new_trade)
                 await session.commit()
@@ -592,6 +613,7 @@ class ExecutionEngine:
                         reason="[DRY_RUN] 가상 매도 청산",
                         realized_pnl=0.0,
                         dry_run=settings.DRY_RUN,
+                        params=self._snapshot_params(),
                     )
                     session.add(new_trade)
                     await session.commit()
@@ -672,6 +694,7 @@ class ExecutionEngine:
                             reason="포지션 종료 감지 (개입/자동)",
                             realized_pnl=realized_pnl,
                             dry_run=settings.DRY_RUN,
+                            params=self._snapshot_params(),
                         )
                         session.add(new_trade)
                         await session.commit()
