@@ -512,7 +512,7 @@ class ExecutionEngine:
                         async with AsyncSessionLocal() as session:
                             new_trade = Trade(
                                 timestamp=(datetime.utcnow() + timedelta(hours=9)),
-                                action="MANUAL_ENTRY",
+                                action="MANUAL",
                                 symbol=sym,
                                 price=entry_price,
                                 quantity=contracts,
