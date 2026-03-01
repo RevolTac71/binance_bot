@@ -443,6 +443,10 @@ class StrategyEngine:
 
         bars_since_reset = len(df[df.index.date == today_date])
         if bars_since_reset < self.session_filter_bars:
+            logger.info(
+                f"[{symbol}] ⏳ [STEP1 Session Filter] VWAP 리셋 후 "
+                f"{bars_since_reset}/{self.session_filter_bars}봉 — 안정화 대기 중"
+            )
             return {
                 "signal": None,
                 "reason": (
@@ -454,6 +458,10 @@ class StrategyEngine:
         # ── STEP 2: 동적 ATR 변동성 필터 ─────────────────────────────────
         atr_ratio_mult = getattr(settings, "ATR_RATIO_MULT", 1.2)
         if atr_14 <= atr_long * atr_ratio_mult:
+            logger.info(
+                f"[{symbol}] 📉 [STEP2 Volatility Filter] 변동성 부족 — "
+                f"ATR14={atr_14:.4f} ≤ ATR{atr_long_len}({atr_long:.4f}) × {atr_ratio_mult}"
+            )
             return {
                 "signal": None,
                 "reason": (
@@ -469,6 +477,17 @@ class StrategyEngine:
         mtf = self.get_mtf_regime(df_15m)
         regime = mtf["regime"]  # "TREND" | "RANGE"
         momentum = mtf["momentum"]  # "BULLISH" | "BEARISH" | "NEUTRAL"
+
+        # HTF/MTF 상태를 캔들마다 INFO로 출력 (봇 작동 여부 확인용)
+        logger.info(
+            f"[{symbol}] 📊 [MTF 상태] "
+            f"1H Bias={htf_bias} | "
+            f"Regime={regime} (ADX={mtf['adx']}) | "
+            f"Momentum={momentum} | "
+            f"RSI={rsi_val:.1f} | Vol={volume / vol_sma_20:.1f}x (기준={vol_mult:.1f}x)"
+        ) if not (
+            pd.isna(rsi_val) if hasattr(rsi_val, "__class__") else False
+        ) else None
 
         # ── STEP 5: Volume Spike 판별 ─────────────────────────────────────
         vol_mult = getattr(settings, "VOL_MULT", 1.5)  # 일반 돌파: 1.5x~2.0x
@@ -612,6 +631,48 @@ class StrategyEngine:
                 f"진입 조건 불충족 | HTF={htf_bias} | Regime={regime} | "
                 f"Momentum={momentum} | RSI={rsi_val:.1f}"
             )
+
+        # [V16 진단 로그] 진입 실패 시 상세 원인 출력
+        if signal_type is None:
+            vol_ratio = volume / vol_sma_20
+            long_htf_ok_check = (
+                (htf_bias == "BULL")
+                if regime == "RANGE"
+                else ((htf_bias == "BULL") and (momentum == "BULLISH"))
+            )
+            short_htf_ok_check = (
+                (htf_bias == "BEAR")
+                if regime == "RANGE"
+                else ((htf_bias == "BEAR") and (momentum == "BEARISH"))
+            )
+
+            if htf_bias == "NEUTRAL":
+                logger.info(
+                    f"[{symbol}] 🚫 [STEP3 HTF Block] 1H EMA 과도기(NEUTRAL) — "
+                    f"방향 미확정으로 진입 차단"
+                )
+            elif not (long_htf_ok_check or short_htf_ok_check):
+                logger.info(
+                    f"[{symbol}] 🚫 [STEP3 HTF Block] 방향 불일치 — "
+                    f"HTF={htf_bias}, Regime={regime}, Momentum={momentum}"
+                )
+            elif not is_vol_spike and not is_extreme_vol:
+                logger.info(
+                    f"[{symbol}] 📉 [STEP5 Volume] 거래량 부족 — "
+                    f"{vol_ratio:.2f}x (진입 기준 {vol_mult:.1f}x 미달)"
+                )
+            elif not (long_rejection or short_rejection):
+                logger.info(
+                    f"[{symbol}] ↩️ [STEP6 PriceAction] 밴드 터치/리젝션 없음 — "
+                    f"Close={market_price:.4f}, Lower={lower_band:.4f}, Upper={upper_band:.4f}"
+                )
+            elif rsi_val > self.rsi_os and rsi_val < self.rsi_ob:
+                logger.info(
+                    f"[{symbol}] 〽️ [STEP8 RSI] RSI 중립 구간 — "
+                    f"RSI={rsi_val:.1f} (과매도≤{self.rsi_os} / 과매수≥{self.rsi_ob} 아님)"
+                )
+            else:
+                logger.info(f"[{symbol}] ✖ [STEP8] 복합 조건 미충족 — {reason}")
 
         return {
             "signal": signal_type,
