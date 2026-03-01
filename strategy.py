@@ -471,9 +471,12 @@ class StrategyEngine:
         momentum = mtf["momentum"]  # "BULLISH" | "BEARISH" | "NEUTRAL"
 
         # ── STEP 5: Volume Spike 판별 ─────────────────────────────────────
-        vol_mult = getattr(settings, "VOL_MULT", 1.5)
+        vol_mult = getattr(settings, "VOL_MULT", 1.5)  # 일반 돌파: 1.5x~2.0x
+        extreme_mult = getattr(
+            settings, "EXTREME_VOL_MULT", 2.5
+        )  # 극단 소진: 2.5x~3.0x
         is_vol_spike = volume > (vol_sma_20 * vol_mult)
-        is_extreme_vol = volume > (vol_sma_20 * 2.5)
+        is_extreme_vol = volume > (vol_sma_20 * extreme_mult)
 
         # ── STEP 6: Price Action Rejection / Extreme Outlier ──────────────
         long_rejection = (low_price <= lower_band) and (market_price > lower_band)
@@ -496,9 +499,10 @@ class StrategyEngine:
 
         if regime == "RANGE":
             # 횡보장: 평균 회귀(역추세) 로직 → RSI 과매도/과매수 + VWAP 밴드 반전
-            # HTF 방향이 BEAR가 아닐 때만 롱, BULL이 아닐 때만 숏 진입 허용
-            long_htf_ok = htf_bias in ("BULL", "NEUTRAL")
-            short_htf_ok = htf_bias in ("BEAR", "NEUTRAL")
+            # ★ 엄격한 HTF 방향 필터: BULL이면 롱만 허용 / BEAR이면 숏만 허용
+            #   → NEUTRAL(EMA가 근접한 과도기)에서는 진입하지 않음
+            long_htf_ok = htf_bias == "BULL"
+            short_htf_ok = htf_bias == "BEAR"
 
             if (
                 long_htf_ok

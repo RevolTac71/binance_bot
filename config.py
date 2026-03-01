@@ -67,7 +67,12 @@ class Config:
     )  # 하위 호환 유지 (Chandelier Exit 전환 후 비활성 예정)
 
     # V15.2 New Parameters
-    VOL_MULT = float(os.getenv("VOL_MULT", "1.5"))
+    VOL_MULT = float(
+        os.getenv("VOL_MULT", "1.5")
+    )  # 일반 거래량 스파이크 배수 (1.5x~2.0x)
+    EXTREME_VOL_MULT = float(
+        os.getenv("EXTREME_VOL_MULT", "2.5")
+    )  # 극단 소진 진입 배수 (2.5x~3.0x)
     ATR_RATIO_MULT = float(os.getenv("ATR_RATIO_MULT", "1.2"))
     ATR_LONG_LEN = int(os.getenv("ATR_LONG_LEN", "200"))
 
@@ -86,7 +91,7 @@ class Config:
         "HTF_TIMEFRAME_15M", "15m"
     )  # 15분봉 (추세 강도·모멘텀)
     # ADX 기준값: 이 이상이면 추세장(모멘텀 추종), 미만이면 횡보장(역추세/평균회귀)
-    ADX_THRESHOLD = float(os.getenv("ADX_THRESHOLD", "25.0"))
+    ADX_THRESHOLD = float(os.getenv("ADX_THRESHOLD", "20.0"))
 
     # ── V16 샹들리에 청산(Chandelier Exit / Trailing Stop) 파라미터 ────────
     # 진입 후 최고점(Long) 또는 최저점(Short)에서 ATR × 배수 만큼 후퇴 시 손절
