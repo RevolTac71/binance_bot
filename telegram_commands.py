@@ -22,20 +22,18 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
     msg = (
-        "🤖 V11.2 자동매매 봇 컨트롤 패널\n\n"
-        "💡 가능한 명령어:\n"
-        "/help - 이 도움말 메뉴 표시\n"
-        "/status - 봇 상태 및 수익 요약\n"
-        "/pause - 매매 신규 진입 일시정지\n"
-        "/resume - 매매 재개\n"
-        "/leverage [N] - 레버리지 N배로 변경 (영구)\n"
-        "/k_value [숫자] - K-Value 변경 (예: 0.5)\n"
-        "/risk [숫자] - 리스크 비율 변경 (예: 0.1)\n"
-        "/time_exit [숫자] - 강제 청산 시간(분) 변경 (0은 비활성)\n"
-        "/timeframe [타임프레임] - 캔들 차트 기준 시간 변경 (예: 1m, 3m, 5m)\n"
-        "/mode [dry_run|real] - 매매 모드 변경 (영구)\n"
-        "/panic - 비상! 모든 주문 취소 및 시장가 전량 청산 후 정지\n"
-        "/restart - 봇 재부팅 (nohup 효과)"
+        "🤖 V15.2 자동매매 봇 컨트롤 패널\n\n"
+        "📌 기본 명령어\n"
+        "/help — 전체 명령어 도움말\n"
+        "/status — 봇 상태 및 포지션 요약\n"
+        "/pause / /resume — 신규 진입 일시정지 / 재개\n"
+        "/panic — 비상! 전량 시장가 청산 후 정지\n"
+        "/restart — 봇 재부팅\n\n"
+        "⚙️ 파라미터 변경 (재시작 불필요)\n"
+        "/setparam [키] [값] — 파라미터 한 번에 변경\n"
+        "예: /setparam k 2.5\n"
+        "예: /setparam sl 3.0\n"
+        "자세한 파라미터 목록은 /help 참조"
     )
     await update.message.reply_text(msg)
 
@@ -44,18 +42,28 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
     msg = (
-        "📖 [자동매매 봇 명령어 도움말]\n\n"
-        "🔹 /help : 현재 보여지는 명령어 목록과 설명을 확인합니다.\n"
-        "🔹 /status : 봇의 현재 상태(모드, 가동 여부, 수익 요약, 활성 포지션)를 요약해서 보여줍니다.\n"
-        "🔹 /pause : 새로운 매매 진입을 일시정지합니다 (기존 포지션의 수익실현/손절 감시는 유지됨).\n"
-        "🔹 /resume : 일시정지된 봇의 매매 진입을 다시 재개합니다.\n"
-        "🔹 /leverage [숫자] : 거래 레버리지를 주어진 숫자로 영구 변경합니다 (예: /leverage 5).\n"
-        "🔹 /k_value [숫자] : 전략 진입 시 참조되는 K-Value 상수값을 변경합니다 (예: /k_value 0.5).\n"
-        "🔹 /risk [숫자] : 계좌 잔고 대비 포지션 진입 비율을 변경합니다 (예: /risk 0.1).\n"
-        "🔹 /time_exit [숫자] : 포지션 진입 후 자리를 이탈한 경우 강제 탈출할 시간을 분 단위로 설정합니다. (예: /time_exit 10. 0으로 설정 시 꺼짐)\n"
-        "🔹 /mode [dry_run|real] : 모의투자(dry_run) 또는 실전매매(real) 모드로 영구 전환합니다.\n"
-        "🔹 /panic : [위급상황] 모든 미체결 주문을 취소하고, 보유 포지션을 전부 시장가로 전량 청산한 후 봇을 일시정지(pause) 상태로 만듭니다.\n"
-        "🔹 /restart : 봇 애플리케이션 프로세스를 강제 재부팅합니다."
+        "📖 [V15.2 자동매매 봇 전체 명령어]\n\n"
+        "── 봇 제어 ──\n"
+        "/status — 봇 상태·포지션·잔고 요약\n"
+        "/pause — 신규 진입 일시정지 (기존 포지션 감시 유지)\n"
+        "/resume — 일시정지 해제\n"
+        "/panic — 비상! 전량 시장가 청산 후 정지\n"
+        "/restart — 봇 프로세스 강제 재부팅\n\n"
+        "── 파라미터 변경 (/setparam 키 값) ──\n"
+        "/setparam k [숫자] — K-Value (VWAP 밴드 너비, 기본 2.0)\n"
+        "/setparam risk [숫자] — 1회 증거금 비율 (예: 0.1 = 10%)\n"
+        "/setparam leverage [정수] — 레버리지 배수\n"
+        "/setparam timeframe [값] — 캔들봉 (1m/3m/5m/15m, 변경 후 /restart!)\n"
+        "/setparam time_exit [분] — 최대 포지션 보유 시간 (0=비활성)\n"
+        "/setparam vol_mult [숫자] — 거래량 스파이크 배수 (기본 1.5)\n"
+        "/setparam atr_ratio [숫자] — 단/장기 ATR 비율 필터 (기본 1.2)\n"
+        "/setparam sl [숫자] — SL 배율 × ATR (기본 3.0, 클수록 넓은 손절)\n"
+        "/setparam tp [숫자] — TP 배율 × ATR (기본 6.0, R:R = tp/sl)\n"
+        "/setparam cooldown [분] — 손실 후 동일종목 쿨다운 (기본 15분)\n"
+        "/setparam mode [dry|real] — 모의/실전 모드 전환\n\n"
+        "── 레거시 명령어 (동일 기능) ──\n"
+        "/leverage [N] / /k_value [N] / /risk [N]\n"
+        "/timeframe [N] / /time_exit [N] / /mode [N]\n"
     )
     await update.message.reply_text(msg)
 
@@ -372,6 +380,77 @@ async def panic_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /setparam [key] [value] — 전략 파라미터를 키윗-밸류 방식으로 일괄 변경합니다.
+    재시작 없이 즉시 적용되며 .env에 영구 저장됩니다.
+    """
+    if not await check_admin(update):
+        return
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text(
+            "💡 사용법: /setparam [키] [값]\n"
+            "예) /setparam k 2.5\n"
+            "예) /setparam sl 3.0\n"
+            "예) /setparam cooldown 15\n"
+            "\n전체 파라미터 목록은 /help 참조"
+        )
+        return
+
+    key = args[0].lower()
+    raw_val = args[1]
+
+    try:
+        # 키 매핑 테이블
+        mapping = {
+            "k": ("K_VALUE", float, "K_VALUE"),
+            "k_value": ("K_VALUE", float, "K_VALUE"),
+            "risk": ("RISK_PERCENTAGE", float, "RISK_PERCENTAGE"),
+            "leverage": ("LEVERAGE", int, "LEVERAGE"),
+            "timeframe": ("TIMEFRAME", str, "TIMEFRAME"),
+            "time_exit": ("TIME_EXIT_MINUTES", int, "TIME_EXIT_MINUTES"),
+            "vol_mult": ("VOL_MULT", float, "VOL_MULT"),
+            "atr_ratio": ("ATR_RATIO_MULT", float, "ATR_RATIO_MULT"),
+            "sl": ("SL_MULT", float, "SL_MULT"),
+            "sl_mult": ("SL_MULT", float, "SL_MULT"),
+            "tp": ("TP_MULT", float, "TP_MULT"),
+            "tp_mult": ("TP_MULT", float, "TP_MULT"),
+            "cooldown": ("LOSS_COOLDOWN_MINUTES", int, "LOSS_COOLDOWN_MINUTES"),
+            "mode": ("DRY_RUN", str, "DRY_RUN"),  # dry 또는 real
+        }
+
+        if key not in mapping:
+            await update.message.reply_text(
+                f"❌ 알 수 없는 파라미터: '{key}'\n/help로 파라미터 목록을 확인하세요."
+            )
+            return
+
+        attr_name, cast_fn, env_key = mapping[key]
+
+        # mode 키는 특별 처리
+        if key == "mode":
+            is_dry = raw_val.lower() in ("dry", "dry_run", "true")
+            settings.DRY_RUN = is_dry
+            update_env_variable("DRY_RUN", str(is_dry).capitalize())
+            label = "모의투자(DRY_RUN)" if is_dry else "실전매매(REAL)"
+            await update.message.reply_text(f"✅ 매매 모드 → {label} 전환 완료")
+            return
+
+        # 일반 키 처리
+        new_val = cast_fn(raw_val)
+        setattr(settings, attr_name, new_val)
+        update_env_variable(env_key, str(new_val))
+
+        await update.message.reply_text(
+            f"✅ [{key.upper()}] → {new_val} 변경 완료 (영구 저장)\n"
+            + ("⚠️ timeframe 변경 시 /restart 첫부탁!" if key == "timeframe" else "")
+        )
+
+    except ValueError:
+        await update.message.reply_text(f"❌ [{key}]에 올바른 형식의 값을 입력하세요.")
+
+
 def setup_telegram_bot(execution_engine):
     """
     python-telegram-bot Application 인스턴스를 빌드하고 핸들러를 붙여 반환합니다.
@@ -401,6 +480,7 @@ def setup_telegram_bot(execution_engine):
     application.add_handler(CommandHandler("mode", mode_cmd))
     application.add_handler(CommandHandler("restart", restart_cmd))
     application.add_handler(CommandHandler("panic", panic_cmd))
+    application.add_handler(CommandHandler("setparam", setparam_cmd))
 
     logger.info("텔레그램 Interactive 커맨더(Poller) 세팅이 완료되었습니다.")
     return application
