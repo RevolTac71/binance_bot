@@ -68,6 +68,14 @@ class Config:
     ATR_RATIO_MULT = float(os.getenv("ATR_RATIO_MULT", "1.2"))
     ATR_LONG_LEN = int(os.getenv("ATR_LONG_LEN", "200"))
 
+    # SL/TP 배율 (ATR 대비) - 기존 1.5/2.5에서 확장
+    # SL을 넓혀 일시적 되돌림에 손절되지 않도록 함
+    SL_MULT = float(os.getenv("SL_MULT", "3.0"))  # ATR × 3.0 = 손절 거리
+    TP_MULT = float(os.getenv("TP_MULT", "6.0"))  # ATR × 6.0 = 익절 거리 (R:R = 2:1)
+
+    # 동일 종목 연속 손실 시 쿨다운 (분)
+    LOSS_COOLDOWN_MINUTES = int(os.getenv("LOSS_COOLDOWN_MINUTES", "15"))
+
     # Dry Run Mode (True면 실제 매매하지 않고 DB 기록만 함)
     DRY_RUN = os.getenv("DRY_RUN", "True").lower() == "true"
 

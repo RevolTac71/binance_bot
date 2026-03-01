@@ -35,9 +35,11 @@ class RiskManager:
         # (이전의 Kelly-Risk Parity 방식이 아닌 단순 증거금 분할 투입 방식)
         margin_invest = capital * self.risk_pct
 
-        # 2. 거래당 스탑폭/익절폭 금액 산출 (진입 단가 대비 달러가치)
-        sl_distance = atr_val * 1.5
-        tp_distance = atr_val * 2.5
+        # 2. 거래당 스탑폭/익절폭 금액 산출 (settings에서 읽어 유연하게 조정 가능)
+        sl_mult = getattr(settings, "SL_MULT", 3.0)
+        tp_mult = getattr(settings, "TP_MULT", 6.0)
+        sl_distance = atr_val * sl_mult
+        tp_distance = atr_val * tp_mult
 
         # 3. 최대 레버리지를 곱한 명목 진입 금액 (Notional Value)
         notional_value = margin_invest * self.leverage

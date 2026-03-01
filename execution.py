@@ -26,8 +26,12 @@ class ExecutionEngine:
         # }}
         self.pending_entries: dict = {}
 
-        # 활성 상태인 포지션 메모리 (TP/SL 등 스레드 충돌 확인용)
+        # 활성 상태인 포지션 메모리 (중복 진입 차단용)
         self.active_positions: dict = {}
+
+        # 종목별 손실 후 쿨다운 만료 시각 저장 (연속 손실 방지)
+        # { "SOL/USDT:USDT": datetime.utcnow() + cooldown_minutes }
+        self.loss_cooldown: dict = {}
 
     def _snapshot_params(self) -> str:
         """
@@ -44,6 +48,8 @@ class ExecutionEngine:
                 "risk_pct": getattr(settings, "RISK_PERCENTAGE", None),
                 "timeframe": getattr(settings, "TIMEFRAME", None),
                 "time_exit_min": getattr(settings, "TIME_EXIT_MINUTES", None),
+                "sl_mult": getattr(settings, "SL_MULT", None),
+                "tp_mult": getattr(settings, "TP_MULT", None),
             },
             ensure_ascii=False,
         )
@@ -225,6 +231,15 @@ class ExecutionEngine:
         # 포지션이 이미 존재하면 추가 진입 억제
         if symbol in self.active_positions:
             logger.info(f"[{symbol}] 이미 활성 포지션이 존재합니다. 진입 생략.")
+            return False
+
+        # 연속 손실 쿨다운 체크
+        from datetime import datetime as _dt
+
+        cooldown_until = self.loss_cooldown.get(symbol)
+        if cooldown_until and _dt.utcnow() < cooldown_until:
+            remaining = int((cooldown_until - _dt.utcnow()).total_seconds() / 60)
+            logger.info(f"[{symbol}] 손실 쿨다운 중. {remaining}분 후 진입 가능. 스킵.")
             return False
 
         try:
@@ -706,6 +721,17 @@ class ExecutionEngine:
                         )
 
                     symbols_to_remove.append(symbol)
+
+                    # 손실이면 해당 종목 쿨다운 설정 (연속 SL 방지)
+                    if realized_pnl < 0:
+                        cooldown_min = getattr(settings, "LOSS_COOLDOWN_MINUTES", 15)
+                        self.loss_cooldown[symbol] = datetime.utcnow() + timedelta(
+                            minutes=cooldown_min
+                        )
+                        logger.info(
+                            f"[{symbol}] 손실 청산 → {cooldown_min}분 쿨다운 적용. "
+                            f"PnL: {realized_pnl:.4f} USDT"
+                        )
 
                 except Exception as e:
                     logger.error(
