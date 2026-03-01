@@ -61,7 +61,9 @@ class Config:
     K_VALUE = float(os.getenv("K_VALUE", "2.0"))
     RISK_PERCENTAGE = float(os.getenv("RISK_PERCENTAGE", "0.005"))
     LEVERAGE = int(os.getenv("LEVERAGE", "5"))
-    TIME_EXIT_MINUTES = int(os.getenv("TIME_EXIT_MINUTES", "90"))  # 3분봉 30봉 = 90분
+    TIME_EXIT_MINUTES = int(
+        os.getenv("TIME_EXIT_MINUTES", "90")
+    )  # 하위 호환 유지 (Chandelier Exit 전환 후 비활성 예정)
 
     # V15.2 New Parameters
     VOL_MULT = float(os.getenv("VOL_MULT", "1.5"))
@@ -75,6 +77,24 @@ class Config:
 
     # 동일 종목 연속 손실 시 쿨다운 (분)
     LOSS_COOLDOWN_MINUTES = int(os.getenv("LOSS_COOLDOWN_MINUTES", "15"))
+
+    # ── V16 MTF 필터 파라미터 ─────────────────────────────────────────────
+    # 상위 타임프레임 설정 (CCXT 포맷)
+    HTF_TIMEFRAME_1H = os.getenv("HTF_TIMEFRAME_1H", "1h")  # 1시간봉 (거시 추세)
+    HTF_TIMEFRAME_15M = os.getenv(
+        "HTF_TIMEFRAME_15M", "15m"
+    )  # 15분봉 (추세 강도·모멘텀)
+    # ADX 기준값: 이 이상이면 추세장(모멘텀 추종), 미만이면 횡보장(역추세/평균회귀)
+    ADX_THRESHOLD = float(os.getenv("ADX_THRESHOLD", "25.0"))
+
+    # ── V16 샹들리에 청산(Chandelier Exit / Trailing Stop) 파라미터 ────────
+    # 진입 후 최고점(Long) 또는 최저점(Short)에서 ATR × 배수 만큼 후퇴 시 손절
+    CHANDELIER_MULT = float(os.getenv("CHANDELIER_MULT", "2.0"))
+    CHANDELIER_ATR_LEN = int(os.getenv("CHANDELIER_ATR_LEN", "14"))  # ATR 산출 기간
+
+    # ── V16 포트폴리오 동시 진입 제한 ────────────────────────────────────
+    # 동일 방향(롱 또는 숏) 포지션이 이 개수 이상이면 추가 진입 차단
+    MAX_CONCURRENT_SAME_DIR = int(os.getenv("MAX_CONCURRENT_SAME_DIR", "2"))
 
     # Dry Run Mode (True면 실제 매매하지 않고 DB 기록만 함)
     DRY_RUN = os.getenv("DRY_RUN", "True").lower() == "true"

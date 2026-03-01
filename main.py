@@ -7,7 +7,7 @@ import pandas as pd
 from config import logger, settings
 from database import check_db_connection, Trade, AsyncSessionLocal
 from data_pipeline import DataPipeline
-from strategy import StrategyEngine
+from strategy import StrategyEngine, PortfolioState
 from risk_management import RiskManager
 from execution import ExecutionEngine
 from notification import notifier
@@ -56,37 +56,81 @@ def is_funding_fee_cutoff() -> bool:
     return False
 
 
-# In-memory DataFrame Storage for 15 symbols
-df_map = {}
+# ── In-memory DataFrame Storage ─────────────────────────────────────────────
+# 3분봉 데이터 (15종목 × 1500개)
+df_map: dict[str, pd.DataFrame] = {}
+
+# [V16 MTF] 상위 타임프레임 데이터 (종목별 1H / 15m)
+htf_df_1h: dict[str, pd.DataFrame] = {}
+htf_df_15m: dict[str, pd.DataFrame] = {}
+
+# [V16] 포트폴리오 전역 상태 (단일 인스턴스 공유)
+portfolio = PortfolioState()
 
 
 async def warm_up_data(symbols: list, pipeline: DataPipeline):
-    """최초 접속 혹은 재접속 시 이전 데이터를 로드하여 지표 연속성을 확보합니다."""
-    global df_map
+    """
+    최초 접속 혹은 재접속 시 이전 데이터를 로드하여 지표 연속성을 확보합니다.
+    [V16] 3분봉에 더해 1H / 15m 상위 타임프레임 데이터도 함께 웜업합니다.
+    """
+    global df_map, htf_df_1h, htf_df_15m
+
     since_ts = get_today_0900_kst_timestamp() - (
         100 * 60 * 1000
     )  # 09:00부터지만, 지표들 계산을 위해 100봉 정도 더 여유있게 가져옴
 
-    tasks = []
-    for sym in symbols:
-        # V15.2 동적 타임프레임 데이터 로드 (최대 1500 가져와서 장기 ATR 계산도 충당)
-        tasks.append(
-            pipeline.fetch_ohlcv_since(
-                sym, timeframe=settings.TIMEFRAME, since=since_ts
-            )
-        )
+    # 3분봉 로드 태스크
+    tasks_3m = [
+        pipeline.fetch_ohlcv_since(sym, timeframe=settings.TIMEFRAME, since=since_ts)
+        for sym in symbols
+    ]
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    # [V16 MTF] 1H·15m 로드 태스크 (동시 병렬 처리)
+    tasks_1h = [
+        pipeline.fetch_ohlcv_htf(sym, timeframe=settings.HTF_TIMEFRAME_1H, limit=300)
+        for sym in symbols
+    ]
+    tasks_15m = [
+        pipeline.fetch_ohlcv_htf(sym, timeframe=settings.HTF_TIMEFRAME_15M, limit=200)
+        for sym in symbols
+    ]
 
-    for sym, res in zip(symbols, results):
+    results_3m, results_1h, results_15m = await asyncio.gather(
+        asyncio.gather(*tasks_3m, return_exceptions=True),
+        asyncio.gather(*tasks_1h, return_exceptions=True),
+        asyncio.gather(*tasks_15m, return_exceptions=True),
+    )
+
+    for sym, res in zip(symbols, results_3m):
         if isinstance(res, Exception):
-            logger.error(f"[{sym}] 웜업 데이터 로딩 실패: {res}")
+            logger.error(f"[{sym}] 웜업 3m 데이터 로딩 실패: {res}")
             continue
-
         df_map[sym] = res
         logger.info(
             f"[{sym}] {settings.TIMEFRAME} 캔들 초기 데이터 {len(res)}개 장전 완료."
         )
+
+    for sym, res_1h, res_15m in zip(symbols, results_1h, results_15m):
+        # 1H 데이터 + 지표 연산
+        if isinstance(res_1h, Exception):
+            logger.warning(f"[{sym}] 웜업 1H 데이터 로딩 실패: {res_1h}")
+            htf_df_1h[sym] = None
+        else:
+            htf_df_1h[sym] = res_1h
+
+        # 15m 데이터
+        if isinstance(res_15m, Exception):
+            logger.warning(f"[{sym}] 웜업 15m 데이터 로딩 실패: {res_15m}")
+            htf_df_15m[sym] = None
+        else:
+            htf_df_15m[sym] = res_15m
+
+        # 두 프레임 모두 있을 때 지표 연산
+        if htf_df_1h.get(sym) is not None and htf_df_15m.get(sym) is not None:
+            htf_df_1h[sym], htf_df_15m[sym] = pipeline.calculate_htf_indicators(
+                htf_df_1h[sym], htf_df_15m[sym]
+            )
+            logger.info(f"[{sym}] HTF(1H/15m) 지표 웜업 완료.")
 
 
 async def process_closed_kline(
@@ -97,7 +141,10 @@ async def process_closed_kline(
     risk: RiskManager,
     execution: ExecutionEngine,
 ):
-    """웹소켓으로 수신된 '마감된(x: True)' 캔들을 기존 df에 병합하고 판단을 내립니다."""
+    """
+    웹소켓으로 수신된 '마감된(x: True)' 캔들을 기존 df에 병합하고 판단을 내립니다.
+    [V16] HTF 데이터(df_1h, df_15m)와 PortfolioState를 strategy에 함께 전달합니다.
+    """
     if symbol not in df_map:
         return
 
@@ -129,7 +176,6 @@ async def process_closed_kline(
         if new_dt in df.index:
             df.loc[new_dt] = new_row.iloc[0]
         else:
-            # pd.concat 대신 간단히 loc 추가 (성능 이점 위함)
             df.loc[new_dt] = new_row.iloc[0]
 
         # 최대 1500개 유지 (당일 1440개 커버)
@@ -140,11 +186,26 @@ async def process_closed_kline(
             # 펀딩비 시간대면 캔들 저장만 하고 진입은 하지 않음
             return
 
-        # 1. 지표 연산
+        # 1. 3분봉 지표 연산
         df_ind = pipeline.calculate_vwap_indicators(curr_df.copy())
 
-        # 2. V15.0 전략 엔진 의사결정
-        decision = strategy.check_entry(symbol, df_ind)
+        # [V16 MTF] 상위 타임프레임 데이터 참조 (htf_refresh_loop가 주기적으로 갱신)
+        df_1h = htf_df_1h.get(symbol)
+        df_15m = htf_df_15m.get(symbol)
+
+        # [V16 CVD] 현재는 Placeholder: 틱 웹소켓 구축 후 실제 값 주입
+        # 추후 cvd_calculator.get_trend(symbol) 형태로 교체 예정
+        cvd_trend = None  # "BUY_PRESSURE" | "SELL_PRESSURE" | None
+
+        # 2. V16 전략 엔진 의사결정 (HTF + CVD + Portfolio 통합 필터)
+        decision = strategy.check_entry(
+            symbol=symbol,
+            df=df_ind,
+            portfolio=portfolio,
+            df_1h=df_1h,
+            df_15m=df_15m,
+            cvd_trend=cvd_trend,
+        )
 
         if decision["signal"]:
             balance_info = await pipeline.exchange.fetch_balance()
@@ -161,7 +222,7 @@ async def process_closed_kline(
             reason = decision["reason"]
             atr_val = decision.get("atr_val", market_price * 0.005)
 
-            # 3. 투입 사이즈 산출 (V15는 고정 자본 10% 사용)
+            # 3. 투입 사이즈 산출
             sizing = risk.calculate_position_size(
                 symbol, capital, market_price, atr_val
             )
@@ -177,7 +238,7 @@ async def process_closed_kline(
                 f"{side.upper()} (qty={qty}, price={market_price})"
             )
 
-            # 4. 시장가 즉시 진입 및 Time Exit 타이머 동시 스케줄링
+            # 4. 시장가 즉시 진입
             await execution.place_market_entry_order(
                 symbol=symbol,
                 side=side,
@@ -187,8 +248,193 @@ async def process_closed_kline(
                 sl_dist=sizing["sl_dist"],
             )
 
+            # [V16] 포트폴리오 상태에 포지션 등록 (Chandelier 추적 시작)
+            portfolio.register_position(
+                symbol=symbol,
+                direction=decision["signal"],
+                entry_price=market_price,
+                atr=atr_val,
+            )
+
     except Exception as e:
         logger.error(f"[{symbol}] KLINE 마감 처리 중 에러: {e}")
+
+
+async def htf_refresh_loop(symbols: list, pipeline: DataPipeline):
+    """
+    [V16 MTF] 15분마다 1H·15m 상위 타임프레임 데이터를 갱신하는 독립 루프.
+    WebSocket 루프와 별도로 asyncio.create_task()로 병렬 가동됩니다.
+
+    갱신 주기: 15분 (15m 봉 마감 주기와 동일하게 설정)
+    실패 시:   경고 로그만 남기고 계속 실행 (봇 전체 다운 방지)
+    """
+    global htf_df_1h, htf_df_15m
+
+    while True:
+        # 15분 대기 후 갱신 (첫 실행은 warm_up에서 이미 로드되었으므로 대기 먼저)
+        await asyncio.sleep(15 * 60)
+
+        logger.info("[HTF Refresh] 상위 타임프레임 데이터 갱신 시작...")
+        tasks_1h = [
+            pipeline.fetch_ohlcv_htf(
+                sym, timeframe=settings.HTF_TIMEFRAME_1H, limit=300
+            )
+            for sym in symbols
+        ]
+        tasks_15m = [
+            pipeline.fetch_ohlcv_htf(
+                sym, timeframe=settings.HTF_TIMEFRAME_15M, limit=200
+            )
+            for sym in symbols
+        ]
+
+        results_1h, results_15m = await asyncio.gather(
+            asyncio.gather(*tasks_1h, return_exceptions=True),
+            asyncio.gather(*tasks_15m, return_exceptions=True),
+        )
+
+        updated_count = 0
+        for sym, res_1h, res_15m in zip(symbols, results_1h, results_15m):
+            if isinstance(res_1h, Exception):
+                logger.warning(f"[HTF Refresh] {sym} 1H 갱신 실패: {res_1h}")
+                continue
+            if isinstance(res_15m, Exception):
+                logger.warning(f"[HTF Refresh] {sym} 15m 갱신 실패: {res_15m}")
+                continue
+
+            htf_df_1h[sym], htf_df_15m[sym] = pipeline.calculate_htf_indicators(
+                res_1h, res_15m
+            )
+            updated_count += 1
+
+        logger.info(f"[HTF Refresh] {updated_count}/{len(symbols)}종목 HTF 갱신 완료.")
+
+
+async def chandelier_monitoring_loop(
+    strategy: StrategyEngine, execution: ExecutionEngine, pipeline: DataPipeline
+):
+    """
+    [V16 Chandelier] 매 캔들 주기(~30초)마다 활성 포지션의 샹들리에 손절선을 점검합니다.
+    손절선 돌파 시 시장가 청산 요청을 트리거합니다.
+
+    동작 방식:
+        - PortfolioState에 등록된 포지션 순회
+        - strategy.check_chandelier_exit() 호출 → 돌파 여부 판단
+        - 돌파 시 execution.close_position_market() 호출 (봇 내부 기준 시장가 청산)
+    참고:
+        거래소에 기 발주된 SL 주문과 병행 운용됩니다.
+        Chandelier Exit은 '봇 감시 전용 추가 안전망'으로 작동하며,
+        거래소 SL이 먼저 체결되면 portfolio 상태가 sync되어 중복 청산을 방지합니다.
+    """
+    while True:
+        await asyncio.sleep(30)  # 30초 주기 점검
+
+        # 포트폴리오에 등록된 심볼 목록 복사 (순회 중 dict 변경 방지)
+        tracked_symbols = list(portfolio.positions.keys())
+
+        for symbol in tracked_symbols:
+            pos = portfolio.positions.get(symbol)
+            if pos is None:
+                continue
+
+            # 현재 시세를 df_map에서 참조 (API 호출 없이 인메모리 활용)
+            df = df_map.get(symbol)
+            if df is None or len(df) == 0:
+                continue
+
+            last_bar = df.iloc[-1]
+            curr_price = float(last_bar["close"])
+            curr_high = float(last_bar["high"])
+            curr_low = float(last_bar["low"])
+            curr_atr = last_bar.get("ATR_14", curr_price * 0.005)
+
+            if pd.isna(curr_atr):
+                continue
+
+            # 샹들리에 손절선 갱신 + 돌파 여부 확인
+            ce_result = strategy.check_chandelier_exit(
+                symbol=symbol,
+                portfolio=portfolio,
+                current_price=curr_price,
+                current_high=curr_high,
+                current_low=curr_low,
+                current_atr=float(curr_atr),
+            )
+
+            if ce_result["exit"]:
+                logger.warning(
+                    f"[Chandelier Exit] 🚨 {symbol} 청산 트리거! "
+                    f"현재가={curr_price:.4f}, 손절선={ce_result['chandelier_stop']:.4f}"
+                )
+                # 포지션 방향에 따라 청산 주문 발송
+                direction = pos["direction"]
+                close_side = "sell" if direction == "LONG" else "buy"
+
+                try:
+                    if symbol in execution.active_positions:
+                        stop_price = ce_result["chandelier_stop"]
+                        logger.warning(
+                            f"[Chandelier Exit] {symbol} 시장가 강제 청산 시도 | "
+                            f"사이드={close_side}, 손절선={stop_price:.4f}"
+                        )
+
+                        if not settings.DRY_RUN:
+                            # 1. 잔여 TP/SL 주문 일괄 취소
+                            try:
+                                await execution.exchange.cancel_all_orders(symbol)
+                            except Exception as cancel_err:
+                                logger.warning(
+                                    f"[Chandelier Exit] {symbol} 잔여 주문 취소 실패(무시): {cancel_err}"
+                                )
+
+                            # 2. reduce-only 시장가 청산 주문 발송
+                            pos_info = execution.active_positions.get(symbol, {})
+                            # 수량은 execution 내부에서 관리되지 않으므로
+                            # 거래소에서 직접 조회하여 처리
+                            positions = await execution.exchange.fetch_positions(
+                                [symbol]
+                            )
+                            close_amount = 0.0
+                            for p in positions:
+                                if (
+                                    p["symbol"] == symbol
+                                    and float(p.get("contracts", 0)) > 0
+                                ):
+                                    close_amount = float(p["contracts"])
+                                    break
+
+                            if close_amount > 0:
+                                await execution.exchange.create_order(
+                                    symbol=symbol,
+                                    type="market",
+                                    side=close_side,
+                                    amount=close_amount,
+                                    params={"reduceOnly": True},
+                                )
+                            else:
+                                logger.warning(
+                                    f"[Chandelier Exit] {symbol} 청산 수량 조회 실패. 스킵."
+                                )
+                        else:
+                            logger.info(
+                                f"🧪 [DRY RUN] {symbol} Chandelier Exit 가상 시장가 청산."
+                            )
+
+                        await notifier.send_message(
+                            f"🔴 <b>Chandelier Exit 발동</b>\n"
+                            f"[{symbol}] 현재가={current_price:.4f} | 손절선={ce_result['chandelier_stop']:.4f}\n"
+                            f"트레일링 스탑 돌파로 시장가 청산 완료."
+                        )
+
+                        # execution 내부 상태에서도 제거
+                        if symbol in execution.active_positions:
+                            del execution.active_positions[symbol]
+
+                    # 포트폴리오 상태에서도 제거
+                    portfolio.close_position(symbol)
+
+                except Exception as e:
+                    logger.error(f"[Chandelier Exit] {symbol} 청산 중 에러: {e}")
 
 
 async def websocket_loop(
@@ -198,7 +444,7 @@ async def websocket_loop(
     execution: ExecutionEngine,
 ):
     """
-    [V15.2] Aiohttp를 활용한 동적 타임프레임(15종목) 무지연 이벤트 루프
+    [V16] Aiohttp를 활용한 동적 타임프레임(15종목) 무지연 이벤트 루프
     """
     base_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
 
@@ -208,9 +454,9 @@ async def websocket_loop(
     )
     target_symbols = base_symbols + alts
 
-    logger.info(f"📡 [V15.0] 포트폴리오 15종목 동적 선정 결과: {target_symbols}")
+    logger.info(f"📡 [V16] 포트폴리오 15종목 동적 선정 결과: {target_symbols}")
 
-    # 웜업 (당일 캔들 누적)
+    # 웜업 (3m 당일 캔들 + 1H/15m HTF 캔들 동시)
     await warm_up_data(target_symbols, pipeline)
 
     # CCXT 심볼 포맷('BTC/USDT:USDT') <-> 바이낸스 소켓 포맷('btcusdt') 상호 변환기
@@ -223,6 +469,10 @@ async def websocket_loop(
     tf = getattr(settings, "TIMEFRAME", "3m")
     streams = [f"{v}@kline_{tf}" for v in ccxt_to_binance.values()]
     ws_url = "wss://fstream.binance.com/stream?streams=" + "/".join(streams)
+
+    # [V16] HTF 주기 갱신 루프를 독립 태스크로 가동
+    asyncio.create_task(htf_refresh_loop(target_symbols, pipeline))
+    logger.info("[V16] HTF 15분 갱신 루프 태스크 가동.")
 
     while True:
         try:
@@ -241,7 +491,7 @@ async def websocket_loop(
                             if "data" in data and "k" in data["data"]:
                                 # 캔들 페이로드 파싱
                                 kline = data["data"]["k"]
-                                is_closed = kline["x"]  # 1분봉 캔들 마감 여부
+                                is_closed = kline["x"]  # 캔들 마감 여부
 
                                 # 마감캔들에 대해서만 후행성 제거 및 확정 스캔을 수행합니다
                                 if is_closed:
@@ -279,12 +529,23 @@ async def websocket_loop(
 async def state_machine_loop(execution: ExecutionEngine):
     """
     지정가 대기 취소/체결 판별 및 TP/SL 포워딩을 수행하는 별도의 폴링 루프
+    [V16] PortfolioState 동기화: execution에서 포지션이 청산되면 portfolio에서도 제거
     """
     while True:
         try:
             await execution.check_pending_orders_state()
             await execution.check_active_positions_state()
             await execution.check_state_mismatch()
+
+            # [V16] execution과 portfolio 상태 동기화
+            # execution.active_positions에 없는 심볼이 portfolio에 남아 있으면 제거
+            for sym in list(portfolio.positions.keys()):
+                if sym not in execution.active_positions:
+                    logger.info(
+                        f"[State Sync] {sym}이 execution에서 청산됨 → portfolio에서 제거."
+                    )
+                    portfolio.close_position(sym)
+
             await asyncio.sleep(3)
         except Exception as e:
             logger.error(f"[State Machine Error]: {e}")
@@ -292,7 +553,7 @@ async def state_machine_loop(execution: ExecutionEngine):
 
 
 async def main():
-    logger.info("============== BINANCE V15.0 HFT AUTO TRADER START ==============")
+    logger.info("============== BINANCE V16 MTF SCALPING BOT START ==============")
 
     is_db_connected = await check_db_connection()
     if not is_db_connected:
@@ -302,7 +563,7 @@ async def main():
         return
 
     await notifier.send_message(
-        f"🚀 [시작] 바이낸스 V15.2 {settings.TIMEFRAME} 스캘핑 봇 웹소켓 대기열 접속 중..."
+        f"🚀 [시작] 바이낸스 V16 MTF {settings.TIMEFRAME} 스캘핑 봇 웹소켓 대기열 접속 중..."
     )
 
     pipeline = DataPipeline()
@@ -319,14 +580,12 @@ async def main():
             await app.start()
             await app.updater.start_polling()
 
-        # [V15.2] 메인 웹소켓 루프와 스테이트 머신 병렬 가동
-        # return_exceptions=True: 하나의 태스크 예외가 전체 봇을 종료하지 않도록 보호
+        # [V16] 메인 웹소켓 루프 / 스테이트 머신 / 샹들리에 모니터링 병렬 가동
         async def guarded(coro, name):
             try:
                 await coro
             except Exception as e:
                 logger.error(f"[{name}] 태스크 비정상 종료: {e}")
-                # 크리티컬 태스크 종료 시 전체 봇을 비정상 종료코드로 내려서 watchdog이 재시작하도록 유도
                 raise
 
         task_state = asyncio.create_task(
@@ -337,8 +596,16 @@ async def main():
                 websocket_loop(pipeline, strategy, risk, execution), "WebSocketLoop"
             )
         )
+        task_chandelier = asyncio.create_task(
+            guarded(
+                chandelier_monitoring_loop(strategy, execution, pipeline),
+                "ChandelierMonitor",
+            )
+        )
 
-        results = await asyncio.gather(task_state, task_trade, return_exceptions=True)
+        results = await asyncio.gather(
+            task_state, task_trade, task_chandelier, return_exceptions=True
+        )
         for r in results:
             if isinstance(r, Exception):
                 logger.critical(f"[Main] 핵심 태스크 예외로 인해 봇이 종료됩니다: {r}")

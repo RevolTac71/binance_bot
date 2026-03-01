@@ -4,7 +4,6 @@ import ccxt.async_support as ccxt
 import pandas as pd
 import numpy as np
 import pandas_ta as ta
-import pandas_ta as ta
 from ccxt.base.errors import RateLimitExceeded, RequestTimeout, NetworkError
 from config import settings, logger
 
@@ -151,6 +150,64 @@ class DataPipeline:
             df[f"ATR_{atr_long_len}"] = df["ATR_14"]
 
         return df
+
+    @with_exponential_backoff(max_retries=3)
+    async def fetch_ohlcv_htf(
+        self, symbol: str, timeframe: str, limit: int = 300
+    ) -> pd.DataFrame:
+        """
+        [V16 MTF] 상위 타임프레임(1H, 15m) 캔들 데이터를 비동기로 취득합니다.
+        - 1H: EMA50/200 계산을 위해 최소 200개 필요
+        - 15m: ADX·MACD 계산을 위해 최소 60개 필요
+        """
+        candles = await self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+        df = pd.DataFrame(
+            candles, columns=["timestamp", "open", "high", "low", "close", "volume"]
+        )
+        df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms")
+        df.set_index("datetime", inplace=True)
+        return df
+
+    def calculate_htf_indicators(
+        self, df_1h: pd.DataFrame, df_15m: pd.DataFrame
+    ) -> tuple:
+        """
+        [V16 MTF] 상위 타임프레임 지표를 연산합니다.
+
+        1H 지표:
+          - EMA_50  : 50 이동평균 (중기 추세)
+          - EMA_200 : 200 이동평균 (장기 추세)
+
+        15m 지표:
+          - ADX_14  : 추세 강도 (25 이상 = 추세장, 미만 = 횡보장)
+          - MACD_12_26_9 (macd / macds / macdh): 모멘텀 방향
+
+        Returns:
+            tuple: (df_1h_with_indicators, df_15m_with_indicators)
+        """
+        # ── 1시간봉 지표 ───────────────────────────────────────────────────
+        if df_1h is not None and len(df_1h) >= 50:
+            df_1h = df_1h.copy()
+            df_1h.ta.ema(length=50, append=True, col_names=("EMA_50",))
+            df_1h.ta.ema(length=200, append=True, col_names=("EMA_200",))
+
+        # ── 15분봉 지표 ──────────────────────────────────────────────────
+        if df_15m is not None and len(df_15m) >= 35:
+            df_15m = df_15m.copy()
+            # ADX: 추세 강도 (DMP_, DMN_ 컬럼도 함께 생성)
+            df_15m.ta.adx(
+                length=14, append=True, col_names=("ADX_14", "DMP_14", "DMN_14")
+            )
+            # MACD: 기본 12/26/9 파라미터
+            df_15m.ta.macd(
+                fast=12,
+                slow=26,
+                signal=9,
+                append=True,
+                col_names=("MACD", "MACD_H", "MACD_S"),
+            )
+
+        return df_1h, df_15m
 
     # Top 5 알트코인 동적 추출
     @with_exponential_backoff(max_retries=3)
