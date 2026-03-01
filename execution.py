@@ -40,6 +40,7 @@ class ExecutionEngine:
         """
         return json.dumps(
             {
+                "strategy_version": getattr(settings, "STRATEGY_VERSION", "UNKNOWN"),
                 "k_value": getattr(settings, "K_VALUE", None),
                 "vol_mult": getattr(settings, "VOL_MULT", None),
                 "atr_ratio": getattr(settings, "ATR_RATIO_MULT", None),
@@ -50,6 +51,10 @@ class ExecutionEngine:
                 "time_exit_min": getattr(settings, "TIME_EXIT_MINUTES", None),
                 "sl_mult": getattr(settings, "SL_MULT", None),
                 "tp_mult": getattr(settings, "TP_MULT", None),
+                # V16 신규 파라미터
+                "adx_threshold": getattr(settings, "ADX_THRESHOLD", None),
+                "chandelier_mult": getattr(settings, "CHANDELIER_MULT", None),
+                "max_same_dir": getattr(settings, "MAX_CONCURRENT_SAME_DIR", None),
             },
             ensure_ascii=False,
         )

@@ -57,6 +57,7 @@ class Config:
     TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
     # Strategy Global Parameters
+    STRATEGY_VERSION = os.getenv("STRATEGY_VERSION", "V16")  # 전략 버전 식별자
     TIMEFRAME = os.getenv("TIMEFRAME", "3m")
     K_VALUE = float(os.getenv("K_VALUE", "2.0"))
     RISK_PERCENTAGE = float(os.getenv("RISK_PERCENTAGE", "0.005"))
