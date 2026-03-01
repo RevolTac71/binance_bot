@@ -127,18 +127,25 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = (
         f"📊 [봇 상태 요약]\n"
-        f"- 매매 모드: {mode}\n"
-        f"- 봇 동작: {status_str}\n"
-        f"- 기본 레버리지: {settings.LEVERAGE}x\n"
-        f"- 타임프레임(캔들): {getattr(settings, 'TIMEFRAME', '3m')}\n"
-        f"- K-Value: {settings.K_VALUE}\n"
-        f"- 진입 리스크: {settings.RISK_PERCENTAGE * 100:.1f}%\n"
-        f"- Time Exit: {getattr(settings, 'TIME_EXIT_MINUTES', 0)}분\n"
-        f"- 생존 시간: {days}일 {hours}시간 {minutes}분\n"
-        f"- 총 잔고: {capital} USDT\n\n"
-        f"✅ 기동중 포지션(메모리): {len(execution.active_positions)} 개\n"
-        f"⏳ 대기중 주문(메모리): {len(execution.pending_entries)} 개\n\n"
-        f"📋 [현재 포지션 상세 (실제 거래소)]\n"
+        f"── 시스템 ──\n"
+        f"매매 모드 : {mode}\n"
+        f"봇 동작  : {status_str}\n"
+        f"생존 시간 : {days}일 {hours}시간 {minutes}분\n"
+        f"전체 잔고  : {capital} USDT\n"
+        f"기동 포지션: {len(execution.active_positions)}개 | "
+        f"대기 주문: {len(execution.pending_entries)}개\n\n"
+        f"── 현재 파라미터 ──\n"
+        f"K-Value   : {settings.K_VALUE}\n"
+        f"SL 배율   : {getattr(settings, 'SL_MULT', 3.0)} × ATR\n"
+        f"TP 배율   : {getattr(settings, 'TP_MULT', 6.0)} × ATR\n"
+        f"레버리지  : {settings.LEVERAGE}x\n"
+        f"캔들봉    : {getattr(settings, 'TIMEFRAME', '3m')}\n"
+        f"증거금 %  : {settings.RISK_PERCENTAGE * 100:.1f}%\n"
+        f"Time Exit : {getattr(settings, 'TIME_EXIT_MINUTES', 0)}분\n"
+        f"Vol Mult  : {getattr(settings, 'VOL_MULT', 1.5)}\n"
+        f"ATR Ratio : {getattr(settings, 'ATR_RATIO_MULT', 1.2)}\n"
+        f"Cooldown  : {getattr(settings, 'LOSS_COOLDOWN_MINUTES', 15)}분\n\n"
+        f"── 현재 포지션 (실제 거래소) ──\n"
         f"{position_details}"
     )
     await update.message.reply_text(msg)
@@ -159,129 +166,6 @@ async def resume_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings.IS_PAUSED = False
     await update.message.reply_text(
         "▶️ 봇이 [재개] 되었습니다. 신규 진입 스캔을 정상적으로 다시 탐색합니다."
-    )
-
-
-async def leverage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_admin(update):
-        return
-    args = context.args
-    if not args or not args[0].isdigit():
-        await update.message.reply_text(
-            "💡 사용법: /leverage [숫자]\n예시: /leverage 5"
-        )
-        return
-
-    new_lev = int(args[0])
-    settings.LEVERAGE = new_lev
-    update_env_variable("LEVERAGE", str(new_lev))
-
-    await update.message.reply_text(
-        f"✅ 레버리지가 {new_lev}x 로 변경되었습니다. (DB 환경변수 영구 반영 완료)"
-    )
-
-
-async def mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_admin(update):
-        return
-    args = context.args
-    if not args or args[0].lower() not in ["dry_run", "real"]:
-        await update.message.reply_text(
-            "💡 사용법: /mode [dry_run|real]\n예시: /mode real"
-        )
-        return
-
-    mode_str = args[0].lower()
-    is_dry = "true" if mode_str == "dry_run" else "false"
-
-    settings.DRY_RUN = mode_str == "dry_run"
-    update_env_variable("DRY_RUN", is_dry.capitalize())
-
-    res_str = "모의투자(DRY_RUN)" if settings.DRY_RUN else "실전 매매(REAL)"
-    await update.message.reply_text(
-        f"🔄 매매 모드가 [{res_str}] 상태로 전환되었습니다. (DB 환경변수 영구 반영 완료)"
-    )
-
-
-async def k_value_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_admin(update):
-        return
-    args = context.args
-    if not args:
-        await update.message.reply_text(
-            "💡 사용법: /k_value [숫자]\n예시: /k_value 0.5"
-        )
-        return
-
-    try:
-        new_val = float(args[0])
-        settings.K_VALUE = new_val
-        update_env_variable("K_VALUE", str(new_val))
-        await update.message.reply_text(
-            f"✅ K-Value가 {new_val} 로 변경되었습니다. (DB 환경변수 영구 반영 완료)"
-        )
-    except ValueError:
-        await update.message.reply_text("❌ K-Value에는 숫자를 입력해주세요 (예: 0.5)")
-
-
-async def risk_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_admin(update):
-        return
-    args = context.args
-    if not args:
-        await update.message.reply_text("� 사용법: /risk [숫자]\n예시: /risk 0.1")
-        return
-
-    try:
-        new_val = float(args[0])
-        settings.RISK_PERCENTAGE = new_val
-        update_env_variable("RISK_PERCENTAGE", str(new_val))
-        await update.message.reply_text(
-            f"✅ 진입 리스크 비율이 {new_val} 로 변경되었습니다. (DB 환경변수 영구 반영 완료)"
-        )
-    except ValueError:
-        await update.message.reply_text(
-            "❌ 리스크 비율에는 숫자를 입력해주세요 (예: 0.1)"
-        )
-
-
-async def time_exit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_admin(update):
-        return
-    args = context.args
-    if not args:
-        await update.message.reply_text(
-            "💡 사용법: /time_exit [숫자]\n예시: /time_exit 10"
-        )
-        return
-
-    try:
-        new_val = int(args[0])
-        settings.TIME_EXIT_MINUTES = new_val
-        update_env_variable("TIME_EXIT_MINUTES", str(new_val))
-        status = f"{new_val}분" if new_val > 0 else "비활성화(0)"
-        await update.message.reply_text(
-            f"✅ Time Exit 타이머가 {status}로 변경되었습니다. (DB 환경변수 영구 반영 완료)"
-        )
-    except ValueError:
-        await update.message.reply_text("❌ 시간은 정수(분)로 입력해주세요 (예: 10)")
-
-
-async def timeframe_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_admin(update):
-        return
-    args = context.args
-    if not args or args[0].lower() not in ["1m", "3m", "5m", "15m"]:
-        await update.message.reply_text(
-            "💡 사용법: /timeframe [1m|3m|5m|15m]\n예시: /timeframe 3m"
-        )
-        return
-
-    new_tf = args[0].lower()
-    settings.TIMEFRAME = new_tf
-    update_env_variable("TIMEFRAME", new_tf)
-    await update.message.reply_text(
-        f"✅ 타임프레임이 {new_tf}로 변경되었습니다. 웹소켓 스트림 재생성을 위해 반드시 '/restart' 명령어를 실행해주세요!"
     )
 
 
@@ -437,14 +321,20 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ 매매 모드 → {label} 전환 완료")
             return
 
-        # 일반 키 처리
+        # 일반 키 처리 (변경 전 값을 먼저 읽어둠)
+        old_val = getattr(settings, attr_name, "(없음)")
         new_val = cast_fn(raw_val)
         setattr(settings, attr_name, new_val)
         update_env_variable(env_key, str(new_val))
 
+        restart_notice = (
+            "\n⚠️ timeframe 변경 시 /restart 필요!" if key == "timeframe" else ""
+        )
         await update.message.reply_text(
-            f"✅ [{key.upper()}] → {new_val} 변경 완료 (영구 저장)\n"
-            + ("⚠️ timeframe 변경 시 /restart 첫부탁!" if key == "timeframe" else "")
+            f"✅ [{key.upper()}] 변경 완료\n"
+            f"이전 값: {old_val}\n"
+            f"새로운 값: {new_val}\n"
+            f"(영구 저장 완료){restart_notice}"
         )
 
     except ValueError:
@@ -472,12 +362,6 @@ def setup_telegram_bot(execution_engine):
     application.add_handler(CommandHandler("status", status_cmd))
     application.add_handler(CommandHandler("pause", pause_cmd))
     application.add_handler(CommandHandler("resume", resume_cmd))
-    application.add_handler(CommandHandler("leverage", leverage_cmd))
-    application.add_handler(CommandHandler("k_value", k_value_cmd))
-    application.add_handler(CommandHandler("risk", risk_cmd))
-    application.add_handler(CommandHandler("time_exit", time_exit_cmd))
-    application.add_handler(CommandHandler("timeframe", timeframe_cmd))
-    application.add_handler(CommandHandler("mode", mode_cmd))
     application.add_handler(CommandHandler("restart", restart_cmd))
     application.add_handler(CommandHandler("panic", panic_cmd))
     application.add_handler(CommandHandler("setparam", setparam_cmd))
