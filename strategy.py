@@ -478,6 +478,15 @@ class StrategyEngine:
         regime = mtf["regime"]  # "TREND" | "RANGE"
         momentum = mtf["momentum"]  # "BULLISH" | "BEARISH" | "NEUTRAL"
 
+        # ── STEP 5: Volume Spike 판별 ─────────────────────────────────────
+        # ★ vol_mult를 MTF 상태 로그보다 먼저 선언해야 참조 오류가 발생하지 않음
+        vol_mult = getattr(settings, "VOL_MULT", 1.5)  # 일반 돌파: 1.5x~2.0x
+        extreme_mult = getattr(
+            settings, "EXTREME_VOL_MULT", 2.5
+        )  # 극단 소진: 2.5x~3.0x
+        is_vol_spike = volume > (vol_sma_20 * vol_mult)
+        is_extreme_vol = volume > (vol_sma_20 * extreme_mult)
+
         # HTF/MTF 상태를 캔들마다 INFO로 출력 (봇 작동 여부 확인용)
         logger.info(
             f"[{symbol}] 📊 [MTF 상태] "
@@ -485,17 +494,7 @@ class StrategyEngine:
             f"Regime={regime} (ADX={mtf['adx']}) | "
             f"Momentum={momentum} | "
             f"RSI={rsi_val:.1f} | Vol={volume / vol_sma_20:.1f}x (기준={vol_mult:.1f}x)"
-        ) if not (
-            pd.isna(rsi_val) if hasattr(rsi_val, "__class__") else False
-        ) else None
-
-        # ── STEP 5: Volume Spike 판별 ─────────────────────────────────────
-        vol_mult = getattr(settings, "VOL_MULT", 1.5)  # 일반 돌파: 1.5x~2.0x
-        extreme_mult = getattr(
-            settings, "EXTREME_VOL_MULT", 2.5
-        )  # 극단 소진: 2.5x~3.0x
-        is_vol_spike = volume > (vol_sma_20 * vol_mult)
-        is_extreme_vol = volume > (vol_sma_20 * extreme_mult)
+        )
 
         # ── STEP 6: Price Action Rejection / Extreme Outlier ──────────────
         long_rejection = (low_price <= lower_band) and (market_price > lower_band)
