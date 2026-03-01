@@ -56,7 +56,9 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/setparam timeframe [값] — 캔들봉 (1m/3m/5m/15m, 변경 후 /restart!)\n"
         "/setparam time_exit [분] — 최대 포지션 보유 시간 (0=비활성)\n"
         "/setparam vol_mult [숫자] — 거래량 스파이크 배수 (기본 1.5)\n"
-        "/setparam atr_ratio [숫자] — 단/장기 ATR 비율 필터 (기본 1.2)\n"
+        "/setparam atr_ratio [숫자] — 단/장기 ATR 비율 필터 (기본 1.2, 낮출수록 진입 완화)\n"
+        "/setparam adx [숫자] — ADX 추세 강도 기준 (기본 20.0, 낮출수록 더 많이 진입)\n"
+        "/setparam chandelier [숫자] — 샹들리에 ATR 승수 (기본 2.0, 높을수록 넓은 트레일링)\n"
         "/setparam sl [숫자] — SL 배율 × ATR (기본 3.0, 클수록 넓은 손절)\n"
         "/setparam tp [숫자] — TP 배율 × ATR (기본 6.0, R:R = tp/sl)\n"
         "/setparam cooldown [분] — 손실 후 동일종목 쿨다운 (기본 15분)\n"
@@ -296,6 +298,8 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "time_exit": ("TIME_EXIT_MINUTES", int, "TIME_EXIT_MINUTES"),
             "vol_mult": ("VOL_MULT", float, "VOL_MULT"),
             "atr_ratio": ("ATR_RATIO_MULT", float, "ATR_RATIO_MULT"),
+            "adx": ("ADX_THRESHOLD", float, "ADX_THRESHOLD"),
+            "chandelier": ("CHANDELIER_MULT", float, "CHANDELIER_MULT"),
             "sl": ("SL_MULT", float, "SL_MULT"),
             "sl_mult": ("SL_MULT", float, "SL_MULT"),
             "tp": ("TP_MULT", float, "TP_MULT"),
