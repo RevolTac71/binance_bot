@@ -33,6 +33,107 @@ class BalanceHistory(Base):
     balance = Column(Float)  # 달러 등 환산치 (또는 USDT 잔량)
 
 
+# ==========================================
+# [V16.2 ML Data Pipeline Models]
+# ==========================================
+
+
+class MarketSnapshot(Base):
+    """
+    1분/3분 캔들 마감 시점의 시장 맥락(Market Context)을 수집하는 Feature 테이블.
+    비지도 학습(분류) 및 지도 학습(예측)의 독립 변수(X)로 활용됩니다.
+    """
+
+    __tablename__ = "market_snapshots"
+
+    snapshot_id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime, index=True)
+    symbol = Column(String(20), index=True)
+
+    # 1. 가격 및 오실레이터 (Price & Oscillators)
+    rsi = Column(Float, nullable=True)
+    macd_hist = Column(Float, nullable=True)
+    adx = Column(Float, nullable=True)
+    atr_14 = Column(Float, nullable=True)
+    atr_200 = Column(Float, nullable=True)
+    bb_width = Column(Float, nullable=True)
+
+    # 2. 다중 시간 프레임 (MTF)
+    ema_1h_dist = Column(Float, nullable=True)  # (현재가 - 1h_EMA) / 1h_EMA
+    ema_15m_dist = Column(Float, nullable=True)  # (현재가 - 15m_EMA) / 15m_EMA
+
+    # 3. 오더플로우 및 잔량 (Orderflow & Microstructure)
+    cvd_5m_sum = Column(Float, nullable=True)
+    cvd_15m_sum = Column(Float, nullable=True)
+    cvd_delta_slope = Column(Float, nullable=True)
+    bid_ask_imbalance = Column(Float, nullable=True)  # TWAP 30s
+
+    # 4. 기타 시장 정보
+    funding_rate_match = Column(Integer, nullable=True)  # 1(일치), 0(불일치), -1(반대)
+
+
+class TradeLog(Base):
+    """
+    개별 매매의 상세 내역과 성과, 슬리피지를 기록하고
+    추후 배치 스크립트가 MFE/MAE 등의 미래 데이터(Label, Y)를 업데이트하는 테이블.
+    """
+
+    __tablename__ = "trade_logs"
+
+    trade_id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String(20), index=True)
+    direction = Column(String(10))  # 'LONG' or 'SHORT'
+    qty = Column(Float)
+
+    # 진입 스펙
+    entry_time = Column(DateTime, index=True)
+    target_price = Column(Float)  # 진입 시점 당시 의도했던 기준가/최우선호가
+    execution_price = Column(Float)  # Chasing 완료 결과 실제 평단가
+    slippage = Column(Float)  # (실제 - 목표) 차이 등
+    entry_reason = Column(Text)
+    execution_time_ms = Column(
+        Integer
+    )  # 주문 발송부터 체결 완료 알림까지의 지연시간 밀리초
+
+    # 청산 스펙
+    exit_time = Column(DateTime, nullable=True)
+    exit_price = Column(Float, nullable=True)
+    exit_reason = Column(
+        Text, nullable=True
+    )  # 'TP', 'SL', 'Chandelier', 'Time', 'Manual' 등
+    realized_pnl = Column(Float, nullable=True)
+    roi_pct = Column(Float, nullable=True)
+
+    # 지연 모델링 레이블 (MFE, MAE 및 수익률) - Offline 배치로 UPDATE 됨
+    mfe = Column(
+        Float, nullable=True
+    )  # 최대 가용 수익 구간 (Maximum Favorable Excursion)
+    mae = Column(
+        Float, nullable=True
+    )  # 최대 노출 손실 구간 (Maximum Adverse Excursion)
+    ret_5m = Column(Float, nullable=True)  # 진입 5분 뒤 % 수익률
+    ret_15m = Column(Float, nullable=True)  # 진입 15분 뒤 % 수익률
+    ret_30m = Column(Float, nullable=True)  # 진입 30분 뒤 % 수익률
+
+
+class OrderEvent(Base):
+    """
+    지정가 Chasing 래퍼나 Post-Only 주문 시 발생하는 미체결, 거절, 취소 이력을 트래킹합니다.
+    (API 속도 문제 파악이나 호가추적 효율 분석 용도)
+    """
+
+    __tablename__ = "order_events"
+
+    event_id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime, index=True)
+    symbol = Column(String(20), index=True)
+    order_type = Column(String(20))  # 'LIMIT_MAKER', 'MARKET', 'STOP_MARKET', etc.
+    event_type = Column(String(50))  # 'CREATE', 'CANCEL', 'EXPIRED', 'REJECTED' 등
+    price = Column(Float, nullable=True)
+    amount = Column(Float, nullable=True)
+    attempt_count = Column(Integer, default=1)  # 몇 번째 Chasing 시도인지
+
+
 from sqlalchemy.pool import NullPool
 import uuid
 
