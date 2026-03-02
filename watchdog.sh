@@ -21,8 +21,8 @@ RESTART_COUNT=0
 while true; do
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] 봇 시작 (재시작 횟수: $RESTART_COUNT)"
 
-    # 봇 실행
-    python3 main.py >> app.log 2>&1
+    # 봇 실행 (파이썬 내부 RotatingFileHandler와 중복 저장 방지를 위해 콘솔 출력은 console.log로 리다이렉션)
+    python3 main.py >> console.log 2>&1
     EXIT_CODE=$?
 
     TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
