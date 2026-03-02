@@ -62,6 +62,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "sl         — SL 배율 ×ATR (float, 기본 3.0 = 넓은 손절)\n"
         "tp         — TP 배율 ×ATR (float, 기본 6.0, R:R=tp/sl)\n"
         "cooldown   — 손실 후 동일종목 쿨다운 분 (int, 기본 15)\n"
+        "htf_1h     — 1시간봉 상위 프레임 (str, 예: 1h, 2h, 4h, 변경 후 /restart 권장)\n"
+        "htf_15m    — 15분봉 상위 프레임 (str, 예: 15m, 30m, 변경 후 /restart 권장)\n"
         "mode       — dry 또는 real\n\n"
         "── (NEW) 개별 종목 제어 ──\n"
         "/ignore [코인] — 블랙리스트 추가 (진입 차단, 예: /ignore LINK/USDT)\n"
@@ -297,6 +299,8 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "cooldown": ("LOSS_COOLDOWN_MINUTES", int, "LOSS_COOLDOWN_MINUTES"),
             "max": ("MAX_TRADES", int, "MAX_TRADES"),
             "max_trades": ("MAX_TRADES", int, "MAX_TRADES"),
+            "htf_1h": ("HTF_TIMEFRAME_1H", str, "HTF_TIMEFRAME_1H"),
+            "htf_15m": ("HTF_TIMEFRAME_15M", str, "HTF_TIMEFRAME_15M"),
             "mtf_filter": (None, None, None),  # Custom logic
             "mode": (None, None, None),  # dry 또는 real
         }
@@ -332,9 +336,10 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         setattr(settings, attr_name, new_val)
         update_env_variable(env_key, str(new_val))
 
-        restart_notice = (
-            "\n⚠️ timeframe 변경 시 /restart 필요!" if key == "timeframe" else ""
-        )
+        restart_notice = ""
+        if key in ("timeframe", "htf_1h", "htf_15m"):
+            restart_notice = f"\n⚠️ {key} 변경 시 /restart 필요!"
+
         await update.message.reply_text(
             f"✅ [{key.upper()}] 변경 완료\n"
             f"이전 값: {old_val}\n"

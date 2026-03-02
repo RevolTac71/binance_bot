@@ -403,7 +403,10 @@ class ExecutionEngine:
                             ):  # 95% 이상 체결되면 종료
                                 break
                     except Exception as e:
-                        logger.error(f"[{symbol}] Chasing 루프 내 에러: {e}")
+                        # -5022 Post Only Rejection 등은 Chasing 루프에서 흔히 발생하므로 Warning 처리하여 텔레그램 스팸 방지
+                        logger.warning(
+                            f"[{symbol}] Chasing 루프 내 에러(재시도됨): {e}"
+                        )
                         # [OrderEvent] Rejected/Error 기록
                         async with AsyncSessionLocal() as session:
                             oe = OrderEvent(
