@@ -133,19 +133,19 @@ class DataPipeline:
         df["Lower_Band"] = df["VWAP"] - df["StdDev"] * vwap_mult
 
         # 과매도/과매수 판단을 위한 RSI (14)
-        df.ta.rsi(length=14, append=True, col_names=("RSI_14",))
+        df["RSI_14"] = df.ta.rsi(length=14)
+
         # V15.0 거래량 스파이크 판별을 위한 Volume SMA (20)
-        df.ta.sma(close=df["volume"], length=20, append=True, col_names=("Vol_SMA_20",))
+        df["Vol_SMA_20"] = df.ta.sma(close=df["volume"], length=20)
+
         # 변동성 필터 및 동적 익손절 거리를 위한 단기 ATR (14)
-        df.ta.atr(length=14, append=True, col_names=("ATR_14",))
+        df["ATR_14"] = df.ta.atr(length=14)
 
         # [V15.2] 동적 변동성 필터를 위한 장기 ATR 계산 (기본 200)
         atr_long_len = getattr(settings, "ATR_LONG_LEN", 200)
         # 데이터가 충분하지 않을 경우를 대비해 계산
         if len(df) > atr_long_len:
-            df.ta.atr(
-                length=atr_long_len, append=True, col_names=(f"ATR_{atr_long_len}",)
-            )
+            df[f"ATR_{atr_long_len}"] = df.ta.atr(length=atr_long_len)
         else:
             df[f"ATR_{atr_long_len}"] = df["ATR_14"]
 
