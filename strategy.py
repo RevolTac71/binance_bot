@@ -488,13 +488,16 @@ class StrategyEngine:
         is_extreme_vol = volume > (vol_sma_20 * extreme_mult)
 
         # HTF/MTF 상태를 캔들마다 INFO로 출력 (봇 작동 여부 확인용)
-        logger.info(
-            f"[{symbol}] 📊 [MTF 상태] "
-            f"1H Bias={htf_bias} | "
-            f"Regime={regime} (ADX={mtf['adx']}) | "
-            f"Momentum={momentum} | "
-            f"RSI={rsi_val:.1f} | Vol={volume / vol_sma_20:.1f}x (기준={vol_mult:.1f}x)"
-        )
+        # MTF_FILTER 켜져있을 때만 상세 출력
+        mtf_filter = getattr(settings, "MTF_FILTER", True)
+        if mtf_filter:
+            logger.info(
+                f"[{symbol}] 📊 [MTF 상태] "
+                f"1H Bias={htf_bias} | "
+                f"Regime={regime} (ADX={mtf['adx']}) | "
+                f"Momentum={momentum} | "
+                f"RSI={rsi_val:.1f} | Vol={volume / vol_sma_20:.1f}x (기준={vol_mult:.1f}x)"
+            )
 
         # ── STEP 6: Price Action Rejection / Extreme Outlier ──────────────
         long_rejection = (low_price <= lower_band) and (market_price > lower_band)
@@ -520,7 +523,6 @@ class StrategyEngine:
             # ★ 엄격한 HTF 방향 필터: BULL이면 롱만 허용 / BEAR이면 숏만 허용
             #   → NEUTRAL(EMA가 근접한 과도기)에서는 진입하지 않음
             # (MTF_FILTER가 꺼져있으면 횡보장에서 아무방향이나 진입 허용)
-            mtf_filter = getattr(settings, "MTF_FILTER", True)
             long_htf_ok = (htf_bias == "BULL") if mtf_filter else True
             short_htf_ok = (htf_bias == "BEAR") if mtf_filter else True
 
@@ -559,7 +561,6 @@ class StrategyEngine:
         else:  # TREND 장세: 모멘텀 추종 로직
             # 추세장: HTF Bias와 MACD 모멘텀이 모두 일치할 때만 진입
             # (MTF_FILTER가 꺼져있으면 추세 필터 무시)
-            mtf_filter = getattr(settings, "MTF_FILTER", True)
             long_htf_ok = (
                 ((htf_bias == "BULL") and (momentum == "BULLISH"))
                 if mtf_filter
@@ -657,12 +658,12 @@ class StrategyEngine:
                 else ((htf_bias == "BEAR") and (momentum == "BEARISH"))
             )
 
-            if htf_bias == "NEUTRAL":
+            if mtf_filter and htf_bias == "NEUTRAL":
                 logger.info(
                     f"[{symbol}] 🚫 [STEP3 HTF Block] 1H EMA 과도기(NEUTRAL) — "
                     f"방향 미확정으로 진입 차단"
                 )
-            elif not (long_htf_ok_check or short_htf_ok_check):
+            elif mtf_filter and not (long_htf_ok_check or short_htf_ok_check):
                 logger.info(
                     f"[{symbol}] 🚫 [STEP3 HTF Block] 방향 불일치 — "
                     f"HTF={htf_bias}, Regime={regime}, Momentum={momentum}"
