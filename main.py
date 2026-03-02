@@ -78,8 +78,8 @@ async def warm_up_data(symbols: list, pipeline: DataPipeline):
     global df_map, htf_df_1h, htf_df_15m
 
     since_ts = get_today_0000_utc_timestamp() - (
-        100 * 60 * 1000
-    )  # 09:00부터지만, 지표들 계산을 위해 100봉 정도 더 여유있게 가져옴
+        1500 * 60 * 1000
+    )  # ATR200 등 장기 지표 계산을 위해 최소 과거 500봉(1500분) 이상 여유있게 가져옴
 
     # 3분봉 로드 태스크
     tasks_3m = [
