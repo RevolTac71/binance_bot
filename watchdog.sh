@@ -33,6 +33,10 @@ while true; do
         send_telegram "$MSG"
         echo "[$TIMESTAMP] 정상 종료 감지. watchdog 종료."
         break
+    elif [ $EXIT_CODE -eq 42 ]; then
+        # 의도된 재시작 (텔레그램 /restart 커맨드)
+        echo "[$TIMESTAMP] 사용자의 /restart 명령어 감지. 3초 후 재기동..."
+        sleep 3
     else
         # 비정상 종료 (크래시)
         RESTART_COUNT=$((RESTART_COUNT + 1))

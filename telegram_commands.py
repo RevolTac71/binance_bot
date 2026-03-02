@@ -180,32 +180,16 @@ async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
     await update.message.reply_text(
-        "🔄 봇 프로세스를 완전히 재부팅합니다... 여러 개가 켜져 있다면 모두 종료한 뒤 하나만 새로 기동합니다!"
+        "🔄 봇 프로세스를 완전히 재부팅합니다... (Watchdog에 의해 3초 후 깔끔하게 새 창으로 켜집니다)"
     )
 
-    current_pid = os.getpid()
-    killed_count = 0
+    logger.info(
+        "텔레그램 /restart 커맨드 수신. Exit Code 42로 프로세스를 자발적 종료합니다."
+    )
 
-    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
-        try:
-            cmdline = proc.info.get("cmdline")
-            if (
-                cmdline
-                and len(cmdline) > 0
-                and "python" in proc.info.get("name", "").lower()
-            ):
-                cmd_str = " ".join(cmdline)
-                if "main.py" in cmd_str and proc.info["pid"] != current_pid:
-                    proc.kill()
-                    killed_count += 1
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            pass
-
-    if killed_count > 0:
-        logger.info(f"동일한 main.py 프로세스 {killed_count}개를 강제 종료했습니다.")
-
+    # asyncio loop를 지연 후 정지 및 종료코드 42 반환
     loop = asyncio.get_running_loop()
-    loop.call_later(2, lambda: os.execv(sys.executable, ["python"] + sys.argv))
+    loop.call_later(1.0, lambda: sys.exit(42))
 
 
 async def panic_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
