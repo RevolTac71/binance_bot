@@ -67,6 +67,11 @@ htf_df_15m: dict[str, pd.DataFrame] = {}
 # [V16] 포트폴리오 전역 상태 (단일 인스턴스 공유)
 portfolio = PortfolioState()
 
+# [V16.1] CVD 실시간 틱 누적 공간
+cvd_data: dict[str, float] = {}
+# 캔들 마감 시점의 CVD 스냅샷 저장 (추세 판단용)
+cvd_history: dict[str, list] = {}
+
 
 async def warm_up_data(symbols: list, pipeline: DataPipeline):
     """
@@ -193,9 +198,20 @@ async def process_closed_kline(
         df_1h = htf_df_1h.get(symbol)
         df_15m = htf_df_15m.get(symbol)
 
-        # [V16 CVD] 현재는 Placeholder: 틱 웹소켓 구축 후 실제 값 주입
-        # 추후 cvd_calculator.get_trend(symbol) 형태로 교체 예정
-        cvd_trend = None  # "BUY_PRESSURE" | "SELL_PRESSURE" | None
+        # [V16.1 CVD] 실시간 누적 거래량 델타 추세 연산
+        current_cvd = cvd_data.get(symbol, 0.0)
+        hist = cvd_history.setdefault(symbol, [])
+        hist.append(current_cvd)
+        if len(hist) > 10:
+            hist.pop(0)
+
+        cvd_trend = None
+        if len(hist) >= 2:
+            # 방금 캔들의 CVD가 직전 캔들의 CVD보다 높으면 매수 우위, 낮으면 매도 우위
+            if hist[-1] > hist[-2]:
+                cvd_trend = "BUY_PRESSURE"
+            elif hist[-1] < hist[-2]:
+                cvd_trend = "SELL_PRESSURE"
 
         # 2. V16 전략 엔진 의사결정 (HTF + CVD + Portfolio 통합 필터)
         decision = strategy.check_entry(
@@ -467,7 +483,12 @@ async def websocket_loop(
 
     # 바이낸스 Streams 생성
     tf = getattr(settings, "TIMEFRAME", "3m")
+    # 1. 캔들 스트림
     streams = [f"{v}@kline_{tf}" for v in ccxt_to_binance.values()]
+    # 2. 실시간 체결(CVD) 스트림 추가
+    agg_streams = [f"{v}@aggTrade" for v in ccxt_to_binance.values()]
+    streams.extend(agg_streams)
+
     ws_url = "wss://fstream.binance.com/stream?streams=" + "/".join(streams)
 
     # [V16] HTF 주기 갱신 루프를 독립 태스크로 가동
@@ -488,7 +509,26 @@ async def websocket_loop(
 
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             data = json.loads(msg.data)
-                            if "data" in data and "k" in data["data"]:
+                            stream_name = data.get("stream", "")
+
+                            # [V16.1] CVD 실시간 틱 처리 (@aggTrade)
+                            if "@aggTrade" in stream_name:
+                                trade = data["data"]
+                                binance_sym = trade["s"].lower()
+                                ccxt_sym = binance_to_ccxt.get(binance_sym)
+                                if ccxt_sym:
+                                    is_maker = trade["m"]
+                                    qty = float(trade["q"])
+                                    # m=True(메이커가 매도자=시장가 매수) -> 음수 누적? 아니오
+                                    # 바이낸스에서 m=True는 Maker가 Buyer측(매도자가 시장가로 긁음)을 의미하므로 Sell Pressure (Delta < 0)
+                                    # m=False는 Maker가 Seller측(매수자가 시장가로 긁음)을 의미하므로 Buy Pressure (Delta > 0)
+                                    delta = -qty if is_maker else qty
+                                    cvd_data[ccxt_sym] = (
+                                        cvd_data.get(ccxt_sym, 0.0) + delta
+                                    )
+
+                            # 기존 캔들 처리 (@kline)
+                            elif "data" in data and "k" in data["data"]:
                                 # 캔들 페이로드 파싱
                                 kline = data["data"]["k"]
                                 is_closed = kline["x"]  # 캔들 마감 여부

@@ -217,7 +217,7 @@ class ExecutionEngine:
         except Exception as e:
             logger.warning(f"[{symbol}] 레버리지 설정 중 정보: {e}")
 
-    async def place_market_entry_order(
+    async def place_chasing_entry_order(
         self,
         symbol: str,
         side: str,  # 'buy' or 'sell'
@@ -227,7 +227,8 @@ class ExecutionEngine:
         sl_dist: float = 0.0,
     ) -> bool:
         """
-        선물 시장에 신규 포지션을 시장가(Market)로 즉각 진입합니다.
+        [V16.1] 시장가(Market) 대신 포스트 온리(Maker) 지정가로 호가를 추격(Chasing)하며 진입합니다.
+        3.5초 내 미체결 시 취소하고 최우선 호가로 재생성하여 수수료(Taker Fee)를 절약합니다.
         체결 성공 시, 실제 체결가(average price)를 기반으로 TP/SL 주문을 연이어 등록합니다.
         """
         if self.is_halted:
@@ -268,7 +269,7 @@ class ExecutionEngine:
 
         try:
             logger.info(
-                f"[{symbol}] 선물 시장가({side}) 즉각 진입 시도. "
+                f"[{symbol}] 스마트 지정가(Chasing) 진입 시도. "
                 f"수량: {amount} (DRY_RUN: {settings.DRY_RUN})"
             )
 
@@ -279,25 +280,105 @@ class ExecutionEngine:
             average_price = 0.0
 
             if not settings.DRY_RUN:
-                # 시장가 진입
-                entry_order = await self.exchange.create_order(
-                    symbol=symbol,
-                    type="market",
-                    side=side,
-                    amount=amount,
-                )
+                max_retries = 10
+                remaining_amount = amount
+                total_cost = 0.0
+                filled_amount = 0.0
 
-                # 거래소에서 방금 체결한 주문을 다시 조회하여 정확한 average price를 추출
-                order_id = entry_order.get("id")
-                filled_order = await self.exchange.fetch_order(order_id, symbol)
+                for attempt in range(max_retries):
+                    try:
+                        # 1. 호가창(Orderbook) 조회하여 최우선 호가 파악
+                        ob = await self.exchange.fetch_order_book(symbol, limit=5)
+                        if side == "buy":
+                            target_price = float(ob["bids"][0][0])
+                        else:
+                            target_price = float(ob["asks"][0][0])
 
-                average_price = float(
-                    filled_order.get("average", filled_order.get("price", 0.0))
-                )
-                if average_price == 0.0:
-                    trades = await self.exchange.fetch_my_trades(symbol, limit=1)
-                    if trades:
-                        average_price = float(trades[-1].get("price", 0.0))
+                        price_str = self.exchange.price_to_precision(
+                            symbol, target_price
+                        )
+                        amount_str = self.exchange.amount_to_precision(
+                            symbol, remaining_amount
+                        )
+
+                        if float(amount_str) <= 0:
+                            break
+
+                        # 2. Limit Maker (Post-Only) 주문 제출
+                        logger.info(
+                            f"[{symbol}] Chasing {attempt + 1}/{max_retries}: {target_price}에 Post-Only 지정가 {amount_str}개 제출"
+                        )
+                        entry_order = await self.exchange.create_order(
+                            symbol=symbol,
+                            type="limit",
+                            side=side,
+                            amount=float(amount_str),
+                            price=float(price_str),
+                            params={"timeInForce": "GTX"},  # Post-Only 강제
+                        )
+                        order_id = entry_order.get("id")
+
+                        # 3. 3.5초 대기
+                        await asyncio.sleep(3.5)
+
+                        # 4. 체결 상태 확인
+                        fetched_order = await self.exchange.fetch_order(
+                            order_id, symbol
+                        )
+                        status = fetched_order.get("status")
+                        filled = float(fetched_order.get("filled", 0.0))
+
+                        if filled > 0:
+                            avg = float(
+                                fetched_order.get(
+                                    "average", fetched_order.get("price", 0.0)
+                                )
+                            )
+                            if avg > 0:
+                                total_cost += filled * avg
+                                filled_amount += filled
+
+                        if status == "closed":
+                            break
+                        elif status in ["open", "canceled", "rejected"]:
+                            if status == "open":
+                                try:
+                                    await self.exchange.cancel_order(order_id, symbol)
+                                except Exception as e:
+                                    logger.warning(
+                                        f"[{symbol}] 주문 취소 중 예외 발생 (이미 체결됨?): {e}"
+                                    )
+
+                            # 취소 후 상태 한 번 더 갱신하여 취소 직전 체결분 마저 합산
+                            fetched_after = await self.exchange.fetch_order(
+                                order_id, symbol
+                            )
+                            final_filled = float(fetched_after.get("filled", 0.0))
+
+                            newly_filled = final_filled - filled
+                            if newly_filled > 0:
+                                avg2 = float(
+                                    fetched_after.get(
+                                        "average", fetched_after.get("price", 0.0)
+                                    )
+                                )
+                                if avg2 > 0:
+                                    total_cost += newly_filled * avg2
+                                    filled_amount += newly_filled
+
+                            remaining_amount = amount - filled_amount
+                            if (
+                                remaining_amount <= float(amount_str) * 0.05
+                            ):  # 95% 이상 체결되면 종료
+                                break
+                    except Exception as e:
+                        logger.error(f"[{symbol}] Chasing 루프 내 에러: {e}")
+                        await asyncio.sleep(2)  # 밴 방지
+
+                if filled_amount > 0:
+                    average_price = total_cost / filled_amount
+                else:
+                    average_price = 0.0
 
             else:
                 # DRY RUN 일 경우 현재 시장가(Ticker)를 체결가로 임시 가정
@@ -306,13 +387,13 @@ class ExecutionEngine:
 
             if average_price <= 0:
                 logger.error(
-                    f"[{symbol}] 시장가 체결 단가를 확인할 수 없습니다! TP/SL을 전송할 수 없습니다."
+                    f"[{symbol}] 지정가 Chasing을 완주했으나 단 한 주도 체결되지 않거나 단가를 확인할 수 없습니다! 진입 포기."
                 )
                 return False
 
             # 체결 완료 로깅 및 알림
             logger.info(
-                f"🎯 [{symbol}] 시장가 진입 체결 성공! 평균 단가: {average_price:.4f}. TP/SL 즉각 계산 및 전송 개시."
+                f"🎯 [{symbol}] 스마트 메이커(Post-Only) 진입 성공! 평균 단가: {average_price:.4f}. TP/SL 즉각 계산 및 전송 개시."
             )
 
             # V12: 진입 단가에서 ATR 거리(tp_dist, sl_dist)만큼 가감산
