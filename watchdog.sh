@@ -37,6 +37,10 @@ while true; do
         # 의도된 재시작 (텔레그램 /restart 커맨드)
         echo "[$TIMESTAMP] 사용자의 /restart 명령어 감지. 3초 후 재기동..."
         sleep 3
+    elif [ $EXIT_CODE -eq 143 ]; then
+        # 배포 등 외부 요인에 의한 강제 종료 (SIGTERM)
+        echo "[$TIMESTAMP] 외부 종료 신호(SIGTERM, 143) 수신. 배포 또는 강제 중단으로 간주하여 재시작 알림 생략..."
+        sleep 5
     else
         # 비정상 종료 (크래시)
         RESTART_COUNT=$((RESTART_COUNT + 1))
