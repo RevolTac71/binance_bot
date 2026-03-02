@@ -33,6 +33,9 @@ class ExecutionEngine:
         # { "SOL/USDT:USDT": datetime.utcnow() + cooldown_minutes }
         self.loss_cooldown: dict = {}
 
+        # 봇 재시작 없이 특정 심볼을 무시하는 블랙리스트
+        self.blacklist: set = set()
+
     def _snapshot_params(self) -> str:
         """
         거래 시점의 전략 파라미터를 JSON 문자열로 직렬화하여 반환합니다.
@@ -233,9 +236,25 @@ class ExecutionEngine:
             )
             return False
 
+        # 블랙리스트 체크
+        if symbol in self.blacklist:
+            logger.info(
+                f"[{symbol}] 블랙리스트(차단)에 등록된 종목이므로 진입을 스킵합니다."
+            )
+            return False
+
         # 포지션이 이미 존재하면 추가 진입 억제
         if symbol in self.active_positions:
             logger.info(f"[{symbol}] 이미 활성 포지션이 존재합니다. 진입 생략.")
+            return False
+
+        # 포트폴리오 동시 진입 최대 개수(MAX_TRADES) 체크
+        max_trades = getattr(settings, "MAX_TRADES", 3)
+        if len(self.active_positions) >= max_trades:
+            logger.info(
+                f"[{symbol}] 전체 활성 포지션 한도 도달 "
+                f"(현재 {len(self.active_positions)}/최대 {max_trades}). 연쇄 손실 방지를 위해 진입 생략."
+            )
             return False
 
         # 연속 손실 쿨다운 체크

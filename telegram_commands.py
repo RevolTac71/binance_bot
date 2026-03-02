@@ -49,23 +49,24 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/resume — 일시정지 해제\n"
         "/panic — 비상! 전량 시장가 청산 후 정지\n"
         "/restart — 봇 프로세스 강제 재부팅\n\n"
-        "── 파라미터 변경 (/setparam 키 값) ──\n"
-        "/setparam k [숫자] — K-Value (VWAP 밴드 너비, 기본 2.0)\n"
-        "/setparam risk [숫자] — 1회 증거금 비율 (예: 0.1 = 10%)\n"
-        "/setparam leverage [정수] — 레버리지 배수\n"
-        "/setparam timeframe [값] — 캔들봉 (1m/3m/5m/15m, 변경 후 /restart!)\n"
-        "/setparam time_exit [분] — 최대 포지션 보유 시간 (0=비활성)\n"
-        "/setparam vol_mult [숫자] — 거래량 스파이크 배수 (기본 1.5)\n"
-        "/setparam atr_ratio [숫자] — 단/장기 ATR 비율 필터 (기본 1.2, 낮출수록 진입 완화)\n"
-        "/setparam adx [숫자] — ADX 추세 강도 기준 (기본 20.0, 낮출수록 더 많이 진입)\n"
-        "/setparam chandelier [숫자] — 샹들리에 ATR 승수 (기본 2.0, 높을수록 넓은 트레일링)\n"
-        "/setparam sl [숫자] — SL 배율 × ATR (기본 3.0, 클수록 넓은 손절)\n"
-        "/setparam tp [숫자] — TP 배율 × ATR (기본 6.0, R:R = tp/sl)\n"
-        "/setparam cooldown [분] — 손실 후 동일종목 쿨다운 (기본 15분)\n"
-        "/setparam mode [dry|real] — 모의/실전 모드 전환\n\n"
-        "── 레거시 명령어 (동일 기능) ──\n"
-        "/leverage [N] / /k_value [N] / /risk [N]\n"
-        "/timeframe [N] / /time_exit [N] / /mode [N]\n"
+        "── 파라미터 변경: /setparam [키] [값] ──\n"
+        "k          — K-Value VWAP 밴드 너비 (float, 기본 2.0)\n"
+        "risk       — 1회 증거금 비율 (float, 예: 0.1 = 10%)\n"
+        "leverage   — 레버리지 배수 (int)\n"
+        "timeframe  — 캔들봉 (1m/3m/5m/15m, 변경 후 /restart!)\n"
+        "time_exit  — 최대 보유 시간 분 (int, 0=비활성)\n"
+        "max_trades — (NEW) 동시 진입 한도 (int, 기본 3)\n"
+        "mtf_filter — (NEW) 상위 프레임 필터 (on/off, 기본 on)\n"
+        "vol_mult   — 거래량 스파이크 배수 (float, 기본 1.5)\n"
+        "atr_ratio  — 단/장기 ATR 비율 필터 (float, 기본 1.2)\n"
+        "sl         — SL 배율 ×ATR (float, 기본 3.0 = 넓은 손절)\n"
+        "tp         — TP 배율 ×ATR (float, 기본 6.0, R:R=tp/sl)\n"
+        "cooldown   — 손실 후 동일종목 쿨다운 분 (int, 기본 15)\n"
+        "mode       — dry 또는 real\n\n"
+        "── (NEW) 개별 종목 제어 ──\n"
+        "/ignore [코인] — 블랙리스트 추가 (진입 차단, 예: /ignore LINK/USDT)\n"
+        "/allow [코인]  — 블랙리스트 제거 (진입 허용, 예: /allow LINK/USDT)\n"
+        "/close [코인]  — 특정 코인 시장가 즉시 청산 (예: /close BTC/USDT)\n"
     )
     await update.message.reply_text(msg)
 
@@ -146,7 +147,11 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Time Exit : {getattr(settings, 'TIME_EXIT_MINUTES', 0)}분\n"
         f"Vol Mult  : {getattr(settings, 'VOL_MULT', 1.5)}\n"
         f"ATR Ratio : {getattr(settings, 'ATR_RATIO_MULT', 1.2)}\n"
-        f"Cooldown  : {getattr(settings, 'LOSS_COOLDOWN_MINUTES', 15)}분\n\n"
+        f"Cooldown  : {getattr(settings, 'LOSS_COOLDOWN_MINUTES', 15)}분\n"
+        f"Max Trades: {getattr(settings, 'MAX_TRADES', 3)}개\n"
+        f"MTF Filter: {'ON' if getattr(settings, 'MTF_FILTER', True) else 'OFF'}\n\n"
+        f"── 블랙리스트 (차단됨) ──\n"
+        f"{', '.join(execution.blacklist) if execution.blacklist else '없음'}\n\n"
         f"── 현재 포지션 (실제 거래소) ──\n"
         f"{position_details}"
     )
@@ -300,12 +305,16 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "atr_ratio": ("ATR_RATIO_MULT", float, "ATR_RATIO_MULT"),
             "adx": ("ADX_THRESHOLD", float, "ADX_THRESHOLD"),
             "chandelier": ("CHANDELIER_MULT", float, "CHANDELIER_MULT"),
+            "chandel": ("CHANDELIER_MULT", float, "CHANDELIER_MULT"),
             "sl": ("SL_MULT", float, "SL_MULT"),
             "sl_mult": ("SL_MULT", float, "SL_MULT"),
             "tp": ("TP_MULT", float, "TP_MULT"),
             "tp_mult": ("TP_MULT", float, "TP_MULT"),
             "cooldown": ("LOSS_COOLDOWN_MINUTES", int, "LOSS_COOLDOWN_MINUTES"),
-            "mode": ("DRY_RUN", str, "DRY_RUN"),  # dry 또는 real
+            "max": ("MAX_TRADES", int, "MAX_TRADES"),
+            "max_trades": ("MAX_TRADES", int, "MAX_TRADES"),
+            "mtf_filter": (None, None, None),  # Custom logic
+            "mode": (None, None, None),  # dry 또는 real
         }
 
         if key not in mapping:
@@ -316,13 +325,21 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         attr_name, cast_fn, env_key = mapping[key]
 
-        # mode 키는 특별 처리
+        # mode 및 mtf_filter 키는 특별 처리
         if key == "mode":
-            is_dry = raw_val.lower() in ("dry", "dry_run", "true")
+            is_dry = raw_val.lower() in ("dry", "dry_run", "true", "1")
             settings.DRY_RUN = is_dry
             update_env_variable("DRY_RUN", str(is_dry).capitalize())
             label = "모의투자(DRY_RUN)" if is_dry else "실전매매(REAL)"
-            await update.message.reply_text(f"✅ 매매 모드 → {label} 전환 완료")
+            await update.message.reply_text(f"✅ 매매 모드 → {label} 설정 완료")
+            return
+
+        elif key in ("mtf_filter", "mtf"):
+            is_on = raw_val.lower() in ("on", "true", "1", "yes")
+            settings.MTF_FILTER = is_on
+            update_env_variable("MTF_FILTER", str(is_on).capitalize())
+            label = "ON (필터 켜짐)" if is_on else "OFF (필터 꺼짐 - 횡보장 모드)"
+            await update.message.reply_text(f"✅ MTF 필터 → {label} 설정 완료")
             return
 
         # 일반 키 처리 (변경 전 값을 먼저 읽어둠)
@@ -343,6 +360,104 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except ValueError:
         await update.message.reply_text(f"❌ [{key}]에 올바른 형식의 값을 입력하세요.")
+
+
+async def ignore_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_admin(update):
+        return
+    execution = context.bot_data["execution"]
+    if not context.args:
+        await update.message.reply_text(
+            "💡 사용법: /ignore [코인명]\n예) /ignore LINK/USDT"
+        )
+        return
+    coin = context.args[0].upper()
+    if not coin.endswith("USDT"):
+        coin += "USDT"  # 편의성을 위해 USDT 붙여줌, ccxt 포맷상 /USDT나 단순 문자열 처리에 주의. 바이낸스는 일단 매핑 필요.
+        # 실제 Binance ccxt symbol 형식은 "BTC/USDT" 등. 사용자가 'LINK'라고 치면 'LINK/USDT'로.
+        if "/" not in coin:
+            coin = coin.replace("USDT", "/USDT")
+    execution.blacklist.add(coin)
+    await update.message.reply_text(
+        f"✅ {coin} 코인이 블랙리스트에 추가되어 신규 진입이 차단됩니다."
+    )
+
+
+async def allow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_admin(update):
+        return
+    execution = context.bot_data["execution"]
+    if not context.args:
+        await update.message.reply_text(
+            "💡 사용법: /allow [코인명]\n예) /allow LINK/USDT"
+        )
+        return
+    coin = context.args[0].upper()
+    if not coin.endswith("USDT"):
+        coin += "USDT"
+        if "/" not in coin:
+            coin = coin.replace("USDT", "/USDT")
+    if coin in execution.blacklist:
+        execution.blacklist.remove(coin)
+        await update.message.reply_text(
+            f"✅ {coin} 코인이 블랙리스트에서 제거되었습니다. 진입이 허용됩니다."
+        )
+    else:
+        await update.message.reply_text(f"❌ {coin} 코인은 블랙리스트에 없습니다.")
+
+
+async def close_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_admin(update):
+        return
+    execution = context.bot_data["execution"]
+    if not context.args:
+        await update.message.reply_text(
+            "💡 사용법: /close [코인명]\n예) /close LINK/USDT"
+        )
+        return
+
+    coin = context.args[0].upper()
+    if not coin.endswith("USDT"):
+        coin += "USDT"
+        if "/" not in coin:
+            coin = coin.replace("USDT", "/USDT")
+
+    await update.message.reply_text(f"🗑️ [{coin}] 코인의 시장가 청산을 시도합니다...")
+    try:
+        # 1. 펜딩 주문(조건부 SL 포함) 취소
+        try:
+            raw_sym = execution.exchange.market(coin)["id"]
+            await execution.exchange.cancel_all_orders(coin)
+            # Algo 주문 취소 로직도 포함하면 좋지만 심플하게
+        except Exception as cancel_e:
+            logger.warning(
+                f"/{coin} 미체결 주문 취소 실패 (존재하지 않거나 에러): {cancel_e}"
+            )
+
+        # 2. 시장가 청산
+        positions = await execution.exchange.fetch_positions()
+        closed = False
+        for p in positions:
+            if p["symbol"] == coin:
+                amt = float(p.get("contracts", 0))
+                if amt > 0:
+                    side = "sell" if p["side"] == "long" else "buy"
+                    if not settings.DRY_RUN:
+                        await execution.exchange.create_order(
+                            coin, "market", side, amt, params={"reduceOnly": True}
+                        )
+                    closed = True
+                    break
+
+        if closed:
+            await update.message.reply_text(f"✅ [{coin}] 전량 시장가 청산 완료")
+        else:
+            await update.message.reply_text(
+                f"❌ [{coin}] 활성 포지션을 찾을 수 없습니다."
+            )
+    except Exception as e:
+        logger.error(f"개별 종목 {coin} 청산 중 에러: {e}")
+        await update.message.reply_text(f"❌ 청산 중 에러 발생: {e}")
 
 
 def setup_telegram_bot(execution_engine):
@@ -369,6 +484,9 @@ def setup_telegram_bot(execution_engine):
     application.add_handler(CommandHandler("restart", restart_cmd))
     application.add_handler(CommandHandler("panic", panic_cmd))
     application.add_handler(CommandHandler("setparam", setparam_cmd))
+    application.add_handler(CommandHandler("ignore", ignore_cmd))
+    application.add_handler(CommandHandler("allow", allow_cmd))
+    application.add_handler(CommandHandler("close", close_cmd))
 
     logger.info("텔레그램 Interactive 커맨더(Poller) 세팅이 완료되었습니다.")
     return application

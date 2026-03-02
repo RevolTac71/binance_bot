@@ -519,8 +519,10 @@ class StrategyEngine:
             # 횡보장: 평균 회귀(역추세) 로직 → RSI 과매도/과매수 + VWAP 밴드 반전
             # ★ 엄격한 HTF 방향 필터: BULL이면 롱만 허용 / BEAR이면 숏만 허용
             #   → NEUTRAL(EMA가 근접한 과도기)에서는 진입하지 않음
-            long_htf_ok = htf_bias == "BULL"
-            short_htf_ok = htf_bias == "BEAR"
+            # (MTF_FILTER가 꺼져있으면 횡보장에서 아무방향이나 진입 허용)
+            mtf_filter = getattr(settings, "MTF_FILTER", True)
+            long_htf_ok = (htf_bias == "BULL") if mtf_filter else True
+            short_htf_ok = (htf_bias == "BEAR") if mtf_filter else True
 
             if (
                 long_htf_ok
@@ -556,8 +558,18 @@ class StrategyEngine:
 
         else:  # TREND 장세: 모멘텀 추종 로직
             # 추세장: HTF Bias와 MACD 모멘텀이 모두 일치할 때만 진입
-            long_htf_ok = (htf_bias == "BULL") and (momentum == "BULLISH")
-            short_htf_ok = (htf_bias == "BEAR") and (momentum == "BEARISH")
+            # (MTF_FILTER가 꺼져있으면 추세 필터 무시)
+            mtf_filter = getattr(settings, "MTF_FILTER", True)
+            long_htf_ok = (
+                ((htf_bias == "BULL") and (momentum == "BULLISH"))
+                if mtf_filter
+                else True
+            )
+            short_htf_ok = (
+                ((htf_bias == "BEAR") and (momentum == "BEARISH"))
+                if mtf_filter
+                else True
+            )
 
             if (
                 long_htf_ok

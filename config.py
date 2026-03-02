@@ -102,6 +102,13 @@ class Config:
     # 동일 방향(롱 또는 숏) 포지션이 이 개수 이상이면 추가 진입 차단
     MAX_CONCURRENT_SAME_DIR = int(os.getenv("MAX_CONCURRENT_SAME_DIR", "2"))
 
+    # 전체 최대 동시 진입 허용 개수 (알트코인 연쇄 손절 방지용)
+    MAX_TRADES = int(os.getenv("MAX_TRADES", "3"))
+
+    # ── V16 상위 프레임 필터(MTF) 온오프 스위치 ────────────────────────────
+    # 강세장/횡보장에 따라 MTF 필터 켜고 끄기
+    MTF_FILTER = os.getenv("MTF_FILTER", "True").lower() == "true"
+
     # Dry Run Mode (True면 실제 매매하지 않고 DB 기록만 함)
     DRY_RUN = os.getenv("DRY_RUN", "True").lower() == "true"
 
