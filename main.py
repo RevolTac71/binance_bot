@@ -323,8 +323,8 @@ async def process_closed_kline(
                 f"{side.upper()} (qty={qty}, price={market_price})"
             )
 
-            # 4. 시장가 즉시 진입
-            await execution.place_market_entry_order(
+            # 4. 추격 매수(Chasing) 방식 진입 시도
+            await execution.place_chasing_entry_order(
                 symbol=symbol,
                 side=side,
                 amount=qty,
