@@ -437,9 +437,9 @@ class StrategyEngine:
 
         # ── STEP 1: Session Filter ────────────────────────────────────────
         current_time = df.index[-1] if df.index.name == "datetime" else current.name
-        today_date = current_time.date()
-        if current_time.hour < 9:
-            today_date = (current_time - pd.Timedelta(days=1)).date()
+        today_date = (
+            current_time.date()
+        )  # UTC 기준이므로 00:00 UTC에 VWAP 리셋과 정확하게 일치함
 
         bars_since_reset = len(df[df.index.date == today_date])
         if bars_since_reset < self.session_filter_bars:

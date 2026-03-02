@@ -5,7 +5,7 @@ import aiohttp
 from datetime import datetime, timezone, timedelta
 import pandas as pd
 from config import logger, settings
-from database import check_db_connection, Trade, AsyncSessionLocal
+from database import check_db_connection, Trade, MarketSnapshot, AsyncSessionLocal
 from data_pipeline import DataPipeline
 from strategy import StrategyEngine, PortfolioState
 from risk_management import RiskManager
@@ -14,20 +14,13 @@ from notification import notifier
 from telegram_commands import setup_telegram_bot
 
 
-def get_today_0900_kst_timestamp() -> int:
+def get_today_0000_utc_timestamp() -> int:
     """
-    현재 시각을 기준으로 가장 최근의 당일 09:00 KST (00:00 UTC) 타임스탬프(ms)를 계산합니다.
-    (V15.0 Anchored VWAP 계산 베이스 타임)
+    현재 시각을 기준으로 가장 최근의 당일 00:00 UTC 타임스탬프(ms)를 계산합니다.
+    (V16.2 시간축 혼동 방지를 위해 UTC 자정 기준으로 통일)
     """
     now_utc = datetime.now(timezone.utc)
-    kst_offset = timedelta(hours=9)
-    now_kst = now_utc + kst_offset
-
-    target_kst = now_kst.replace(hour=9, minute=0, second=0, microsecond=0)
-    if now_kst < target_kst:
-        target_kst -= timedelta(days=1)
-
-    target_utc = target_kst - kst_offset
+    target_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
     return int(target_utc.timestamp() * 1000)
 
 
@@ -72,6 +65,10 @@ cvd_data: dict[str, float] = {}
 # 캔들 마감 시점의 CVD 스냅샷 저장 (추세 판단용)
 cvd_history: dict[str, list] = {}
 
+# [V16.2 ML] 호가창 불균형(Imbalance) TWAP 내역 및 스냅샷 큐
+imbalance_history: dict[str, list] = {}
+snapshot_queue: list[dict] = []
+
 
 async def warm_up_data(symbols: list, pipeline: DataPipeline):
     """
@@ -80,7 +77,7 @@ async def warm_up_data(symbols: list, pipeline: DataPipeline):
     """
     global df_map, htf_df_1h, htf_df_15m
 
-    since_ts = get_today_0900_kst_timestamp() - (
+    since_ts = get_today_0000_utc_timestamp() - (
         100 * 60 * 1000
     )  # 09:00부터지만, 지표들 계산을 위해 100봉 정도 더 여유있게 가져옴
 
@@ -183,20 +180,92 @@ async def process_closed_kline(
         else:
             df.loc[new_dt] = new_row.iloc[0]
 
-        # 최대 1500개 유지 (당일 1440개 커버)
-        df_map[symbol] = df.tail(1500)
+        # 최대 500개 유지 (메모리 롤링 최적화)
+        df_map[symbol] = df.tail(500)
         curr_df = df_map[symbol]
 
         if is_funding_fee_cutoff():
             # 펀딩비 시간대면 캔들 저장만 하고 진입은 하지 않음
             return
 
-        # 1. 3분봉 지표 연산
-        df_ind = pipeline.calculate_vwap_indicators(curr_df.copy())
+        # 1. 3분봉 지표 연산 (비동기 블로킹 방지를 위해 스레드 위임)
+        df_ind = await asyncio.to_thread(
+            pipeline.calculate_vwap_indicators, curr_df.copy()
+        )
 
         # [V16 MTF] 상위 타임프레임 데이터 참조 (htf_refresh_loop가 주기적으로 갱신)
         df_1h = htf_df_1h.get(symbol)
         df_15m = htf_df_15m.get(symbol)
+
+        # [V16.2 ML] Snapshot Feature 수집 및 Queue 적재
+        imbal_list = imbalance_history.get(symbol, [])
+        twap_imbalance = sum(imbal_list) / len(imbal_list) if imbal_list else 0.5
+
+        funding_rate = await pipeline.fetch_funding_rate(symbol)
+        fr_match = 1 if funding_rate > 0 else (-1 if funding_rate < 0 else 0)
+
+        # 최신 지표 파싱 (안전하게 get 사용, 없을 시 0.0)
+        curr_atr_14 = float(df_ind.iloc[-1].get("ATR_14", 0))
+        curr_atr_200 = float(df_ind.iloc[-1].get("ATR_200", 0))
+        curr_rsi = float(df_ind.iloc[-1].get("RSI_14", 50))
+        curr_bb_width = float(
+            df_ind.iloc[-1].get("Upper_Band", 0) - df_ind.iloc[-1].get("Lower_Band", 0)
+        )
+
+        macd_h = (
+            float(df_15m.iloc[-1].get("MACD_H", 0))
+            if df_15m is not None and not df_15m.empty
+            else 0.0
+        )
+        adx_14 = (
+            float(df_15m.iloc[-1].get("ADX_14", 0))
+            if df_15m is not None and not df_15m.empty
+            else 0.0
+        )
+
+        curr_price = float(df_ind.iloc[-1]["close"])
+        ema_1h_dist = (
+            float(
+                (curr_price - df_1h.iloc[-1].get("EMA_50", curr_price))
+                / df_1h.iloc[-1].get("EMA_50", curr_price)
+            )
+            if df_1h is not None and not df_1h.empty
+            else 0.0
+        )
+        ema_15m_dist = (
+            float(
+                (curr_price - df_15m.iloc[-1].get("EMA_50", curr_price))
+                / df_15m.iloc[-1].get("EMA_50", curr_price)
+            )
+            if df_15m is not None and not df_15m.empty
+            else 0.0
+        )
+
+        current_cvd = cvd_data.get(symbol, 0.0)
+        hist = cvd_history.get(symbol, [])
+        cvd_15m_sum = sum(hist[-5:]) if len(hist) > 0 else current_cvd
+        cvd_slope = (current_cvd - hist[-1]) if len(hist) > 0 else 0.0
+
+        snapshot = {
+            "timestamp": new_dt.to_pydatetime()
+            if hasattr(new_dt, "to_pydatetime")
+            else new_dt,
+            "symbol": symbol,
+            "rsi": curr_rsi,
+            "macd_hist": macd_h,
+            "adx": adx_14,
+            "atr_14": curr_atr_14,
+            "atr_200": curr_atr_200,
+            "bb_width": curr_bb_width,
+            "ema_1h_dist": ema_1h_dist,
+            "ema_15m_dist": ema_15m_dist,
+            "cvd_5m_sum": current_cvd,
+            "cvd_15m_sum": float(cvd_15m_sum),
+            "cvd_delta_slope": float(cvd_slope),
+            "bid_ask_imbalance": float(twap_imbalance),
+            "funding_rate_match": fr_match,
+        }
+        snapshot_queue.append(snapshot)
 
         # [V16.1 CVD] 실시간 누적 거래량 델타 추세 연산
         current_cvd = cvd_data.get(symbol, 0.0)
@@ -324,6 +393,56 @@ async def htf_refresh_loop(symbols: list, pipeline: DataPipeline):
             updated_count += 1
 
         logger.info(f"[HTF Refresh] {updated_count}/{len(symbols)}종목 HTF 갱신 완료.")
+
+
+async def orderbook_twap_loop(symbols: list, pipeline: DataPipeline):
+    """
+    [V16.2 ML] 매 5초 단위로 15개 종목의 오더북 Imbalance를 폴링하여
+    지속적으로 기록해 두고, 최근 6회(30초)의 TWAP을 산출하기 위한 메인 루프.
+    """
+    global imbalance_history
+    while True:
+        try:
+            tasks = [pipeline.fetch_orderbook_imbalance(sym) for sym in symbols]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for sym, res in zip(symbols, results):
+                if isinstance(res, Exception):
+                    continue
+                hist = imbalance_history.setdefault(sym, [])
+                hist.append(res)
+                # 최근 30초 분량(폴링 주기 5초 => 6개)만 남기고 롤링
+                if len(hist) > 6:
+                    hist.pop(0)
+        except Exception as e:
+            logger.error(f"[Orderbook TWAP] 오류: {e}")
+        await asyncio.sleep(5)
+
+
+async def snapshot_flush_loop():
+    """
+    [V16.2 ML] DB 쓰기 병목(I/O 부하) 방지를 위해 큐에 쌓인
+    전 종목의 MarketSnapshot 데이터를 단일 트랜잭션으로 bulk_insert 합니다.
+    """
+    global snapshot_queue
+    while True:
+        await asyncio.sleep(10)  # 10초마다 큐 점검
+        if len(snapshot_queue) > 0:
+            # 캔들 마감이 종목별로 동시 다발적으로 이뤄지므로 전부 찰 때까지 잠시(3초) 대기
+            await asyncio.sleep(3)
+
+            items_to_insert = snapshot_queue[:]
+            snapshot_queue.clear()
+
+            try:
+                # SQLAlchemy ORM add_all을 활용한 Batch Insert
+                async with AsyncSessionLocal() as session:
+                    records = [MarketSnapshot(**item) for item in items_to_insert]
+                    session.add_all(records)
+                    await session.commit()
+                # 불필요한 로그 생략 (정상 작동 시 조용히)
+            except Exception as e:
+                logger.error(f"[Snapshot Bulk Insert] 처리 실패: {e}")
 
 
 async def chandelier_monitoring_loop(
@@ -491,9 +610,11 @@ async def websocket_loop(
 
     ws_url = "wss://fstream.binance.com/stream?streams=" + "/".join(streams)
 
-    # [V16] HTF 주기 갱신 루프를 독립 태스크로 가동
+    # [V16] HTF 주기 갱신 루프 및 ML TWAP 루프 가동
     asyncio.create_task(htf_refresh_loop(target_symbols, pipeline))
-    logger.info("[V16] HTF 15분 갱신 루프 태스크 가동.")
+    asyncio.create_task(orderbook_twap_loop(target_symbols, pipeline))
+    asyncio.create_task(snapshot_flush_loop())
+    logger.info("[V16] 백그라운드 태스크(HTF / TWAP / Snapshot Flush) 가동.")
 
     while True:
         try:

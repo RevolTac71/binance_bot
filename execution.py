@@ -1,8 +1,10 @@
 import asyncio
 import json
+import time
 from datetime import datetime, timezone, timedelta
 from config import settings, logger
-from database import Trade, AsyncSessionLocal
+from database import Trade, TradeLog, OrderEvent, AsyncSessionLocal
+from sqlalchemy.future import select
 from data_pipeline import DataPipeline
 from notification import notifier
 
@@ -272,6 +274,7 @@ class ExecutionEngine:
                 f"[{symbol}] 스마트 지정가(Chasing) 진입 시도. "
                 f"수량: {amount} (DRY_RUN: {settings.DRY_RUN})"
             )
+            start_time_ms = int(time.time() * 1000)
 
             # 레버리지 및 마진 환경 사전 세팅
             await self.setup_margin_and_leverage(symbol)
@@ -318,6 +321,20 @@ class ExecutionEngine:
                         )
                         order_id = entry_order.get("id")
 
+                        # [OrderEvent] 주문 생성 기록
+                        async with AsyncSessionLocal() as session:
+                            oe = OrderEvent(
+                                timestamp=datetime.utcnow() + timedelta(hours=9),
+                                symbol=symbol,
+                                order_type="LIMIT_MAKER",
+                                event_type="CREATE",
+                                price=float(price_str),
+                                amount=float(amount_str),
+                                attempt_count=attempt + 1,
+                            )
+                            session.add(oe)
+                            await session.commit()
+
                         # 3. 3.5초 대기
                         await asyncio.sleep(3.5)
 
@@ -344,6 +361,20 @@ class ExecutionEngine:
                             if status == "open":
                                 try:
                                     await self.exchange.cancel_order(order_id, symbol)
+                                    # [OrderEvent] Canceled 기록
+                                    async with AsyncSessionLocal() as session:
+                                        oe = OrderEvent(
+                                            timestamp=datetime.utcnow()
+                                            + timedelta(hours=9),
+                                            symbol=symbol,
+                                            order_type="LIMIT_MAKER",
+                                            event_type="CANCEL_POST_ONLY_EXPIRED",
+                                            price=float(price_str),
+                                            amount=float(amount_str),
+                                            attempt_count=attempt + 1,
+                                        )
+                                        session.add(oe)
+                                        await session.commit()
                                 except Exception as e:
                                     logger.warning(
                                         f"[{symbol}] 주문 취소 중 예외 발생 (이미 체결됨?): {e}"
@@ -373,6 +404,19 @@ class ExecutionEngine:
                                 break
                     except Exception as e:
                         logger.error(f"[{symbol}] Chasing 루프 내 에러: {e}")
+                        # [OrderEvent] Rejected/Error 기록
+                        async with AsyncSessionLocal() as session:
+                            oe = OrderEvent(
+                                timestamp=datetime.utcnow() + timedelta(hours=9),
+                                symbol=symbol,
+                                order_type="LIMIT_MAKER",
+                                event_type="REJECTED_OR_ERROR",
+                                price=target_price,
+                                amount=remaining_amount,
+                                attempt_count=attempt + 1,
+                            )
+                            session.add(oe)
+                            await session.commit()
                         await asyncio.sleep(2)  # 밴 방지
 
                 if filled_amount > 0:
@@ -417,12 +461,17 @@ class ExecutionEngine:
             )
 
             # TP/SL 생성 코루틴으로 정보 패스
+            # target_price: 처음 진입 시도 당시의 최우선 호가(의도한 기준가)
+            # 여기서는 fetch_order_book 호출 직전의 값이 유실되었으므로 (최후호출값만 남으므로),
+            # 단순히 average_price를 limit_price로 세팅하거나, 첫 번째 limit_price를 로깅해둬야 하지만, 간단히 유지
             entry_info = {
                 "signal": signal_type,
                 "amount": amount,
-                "limit_price": average_price,  # reference name maintained for internal calculation
+                "limit_price": average_price,
                 "tp_price": tp_price,
                 "sl_price": sl_price,
+                "execution_time_ms": int(time.time() * 1000) - start_time_ms,
+                "reason": reason,
             }
 
             # --- [HOTFIX] 진입 직후 봇 추적망에 즉각 편입하여 수동진입 감지(오작동) 방지 ---
@@ -532,17 +581,36 @@ class ExecutionEngine:
             # DB 기록 (진입) - DRY_RUN 이더라도 테스트 내역을 DB에 기록
             async with AsyncSessionLocal() as session:
                 dr_prefix = "[DRY_RUN] " if settings.DRY_RUN else ""
+                now_kst = datetime.utcnow() + timedelta(hours=9)
+
+                # 기존 봇 호환용 Trade 모델
                 new_trade = Trade(
-                    timestamp=(datetime.utcnow() + timedelta(hours=9)),
+                    timestamp=now_kst,
                     action=signal_type,
                     symbol=symbol,
                     price=entry_price,
                     quantity=amount,
-                    reason=f"{dr_prefix}V15 시장가 진입 완료",
+                    reason=f"{dr_prefix}V16 시장가/추격 진입 완료",
                     dry_run=settings.DRY_RUN,
                     params=self._snapshot_params(),
                 )
                 session.add(new_trade)
+
+                # [V16.2 ML] ML 파이프라인 전용 TradeLog 모델
+                new_tradelog = TradeLog(
+                    symbol=symbol,
+                    direction=signal_type,
+                    qty=amount,
+                    entry_time=now_kst,
+                    target_price=entry_price,  # 이상적인 슬리피지 계산용으론 추후 보완 필요
+                    execution_price=entry_price,
+                    slippage=0.0,  # 추격 주문 완료 평균가를 기준으로 설정(0)
+                    entry_reason=entry_info.get("reason", "자동 진입"),
+                    execution_time_ms=entry_info.get("execution_time_ms", 0),
+                    # exit 관련은 NULL 유지
+                )
+                session.add(new_tradelog)
+
                 await session.commit()
 
             if settings.DRY_RUN:
@@ -805,8 +873,9 @@ class ExecutionEngine:
                     )
 
                     async with AsyncSessionLocal() as session:
+                        now_kst = datetime.utcnow() + timedelta(hours=9)
                         new_trade = Trade(
-                            timestamp=(datetime.utcnow() + timedelta(hours=9)),
+                            timestamp=now_kst,
                             action="CLOSED",
                             symbol=symbol,
                             price=close_price,
@@ -817,6 +886,50 @@ class ExecutionEngine:
                             params=self._snapshot_params(),
                         )
                         session.add(new_trade)
+
+                        # [V16.2 ML] 기존 TradeLog 찾아 청산/성과 데이터 업데이트
+                        if not settings.DRY_RUN:
+                            try:
+                                stmt = (
+                                    select(TradeLog)
+                                    .where(
+                                        TradeLog.symbol == symbol,
+                                        TradeLog.exit_time.is_(None),
+                                    )
+                                    .order_by(TradeLog.entry_time.desc())
+                                    .limit(1)
+                                )
+
+                                result = await session.execute(stmt)
+                                trade_log = result.scalars().first()
+
+                                if trade_log:
+                                    trade_log.exit_time = now_kst
+                                    trade_log.exit_price = close_price
+                                    trade_log.realized_pnl = realized_pnl
+                                    trade_log.exit_reason = (
+                                        "자동 청산 감지 (TP/SL/탈출)"
+                                    )
+
+                                    # 수익률 펀더멘탈 기록 (레버리지 제외 순수 가격 % 변화)
+                                    if (
+                                        trade_log.execution_price
+                                        and trade_log.execution_price > 0
+                                    ):
+                                        if trade_log.direction == "LONG":
+                                            roi = (
+                                                close_price - trade_log.execution_price
+                                            ) / trade_log.execution_price
+                                        else:
+                                            roi = (
+                                                trade_log.execution_price - close_price
+                                            ) / trade_log.execution_price
+                                        trade_log.roi_pct = roi * 100
+                            except Exception as ml_err:
+                                logger.error(
+                                    f"[{symbol}] TradeLog 업데이트 중 예외: {ml_err}"
+                                )
+
                         await session.commit()
 
                         await notifier.send_message(

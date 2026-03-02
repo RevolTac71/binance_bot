@@ -245,3 +245,43 @@ class DataPipeline:
         # 심볼 추출
         top_symbols = [pair[0] for pair in sorted_pairs[:limit]]
         return top_symbols
+
+    # [V16.2 ML] 호가창 불균형(Imbalance) 조회
+    @with_exponential_backoff(max_retries=3)
+    async def fetch_orderbook_imbalance(self, symbol: str, depth: int = 10) -> float:
+        """
+        주어진 심볼의 최우선 호가 N개(depth)를 조회하여
+        (총 매수 잔량) / (총 매도 잔량 + 총 매수 잔량) 형태의 불균형 비율 산출
+        비율이 0.5 이상이면 매수벽 두터움, 미만이면 매도벽 두터움
+        """
+        try:
+            # fetch_order_book은 기본 10단계부터 반환, 가벼운 호출
+            orderbook = await self.exchange.fetch_order_book(symbol, limit=depth)
+            bids = orderbook["bids"]
+            asks = orderbook["asks"]
+
+            # [price, amount] 형태
+            bid_vol = sum([b[1] for b in bids])
+            ask_vol = sum([a[1] for a in asks])
+
+            total_vol = bid_vol + ask_vol
+            if total_vol == 0:
+                return 0.5
+
+            return bid_vol / total_vol
+        except Exception as e:
+            logger.warning(f"[{symbol}] 오더북 조회 실패: {e}")
+            return 0.5
+
+    # [V16.2 ML] 펀딩비 조회
+    @with_exponential_backoff(max_retries=3)
+    async def fetch_funding_rate(self, symbol: str) -> float:
+        """
+        현재 적용 혹은 고지된 펀딩비 (Funding Rate)를 조회합니다.
+        """
+        try:
+            funding = await self.exchange.fetch_funding_rate(symbol)
+            return float(funding.get("fundingRate", 0.0))
+        except Exception as e:
+            logger.warning(f"[{symbol}] 펀딩비 조회 실패: {e}")
+            return 0.0
