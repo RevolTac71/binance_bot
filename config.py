@@ -158,6 +158,7 @@ def get_logger(name="BinanceBot"):
         return logger
 
     logger.setLevel(logging.INFO)
+    logger.propagate = False  # Root 로거로의 전파 중복 차단
 
     class KSTFormatter(logging.Formatter):
         def converter(self, timestamp):
