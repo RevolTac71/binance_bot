@@ -196,13 +196,16 @@ class HFTDataPipeline:
 
     async def aggregator_loop(self):
         """매 정각 1분(00초)마다 스냅샷을 찍고 DB에 1 Row Insert"""
+        # 한국 시간 KST (UTC+9)
+        kst = timezone(timedelta(hours=9))
+
         while True:
-            now = datetime.utcnow()
+            now = datetime.now(tz=kst)
             # 정확히 다음 1분 정각까지 대기
             sleep_sec = 60 - now.second - (now.microsecond / 1_000_000)
             await asyncio.sleep(sleep_sec)
 
-            snapshot_time = datetime.utcnow().replace(second=0, microsecond=0)
+            snapshot_time = datetime.now(tz=kst).replace(second=0, microsecond=0)
 
             logger.info(f"[HFT] Creating 1-Min Snapshot at {snapshot_time}")
 
