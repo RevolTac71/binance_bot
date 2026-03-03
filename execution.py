@@ -196,21 +196,26 @@ class ExecutionEngine:
 
     async def setup_margin_and_leverage(self, symbol: str):
         """
-        바이낸스 선물에서 해당 코인의 레버리지를 1배로, 마진 모드를 격리(Isolated)로 설정합니다.
+        바이낸스 선물에서 해당 코인의 레버리지를 1배로, 마진 모드를 격리(Isolated)로 확실하게 고정합니다.
+        (CROSS로 포지션 진입 시 전체 계좌가 청산되는 것을 방지하기 위함)
         """
-        if settings.DRY_RUN:
-            return
-
+        # DRY_RUN 여부와 관계없이 실계좌의 안전장치인 마진 모드와 레버리지는 필수로 세팅합니다.
         try:
-            # 1. 격리 마진(Isolated) 설정
+            # 1. 격리 마진(Isolated) 강제 설정
             await self.exchange.set_margin_mode("isolated", symbol)
-            logger.info(f"[{symbol}] 마진 모드: 격리(Isolated) 설정 완료.")
+            logger.info(f"[{symbol}] 마진 모드: 격리(ISOLATED) 강제 설정 완료.")
         except Exception as e:
-            # 이미 격리로 설정되어 있는 경우 Exception 발생 가능 (무시)
-            if "No need to change margin type" in str(e):
+            error_msg = str(e).lower()
+            # 이미 격리로 설정되어 있는 경우 나는 에러 (무시)
+            if (
+                "no need to change margin type" in error_msg
+                or "margin type already" in error_msg
+            ):
                 pass
             else:
-                logger.warning(f"[{symbol}] 마진 모드 설정 중 정보: {e}")
+                logger.warning(
+                    f"[{symbol}] 마진 모드(ISOLATED) 설정 중 경고 (수동 확인 필요): {e}"
+                )
 
         try:
             # 2. 레버리지 설정 (Config 파일에서 설정한 값으로 적용)
