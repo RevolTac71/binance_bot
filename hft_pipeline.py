@@ -16,6 +16,7 @@ from schemas import HFTFeatures1m
 from config import settings, get_logger
 
 logger = get_logger("HFTPipeline")
+logger.setLevel(logging.WARNING)  # routine snapshot 로그 무시
 
 # 설정
 WS_BASE_URL = "wss://fstream.binance.com"
