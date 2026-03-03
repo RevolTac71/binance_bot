@@ -231,6 +231,9 @@ class StrategyEngine:
         # 세션 필터 (VWAP 리셋 후 최소 안정화 봉수)
         self.session_filter_bars = 30
 
+        # [V16.4] 개별 종목의 Auto-MTF 상태 (Hysteresis Buffer 처리)
+        self.symbol_mtf_states = {}
+
     # ────────────────────────────────────────────────────────────────────────
     # 1. HTF 추세 방향 판별 (1시간봉 EMA 배열)
     # ────────────────────────────────────────────────────────────────────────
@@ -470,16 +473,45 @@ class StrategyEngine:
         is_vol_spike = volume > (vol_sma_20 * vol_mult)
         is_extreme_vol = volume > (vol_sma_20 * extreme_mult)
 
+        # ── [V16.4 NEW] Auto-MTF 로직 (Hysteresis 완충 지대 적용) ───────────
+        mtf_mode = getattr(settings, "MTF_MODE", "AUTO").upper()
+
+        if mtf_mode == "ON":
+            mtf_filter = True
+        elif mtf_mode == "OFF":
+            mtf_filter = False
+        else:
+            # AUTO 모드
+            adx_val = mtf["adx"]
+            lower_th = getattr(settings, "AUTO_MTF_LOWER_THRESHOLD", 14.0)
+            upper_th = getattr(settings, "AUTO_MTF_UPPER_THRESHOLD", 16.0)
+
+            # 이전 상태가 없으면 무난하게 True로 초기화
+            prev_state = self.symbol_mtf_states.get(symbol, True)
+
+            if adx_val < lower_th:
+                mtf_filter = False  # 스캘핑 돌입 (MTF 끄기)
+            elif adx_val > upper_th:
+                mtf_filter = True  # 추세 추종 돌입 (MTF 켜기)
+            else:
+                mtf_filter = prev_state  # 기존 상태 유지 (완충 지대)
+
+            self.symbol_mtf_states[symbol] = mtf_filter
+
         # HTF/MTF 상태를 캔들마다 INFO로 출력 (봇 작동 여부 확인용)
-        # MTF_FILTER 켜져있을 때만 상세 출력
-        mtf_filter = getattr(settings, "MTF_FILTER", True)
+        # MTF_FILTER 켜져있을 때만 상세 출력 -> 이제 Auto-MTF 상태도 포함해서 출력
         if mtf_filter:
             logger.info(
-                f"[{symbol}] 📊 [MTF 상태] "
+                f"[{symbol}] 📊 [MTF: ON] "
                 f"1H Bias={htf_bias} | "
-                f"Regime={regime} (ADX={mtf['adx']}) | "
+                f"Regime={regime} (ADX={mtf['adx']:.1f}) | "
                 f"Momentum={momentum} | "
-                f"RSI={rsi_val:.1f} | Vol={volume / vol_sma_20:.1f}x (기준={vol_mult:.1f}x)"
+                f"RSI={rsi_val:.1f} | Vol={volume / vol_sma_20:.1f}x"
+            )
+        elif mtf_mode == "AUTO":
+            # Auto-MTF로 인해 꺼졌을 때 간략히 로그
+            logger.info(
+                f"[{symbol}] ⚡ [MTF: OFF (Auto)] 박스권 스캘퍼 모드 가동 (ADX={mtf['adx']:.1f})"
             )
 
         # ── STEP 6: Price Action Rejection / Extreme Outlier ──────────────

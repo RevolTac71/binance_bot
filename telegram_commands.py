@@ -322,12 +322,39 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ 매매 모드 → {label} 설정 완료")
             return
 
-        elif key in ("mtf_filter", "mtf"):
-            is_on = raw_val.lower() in ("on", "true", "1", "yes")
-            settings.MTF_FILTER = is_on
-            update_env_variable("MTF_FILTER", str(is_on).capitalize())
-            label = "ON (필터 켜짐)" if is_on else "OFF (필터 꺼짐 - 횡보장 모드)"
-            await update.message.reply_text(f"✅ MTF 필터 → {label} 설정 완료")
+        elif key in ("mtf_filter", "mtf", "mtf_mode"):
+            val_upper = raw_val.upper()
+            if val_upper in ("AUTO", "ON", "OFF"):
+                settings.MTF_MODE = val_upper
+                update_env_variable("MTF_MODE", val_upper)
+
+                # 하위 호환성 및 명확한 상태 설정
+                if val_upper == "ON":
+                    settings.MTF_FILTER = True
+                    update_env_variable("MTF_FILTER", "True")
+                    label = "ON (필터 무조건 켜짐 - 보수적)"
+                elif val_upper == "OFF":
+                    settings.MTF_FILTER = False
+                    update_env_variable("MTF_FILTER", "False")
+                    label = "OFF (필터 무조건 꺼짐 - 스캘핑)"
+                else:
+                    label = "AUTO (ADX 완충 지대 자동 전환)"
+
+                await update.message.reply_text(f"✅ MTF 필터 모드 → {label} 설정 완료")
+            else:
+                is_on = raw_val.lower() in ("true", "1", "yes")
+                if is_on:
+                    settings.MTF_MODE = "ON"
+                    settings.MTF_FILTER = True
+                    update_env_variable("MTF_MODE", "ON")
+                    update_env_variable("MTF_FILTER", "True")
+                    await update.message.reply_text("✅ MTF 필터 모드 → ON 설정 완료")
+                else:
+                    settings.MTF_MODE = "OFF"
+                    settings.MTF_FILTER = False
+                    update_env_variable("MTF_MODE", "OFF")
+                    update_env_variable("MTF_FILTER", "False")
+                    await update.message.reply_text("✅ MTF 필터 모드 → OFF 설정 완료")
             return
 
         # 일반 키 처리 (변경 전 값을 먼저 읽어둠)
@@ -454,7 +481,7 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     mode = "모의투자(DRY_RUN)" if settings.DRY_RUN else "실전매매(REAL)"
-    mtf = "ON" if getattr(settings, "MTF_FILTER", True) else "OFF"
+    mtf = getattr(settings, "MTF_MODE", "AUTO")
 
     msg = (
         "⚙️ [현재 설정 파라미터]\n"

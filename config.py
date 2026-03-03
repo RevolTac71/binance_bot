@@ -108,6 +108,9 @@ class Config:
     # ── V16 상위 프레임 필터(MTF) 온오프 스위치 ────────────────────────────
     # 강세장/횡보장에 따라 MTF 필터 켜고 끄기
     MTF_FILTER = os.getenv("MTF_FILTER", "True").lower() == "true"
+    MTF_MODE = os.getenv("MTF_MODE", "AUTO").upper()  # "ON", "OFF", "AUTO"
+    AUTO_MTF_LOWER_THRESHOLD = float(os.getenv("AUTO_MTF_LOWER_THRESHOLD", "14.0"))
+    AUTO_MTF_UPPER_THRESHOLD = float(os.getenv("AUTO_MTF_UPPER_THRESHOLD", "16.0"))
 
     # Dry Run Mode (True면 실제 매매하지 않고 DB 기록만 함)
     DRY_RUN = os.getenv("DRY_RUN", "True").lower() == "true"
