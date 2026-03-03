@@ -24,6 +24,26 @@ def get_today_0000_utc_timestamp() -> int:
     return int(target_utc.timestamp() * 1000)
 
 
+def calc_next_refresh_seconds() -> float:
+    """
+    다음 종목 리프레시 시점(UTC 02:15 또는 14:15)까지 남은 초(seconds)를 계산합니다.
+    """
+    now_utc = datetime.now(timezone.utc)
+
+    # 오늘 02:15, 14:15 후보 생성
+    candidate1 = now_utc.replace(hour=2, minute=15, second=0, microsecond=0)
+    candidate2 = now_utc.replace(hour=14, minute=15, second=0, microsecond=0)
+    # 내일 02:15 후보 생성
+    candidate3 = candidate1 + timedelta(days=1)
+
+    # 현재 시각 이후의 가장 빠른 후보를 찾음
+    for target in [candidate1, candidate2, candidate3]:
+        if target > now_utc:
+            return (target - now_utc).total_seconds()
+
+    return 12 * 3600  # Fallback
+
+
 def is_funding_fee_cutoff() -> bool:
     """
     펀딩비 체결 (매 01:00, 09:00, 17:00 KST)에 따른 리스크 회피 시간 필터.
@@ -49,7 +69,61 @@ def is_funding_fee_cutoff() -> bool:
     return False
 
 
-# ── In-memory DataFrame Storage ─────────────────────────────────────────────
+async def warm_up_differential_data(new_symbols: set, pipeline: DataPipeline):
+    """
+    동적 리프레시 시 새로 추가된 종목(New Tickers)들에 대해서만 데이터를 웜업합니다.
+    """
+    if not new_symbols:
+        return
+
+    global df_map, htf_df_1h, htf_df_15m
+    logger.info(f"🆕 신규 편입 종목 웜업 시작: {new_symbols}")
+
+    since_ts = get_today_0000_utc_timestamp() - (1500 * 60 * 1000)
+
+    tasks_3m = [
+        pipeline.fetch_ohlcv_since(sym, timeframe=settings.TIMEFRAME, since=since_ts)
+        for sym in new_symbols
+    ]
+    tasks_1h = [
+        pipeline.fetch_ohlcv_htf(sym, timeframe=settings.HTF_TIMEFRAME_1H, limit=300)
+        for sym in new_symbols
+    ]
+    tasks_15m = [
+        pipeline.fetch_ohlcv_htf(sym, timeframe=settings.HTF_TIMEFRAME_15M, limit=200)
+        for sym in new_symbols
+    ]
+
+    results_3m, results_1h, results_15m = await asyncio.gather(
+        asyncio.gather(*tasks_3m, return_exceptions=True),
+        asyncio.gather(*tasks_1h, return_exceptions=True),
+        asyncio.gather(*tasks_15m, return_exceptions=True),
+    )
+
+    for sym, res in zip(new_symbols, results_3m):
+        if isinstance(res, Exception):
+            logger.error(f"[{sym}] 웜업 3m 데이터 로딩 실패: {res}")
+            continue
+        df_map[sym] = res
+
+    for sym, res_1h, res_15m in zip(new_symbols, results_1h, results_15m):
+        if isinstance(res_1h, Exception):
+            htf_df_1h[sym] = None
+        else:
+            htf_df_1h[sym] = res_1h
+
+        if isinstance(res_15m, Exception):
+            htf_df_15m[sym] = None
+        else:
+            htf_df_15m[sym] = res_15m
+
+        if htf_df_1h.get(sym) is not None and htf_df_15m.get(sym) is not None:
+            htf_df_1h[sym], htf_df_15m[sym] = pipeline.calculate_htf_indicators(
+                htf_df_1h[sym], htf_df_15m[sym]
+            )
+
+
+# ── Background Loops ─────────────────────────────────────────────────────────
 # 3분봉 데이터 (15종목 × 1500개)
 df_map: dict[str, pd.DataFrame] = {}
 
@@ -578,47 +652,118 @@ async def websocket_loop(
     risk: RiskManager,
     execution: ExecutionEngine,
 ):
+# [V16.3] 동적 심볼 갱신을 위한 웹소켓 재연결 플래그
+ws_reconnect_flag = False
+
+async def target_refresh_loop(pipeline: DataPipeline, execution: ExecutionEngine):
     """
-    [V16] Aiohttp를 활용한 동적 타임프레임(15종목) 무지연 이벤트 루프
+    12시간(오프셋 기준)마다 Top Volume 15종목을 갱신하고 WebSocket을 재연결합니다.
     """
+    global ws_reconnect_flag, df_map, htf_df_1h, htf_df_15m, cvd_data, imbalance_history
+
+    while True:
+        wait_sec = calc_next_refresh_seconds()
+        logger.info(f"⏳ [Target Refresh] 다음 심볼 갱신까지 {wait_sec / 3600:.1f} 시간 대기합니다.")
+        await asyncio.sleep(wait_sec)
+
+        logger.info("🔄 [Target Refresh] 동적 심볼 갱신 타이머 작동!")
+        
+        # 1. 새 종목 리스트 추출
+        base_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+        try:
+            alts = await pipeline.fetch_top_altcoins_by_volume(limit=13, exclude_symbols=base_symbols)
+        except Exception as e:
+            logger.error(f"심볼 갱신 중 에러 발생: {e}. 다음 주기로 연기합니다.")
+            continue
+            
+        new_target_symbols = base_symbols + alts
+        
+        # 2. 보유 포지션 보호 (Retention)
+        active_coins = list(execution.active_positions.keys())
+        for coin in active_coins:
+            if coin not in new_target_symbols:
+                logger.warning(f"🛡️ [Target Refresh] {coin} 종목은 포지션이 있어 감시 리스트에 강제 유지됩니다.")
+                new_target_symbols.append(coin)
+
+        # 3. 변경사항이 있는지 확인
+        global_target_names = getattr(settings, "CURRENT_TARGET_SYMBOLS", [])
+        if set(new_target_symbols) == set(global_target_names):
+            logger.info("✅ [Target Refresh] 감시 종목에 변화가 없습니다. 연결을 유지합니다.")
+            continue
+
+        logger.info(f"📈 [Target Refresh] 감시 종목이 변경되었습니다. (기존 {len(global_target_names)} -> 신규 {len(new_target_symbols)})")
+        
+        # 4. 차집합 웜업 (Differential Warm-up)
+        # 새로 추가된 종목만 REST API 호출
+        added_symbols = set(new_target_symbols) - set(global_target_names)
+        await warm_up_differential_data(added_symbols, pipeline)
+
+        # 5. 가비지 컬렉션 (더 이상 감시하지 않는 Old Tickers 메모리 정리)
+        removed_symbols = set(global_target_names) - set(new_target_symbols)
+        if removed_symbols:
+            logger.info(f"🧹 [Target Refresh] 감시 제외 종목 메모리 정리: {removed_symbols}")
+            for rm_sym in removed_symbols:
+                df_map.pop(rm_sym, None)
+                htf_df_1h.pop(rm_sym, None)
+                htf_df_15m.pop(rm_sym, None)
+                cvd_data.pop(rm_sym, None)
+                imbalance_history.pop(rm_sym, None)
+                portfolio.close_position(rm_sym) # 혹시 남아있는 포트폴리오 가상 상태도 정리
+
+        # 6. Global 상태 업데이트 및 WebSocket 재시작 신호 발송
+        settings.CURRENT_TARGET_SYMBOLS = new_target_symbols
+        ws_reconnect_flag = True
+
+
+async def websocket_loop(
+    pipeline: DataPipeline,
+    strategy: StrategyEngine,
+    risk: RiskManager,
+    execution: ExecutionEngine,
+):
+    """
+    [V16] Aiohttp를 활용한 동적 타임프레임 무지연 이벤트 루프
+    """
+    global ws_reconnect_flag
     base_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
 
-    # 볼륨 최상위 13개 알트코인 동적 추출
-    alts = await pipeline.fetch_top_altcoins_by_volume(
-        limit=13, exclude_symbols=base_symbols
-    )
-    target_symbols = base_symbols + alts
+    # 최초 시작 시에만 13개 다이내믹 선별 -> 그 뒤론 refresh_loop가 관리
+    if not getattr(settings, "CURRENT_TARGET_SYMBOLS", None):
+        alts = await pipeline.fetch_top_altcoins_by_volume(
+            limit=13, exclude_symbols=base_symbols
+        )
+        settings.CURRENT_TARGET_SYMBOLS = base_symbols + alts
+        target_symbols = settings.CURRENT_TARGET_SYMBOLS
+        logger.info(f"📡 [V16] 최초 포트폴리오 15종목 동적 선정 결과: {target_symbols}")
+        await warm_up_data(target_symbols, pipeline)
+        
+        # 백그라운드 태스크는 최초 진입 시 한 번만 가동
+        asyncio.create_task(htf_refresh_loop(pipeline))
+        asyncio.create_task(orderbook_twap_loop(pipeline))
+        asyncio.create_task(snapshot_flush_loop())
 
-    logger.info(f"📡 [V16] 포트폴리오 15종목 동적 선정 결과: {target_symbols}")
-
-    # 웜업 (3m 당일 캔들 + 1H/15m HTF 캔들 동시)
-    await warm_up_data(target_symbols, pipeline)
-
-    # CCXT 심볼 포맷('BTC/USDT:USDT') <-> 바이낸스 소켓 포맷('btcusdt') 상호 변환기
-    ccxt_to_binance = {
-        sym: sym.split("/")[0].lower() + "usdt" for sym in target_symbols
-    }
-    binance_to_ccxt = {v: k for k, v in ccxt_to_binance.items()}
-
-    # 바이낸스 Streams 생성
-    tf = getattr(settings, "TIMEFRAME", "3m")
-    # 1. 캔들 스트림
-    streams = [f"{v}@kline_{tf}" for v in ccxt_to_binance.values()]
-    # 2. 실시간 체결(CVD) 스트림 추가
-    agg_streams = [f"{v}@aggTrade" for v in ccxt_to_binance.values()]
-    streams.extend(agg_streams)
-
-    ws_url = "wss://fstream.binance.com/stream?streams=" + "/".join(streams)
-
-    # [V16] HTF 주기 갱신 루프 및 ML TWAP 루프 가동
-    asyncio.create_task(htf_refresh_loop(target_symbols, pipeline))
-    asyncio.create_task(orderbook_twap_loop(target_symbols, pipeline))
-    asyncio.create_task(snapshot_flush_loop())
     logger.info("[V16] 백그라운드 태스크(HTF / TWAP / Snapshot Flush) 가동.")
+
+    # [V16.3] 12시간 주기 동적 타임프레임 갱신 루프 가동
+    asyncio.create_task(target_refresh_loop(pipeline, execution))
 
     while True:
         try:
-            logger.info(f"⚡ 무지연 WebSocket 스트림({tf} 15종목) 접속 시도 중...")
+            target_symbols = getattr(settings, "CURRENT_TARGET_SYMBOLS", [])
+            # CCXT 심볼 포맷('BTC/USDT:USDT') <-> 바이낸스 소켓 포맷('btcusdt') 상호 변환기
+            ccxt_to_binance = {sym: sym.split("/")[0].lower() + "usdt" for sym in target_symbols}
+            binance_to_ccxt = {v: k for k, v in ccxt_to_binance.items()}
+            
+            # 바이낸스 Streams 생성
+            tf = getattr(settings, "TIMEFRAME", "3m")
+            streams = [f"{v}@kline_{tf}" for v in ccxt_to_binance.values()]
+            agg_streams = [f"{v}@aggTrade" for v in ccxt_to_binance.values()]
+            streams.extend(agg_streams)
+        
+            ws_url = "wss://fstream.binance.com/stream?streams=" + "/".join(streams)
+            ws_reconnect_flag = False
+
+            logger.info(f"⚡ 무지연 WebSocket 스트림({tf} {len(target_symbols)}종목) 접속 시도 중...")
             async with aiohttp.ClientSession() as session:
                 # Binance 푸시핑에 응답하기 위한 heartbeat
                 async with session.ws_connect(ws_url, heartbeat=20.0) as ws:
@@ -670,6 +815,10 @@ async def websocket_loop(
                                                 execution,
                                             )
                                         )
+
+                        if ws_reconnect_flag:
+                            logger.info("🔄 타겟 종목 갱신 플래그가 수신되어 기존 연결을 리셋합니다.")
+                            break
 
                         elif msg.type in (
                             aiohttp.WSMsgType.CLOSED,
