@@ -385,6 +385,7 @@ class StrategyEngine:
         df_1h: Optional[pd.DataFrame] = None,
         df_15m: Optional[pd.DataFrame] = None,
         cvd_trend: Optional[str] = None,
+        bid_ask_imbalance: float = 0.5,
     ) -> dict:
         """
         [V16] 다중 시간 프레임 기반 진입 신호를 판단합니다.
@@ -725,12 +726,14 @@ class StrategyEngine:
                 "vol_sma_20": float(vol_sma_20) if vol_sma_20 is not None else None,
                 "volume": float(volume),
                 "atr_14": float(atr_14),
-                "adx_15m": float(mtf["adx"]) if "adx" in mtf else None,
+                "adx_15m": float(mtf["adx"]) if "adx" in mtf and mtf["adx"] is not None else None,
                 "htf_bias": str(htf_bias) if htf_bias else None,
                 "mtf_regime": str(regime) if regime else None,
                 "mtf_momentum": str(momentum) if momentum else None,
                 "cvd_trend": str(cvd_trend) if cvd_trend else None,
+                "bid_ask_imbalance": float(bid_ask_imbalance),
             }
             if signal_type is not None
             else None,
         }
+```
