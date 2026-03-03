@@ -495,7 +495,9 @@ class StrategyEngine:
             # 이전 상태가 없으면 무난하게 True로 초기화
             prev_state = self.symbol_mtf_states.get(symbol, True)
 
-            if adx_val < lower_th:
+            if adx_val is None:
+                mtf_filter = prev_state  # 15m 데이터 수집 대기 중일 땐 기존 상태 유지
+            elif adx_val < lower_th:
                 mtf_filter = False  # 스캘핑 돌입 (MTF 끄기)
             elif adx_val > upper_th:
                 mtf_filter = True  # 추세 추종 돌입 (MTF 켜기)
@@ -506,18 +508,19 @@ class StrategyEngine:
 
         # HTF/MTF 상태를 캔들마다 INFO로 출력 (봇 작동 여부 확인용)
         # MTF_FILTER 켜져있을 때만 상세 출력 -> 이제 Auto-MTF 상태도 포함해서 출력
+        adx_print = f"{mtf['adx']:.1f}" if mtf["adx"] is not None else "N/A"
         if mtf_filter:
             logger.info(
                 f"[{symbol}] 📊 [MTF: ON] "
                 f"1H Bias={htf_bias} | "
-                f"Regime={regime} (ADX={mtf['adx']:.1f}) | "
+                f"Regime={regime} (ADX={adx_print}) | "
                 f"Momentum={momentum} | "
                 f"RSI={rsi_val:.1f} | Vol={volume / vol_sma_20:.1f}x"
             )
         elif mtf_mode == "AUTO":
             # Auto-MTF로 인해 꺼졌을 때 간략히 로그
             logger.info(
-                f"[{symbol}] ⚡ [MTF: OFF (Auto)] 박스권 스캘퍼 모드 가동 (ADX={mtf['adx']:.1f})"
+                f"[{symbol}] ⚡ [MTF: OFF (Auto)] 박스권 스캘퍼 모드 가동 (ADX={adx_print})"
             )
 
         # ── STEP 6: Price Action Rejection / Extreme Outlier ──────────────
@@ -604,7 +607,7 @@ class StrategyEngine:
             ):
                 signal_type = "LONG"
                 reason = (
-                    f"[TREND 모멘텀 롱] ADX={mtf['adx']:.1f}≥{getattr(settings, 'ADX_THRESHOLD', 25)} | "
+                    f"[TREND 모멘텀 롱] ADX={adx_print}≥{getattr(settings, 'ADX_THRESHOLD', 25)} | "
                     f"HTF={htf_bias} | MACD={momentum} | "
                     f"VolSpike={volume / vol_sma_20:.1f}x | CVD={cvd_trend}"
                 )
@@ -620,7 +623,7 @@ class StrategyEngine:
             ):
                 signal_type = "SHORT"
                 reason = (
-                    f"[TREND 모멘텀 숏] ADX={mtf['adx']:.1f}≥{getattr(settings, 'ADX_THRESHOLD', 25)} | "
+                    f"[TREND 모멘텀 숏] ADX={adx_print}≥{getattr(settings, 'ADX_THRESHOLD', 25)} | "
                     f"HTF={htf_bias} | MACD={momentum} | "
                     f"VolSpike={volume / vol_sma_20:.1f}x | CVD={cvd_trend}"
                 )
