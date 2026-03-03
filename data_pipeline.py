@@ -100,31 +100,39 @@ class DataPipeline:
 
     def calculate_vwap_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        [V15.0] 일자별(Daily) 00:00 UTC(09:00 KST) 기준 누적 그룹화된 Anchored VWAP 및 제반 지표 연산
-        (수집된 전체 1분봉 데이터 프레임을 대상으로 한번에 계산합니다)
+        [V16.1] Rolling Window 기반 VWAP 및 제반 지표 연산
+        - 기존 00:00 단위 Anchored VWAP을 탈피하고 최근 24시간(480 캔들, 3분봉) 기준의 롤링 VWAP 적용
         """
         if len(df) == 0:
             return df
+
+        # 24시간 (3분봉 기준 480봉)
+        window_size = 480
+        min_periods = 1  # 웜업 데이터 부족 시에도 계산되게 허용
 
         df["hlc3"] = (df["high"] + df["low"] + df["close"]) / 3
         df["vol_hlc3"] = df["hlc3"] * df["volume"]
         df["vol_hlc3_sq"] = df["hlc3"] ** 2 * df["volume"]
 
-        # KST 타임존 적용된 index 기준으로 date를 추출하여 일자별 누적합 계산 (09:00 기준 리셋 효과)
-        # 웹소켓 환경 등에서 여러 날짜의 데이터가 섞여 있어도 일자별로 VWAP이 정상 초기화됩니다.
-        grouped = df.groupby(df.index.date)
-        df["cum_vol"] = grouped["volume"].cumsum()
-        df["cum_vol_hlc3"] = grouped["vol_hlc3"].cumsum()
-        df["cum_vol_hlc3_sq"] = grouped["vol_hlc3_sq"].cumsum()
+        # 누적합 대신 롤링합(rolling.sum) 적용
+        rolling_vol = (
+            df["volume"].rolling(window=window_size, min_periods=min_periods).sum()
+        )
+        rolling_vol_hlc3 = (
+            df["vol_hlc3"].rolling(window=window_size, min_periods=min_periods).sum()
+        )
+        rolling_vol_hlc3_sq = (
+            df["vol_hlc3_sq"].rolling(window=window_size, min_periods=min_periods).sum()
+        )
 
         # VWAP 계산
-        df["VWAP"] = df["cum_vol_hlc3"] / df["cum_vol"]
+        df["VWAP"] = rolling_vol_hlc3 / rolling_vol
 
-        # 분산(Variance) 계산 = (누적(가격^2 * 거래량) / 누적거래량) - VWAP^2
-        variance = (df["cum_vol_hlc3_sq"] / df["cum_vol"]) - (df["VWAP"] ** 2)
+        # 분산(Variance) 계산 = (롤링(가격^2 * 거래량) / 롤링거래량) - VWAP^2
+        variance = (rolling_vol_hlc3_sq / rolling_vol) - (df["VWAP"] ** 2)
         variance = np.maximum(0, variance)  # 음수 방지
 
-        # V15.0 표준편차 밴드 멀티플라이어 (K = 2.5)
+        # V16 표준편차 밴드 멀티플라이어 (K = 2.5)
         vwap_mult = (
             float(settings.K_VALUE) if getattr(settings, "K_VALUE", 2.5) else 2.5
         )

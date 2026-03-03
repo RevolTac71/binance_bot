@@ -436,24 +436,7 @@ class StrategyEngine:
             return {"signal": None, "reason": "지표 결측치 발생"}
 
         # ── STEP 1: Session Filter ────────────────────────────────────────
-        current_time = df.index[-1] if df.index.name == "datetime" else current.name
-        today_date = (
-            current_time.date()
-        )  # UTC 기준이므로 00:00 UTC에 VWAP 리셋과 정확하게 일치함
-
-        bars_since_reset = len(df[df.index.date == today_date])
-        if bars_since_reset < self.session_filter_bars:
-            logger.info(
-                f"[{symbol}] ⏳ [STEP1 Session Filter] VWAP 리셋 후 "
-                f"{bars_since_reset}/{self.session_filter_bars}봉 — 안정화 대기 중"
-            )
-            return {
-                "signal": None,
-                "reason": (
-                    f"Session Filter Active "
-                    f"(VWAP 리셋 후 {bars_since_reset}/{self.session_filter_bars}봉 째)"
-                ),
-            }
+        # [V16.1] 24-Hour Rolling VWAP 설계 도입으로 인해, 00:00 기준 리셋 대기시간(Session Block) 삭제
 
         # ── STEP 2: 동적 ATR 변동성 필터 ─────────────────────────────────
         atr_ratio_mult = getattr(settings, "ATR_RATIO_MULT", 1.2)
