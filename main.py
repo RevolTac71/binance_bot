@@ -432,7 +432,7 @@ async def htf_refresh_loop(pipeline: DataPipeline):
     while True:
         # 15분 대기 후 갱신 (첫 실행은 warm_up에서 이미 로드되었으므로 대기 먼저)
         await asyncio.sleep(15 * 60)
-        
+
         symbols = getattr(settings, "CURRENT_TARGET_SYMBOLS", [])
         if not symbols:
             continue
@@ -485,7 +485,7 @@ async def orderbook_twap_loop(pipeline: DataPipeline):
             if not symbols:
                 await asyncio.sleep(5)
                 continue
-                
+
             tasks = [pipeline.fetch_orderbook_imbalance(sym) for sym in symbols]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -655,14 +655,9 @@ async def chandelier_monitoring_loop(
                     logger.error(f"[Chandelier Exit] {symbol} 청산 중 에러: {e}")
 
 
-async def websocket_loop(
-    pipeline: DataPipeline,
-    strategy: StrategyEngine,
-    risk: RiskManager,
-    execution: ExecutionEngine,
-):
 # [V16.3] 동적 심볼 갱신을 위한 웹소켓 재연결 플래그
 ws_reconnect_flag = False
+
 
 async def target_refresh_loop(pipeline: DataPipeline, execution: ExecutionEngine):
     """
@@ -672,36 +667,46 @@ async def target_refresh_loop(pipeline: DataPipeline, execution: ExecutionEngine
 
     while True:
         wait_sec = calc_next_refresh_seconds()
-        logger.info(f"⏳ [Target Refresh] 다음 심볼 갱신까지 {wait_sec / 3600:.1f} 시간 대기합니다.")
+        logger.info(
+            f"⏳ [Target Refresh] 다음 심볼 갱신까지 {wait_sec / 3600:.1f} 시간 대기합니다."
+        )
         await asyncio.sleep(wait_sec)
 
         logger.info("🔄 [Target Refresh] 동적 심볼 갱신 타이머 작동!")
-        
+
         # 1. 새 종목 리스트 추출
         base_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
         try:
-            alts = await pipeline.fetch_top_altcoins_by_volume(limit=13, exclude_symbols=base_symbols)
+            alts = await pipeline.fetch_top_altcoins_by_volume(
+                limit=13, exclude_symbols=base_symbols
+            )
         except Exception as e:
             logger.error(f"심볼 갱신 중 에러 발생: {e}. 다음 주기로 연기합니다.")
             continue
-            
+
         new_target_symbols = base_symbols + alts
-        
+
         # 2. 보유 포지션 보호 (Retention)
         active_coins = list(execution.active_positions.keys())
         for coin in active_coins:
             if coin not in new_target_symbols:
-                logger.warning(f"🛡️ [Target Refresh] {coin} 종목은 포지션이 있어 감시 리스트에 강제 유지됩니다.")
+                logger.warning(
+                    f"🛡️ [Target Refresh] {coin} 종목은 포지션이 있어 감시 리스트에 강제 유지됩니다."
+                )
                 new_target_symbols.append(coin)
 
         # 3. 변경사항이 있는지 확인
         global_target_names = getattr(settings, "CURRENT_TARGET_SYMBOLS", [])
         if set(new_target_symbols) == set(global_target_names):
-            logger.info("✅ [Target Refresh] 감시 종목에 변화가 없습니다. 연결을 유지합니다.")
+            logger.info(
+                "✅ [Target Refresh] 감시 종목에 변화가 없습니다. 연결을 유지합니다."
+            )
             continue
 
-        logger.info(f"📈 [Target Refresh] 감시 종목이 변경되었습니다. (기존 {len(global_target_names)} -> 신규 {len(new_target_symbols)})")
-        
+        logger.info(
+            f"📈 [Target Refresh] 감시 종목이 변경되었습니다. (기존 {len(global_target_names)} -> 신규 {len(new_target_symbols)})"
+        )
+
         # 4. 차집합 웜업 (Differential Warm-up)
         # 새로 추가된 종목만 REST API 호출
         added_symbols = set(new_target_symbols) - set(global_target_names)
@@ -710,14 +715,18 @@ async def target_refresh_loop(pipeline: DataPipeline, execution: ExecutionEngine
         # 5. 가비지 컬렉션 (더 이상 감시하지 않는 Old Tickers 메모리 정리)
         removed_symbols = set(global_target_names) - set(new_target_symbols)
         if removed_symbols:
-            logger.info(f"🧹 [Target Refresh] 감시 제외 종목 메모리 정리: {removed_symbols}")
+            logger.info(
+                f"🧹 [Target Refresh] 감시 제외 종목 메모리 정리: {removed_symbols}"
+            )
             for rm_sym in removed_symbols:
                 df_map.pop(rm_sym, None)
                 htf_df_1h.pop(rm_sym, None)
                 htf_df_15m.pop(rm_sym, None)
                 cvd_data.pop(rm_sym, None)
                 imbalance_history.pop(rm_sym, None)
-                portfolio.close_position(rm_sym) # 혹시 남아있는 포트폴리오 가상 상태도 정리
+                portfolio.close_position(
+                    rm_sym
+                )  # 혹시 남아있는 포트폴리오 가상 상태도 정리
 
         # 6. Global 상태 업데이트 및 WebSocket 재시작 신호 발송
         settings.CURRENT_TARGET_SYMBOLS = new_target_symbols
@@ -745,7 +754,7 @@ async def websocket_loop(
         target_symbols = settings.CURRENT_TARGET_SYMBOLS
         logger.info(f"📡 [V16] 최초 포트폴리오 15종목 동적 선정 결과: {target_symbols}")
         await warm_up_data(target_symbols, pipeline)
-        
+
         # 백그라운드 태스크는 최초 진입 시 한 번만 가동
         asyncio.create_task(htf_refresh_loop(pipeline))
         asyncio.create_task(orderbook_twap_loop(pipeline))
@@ -760,20 +769,24 @@ async def websocket_loop(
         try:
             target_symbols = getattr(settings, "CURRENT_TARGET_SYMBOLS", [])
             # CCXT 심볼 포맷('BTC/USDT:USDT') <-> 바이낸스 소켓 포맷('btcusdt') 상호 변환기
-            ccxt_to_binance = {sym: sym.split("/")[0].lower() + "usdt" for sym in target_symbols}
+            ccxt_to_binance = {
+                sym: sym.split("/")[0].lower() + "usdt" for sym in target_symbols
+            }
             binance_to_ccxt = {v: k for k, v in ccxt_to_binance.items()}
-            
+
             # 바이낸스 Streams 생성
             tf = getattr(settings, "TIMEFRAME", "3m")
             streams = [f"{v}@kline_{tf}" for v in ccxt_to_binance.values()]
             agg_streams = [f"{v}@aggTrade" for v in ccxt_to_binance.values()]
             streams.extend(agg_streams)
-        
+
             ws_url = "wss://fstream.binance.com/stream?streams=" + "/".join(streams)
             global ws_reconnect_flag
             ws_reconnect_flag = False
 
-            logger.info(f"⚡ 무지연 WebSocket 스트림({tf} {len(target_symbols)}종목) 접속 시도 중...")
+            logger.info(
+                f"⚡ 무지연 WebSocket 스트림({tf} {len(target_symbols)}종목) 접속 시도 중..."
+            )
             async with aiohttp.ClientSession() as session:
                 # Binance 푸시핑에 응답하기 위한 heartbeat
                 async with session.ws_connect(ws_url, heartbeat=20.0) as ws:
@@ -827,7 +840,9 @@ async def websocket_loop(
                                         )
 
                         if ws_reconnect_flag:
-                            logger.info("🔄 타겟 종목 갱신 플래그가 수신되어 기존 연결을 리셋합니다.")
+                            logger.info(
+                                "🔄 타겟 종목 갱신 플래그가 수신되어 기존 연결을 리셋합니다."
+                            )
                             break
 
                         elif msg.type in (
