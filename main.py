@@ -256,7 +256,12 @@ async def process_closed_kline(
                     "volume": float(kline["v"]),
                 }
             ]
-        ).set_index("datetime")
+        )
+        # [V16.9.3] float32 타겟팅: LossySetitemError(float64->float32) 방지
+        new_row = new_row.astype(
+            {col: "float32" for col in ["open", "high", "low", "close", "volume"]}
+        )
+        new_row.set_index("datetime", inplace=True)
 
         df = df_map[symbol]
 
