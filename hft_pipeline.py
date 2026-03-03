@@ -205,7 +205,10 @@ class HFTDataPipeline:
             sleep_sec = 60 - now.second - (now.microsecond / 1_000_000)
             await asyncio.sleep(sleep_sec)
 
-            snapshot_time = datetime.now(tz=kst).replace(second=0, microsecond=0)
+            # DB 저장을 위해 Timezone 인식 정보를 제거 (Naive datetime으로 변환)
+            snapshot_time = datetime.now(tz=kst).replace(
+                second=0, microsecond=0, tzinfo=None
+            )
 
             logger.info(f"[HFT] Creating 1-Min Snapshot at {snapshot_time}")
 
