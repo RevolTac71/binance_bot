@@ -763,29 +763,6 @@ async def websocket_loop(
     """
     [V16] Aiohttp를 활용한 동적 타임프레임 무지연 이벤트 루프
     """
-    global ws_reconnect_flag
-    base_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
-
-    # 최초 시작 시에만 13개 다이내믹 선별 -> 그 뒤론 refresh_loop가 관리
-    if not getattr(settings, "CURRENT_TARGET_SYMBOLS", None):
-        alts = await pipeline.fetch_top_altcoins_by_volume(
-            limit=13, exclude_symbols=base_symbols
-        )
-        settings.CURRENT_TARGET_SYMBOLS = base_symbols + alts
-        target_symbols = settings.CURRENT_TARGET_SYMBOLS
-        logger.info(f"📡 [V16] 최초 포트폴리오 15종목 동적 선정 결과: {target_symbols}")
-        await warm_up_data(target_symbols, pipeline)
-
-        # 백그라운드 태스크는 최초 진입 시 한 번만 가동
-        asyncio.create_task(htf_refresh_loop(pipeline))
-        asyncio.create_task(orderbook_twap_loop(pipeline))
-        asyncio.create_task(snapshot_flush_loop())
-
-    logger.info("[V16] 백그라운드 태스크(HTF / TWAP / Snapshot Flush) 가동.")
-
-    # [V16.3] 12시간 주기 동적 타임프레임 갱신 루프 가동
-    asyncio.create_task(target_refresh_loop(pipeline, execution))
-
     while True:
         try:
             target_symbols = getattr(settings, "CURRENT_TARGET_SYMBOLS", [])
@@ -936,7 +913,7 @@ async def main():
             await app.start()
             await app.updater.start_polling()
 
-        # [V16.9] HFT Pipeline 최초 가동 (종목 선정 전이면 기본 선정 수행)
+        # [V16.9] 포트폴리오 최초 종목 15개 선정 및 웜업 (HFT Pipeline 가동 전)
         if not getattr(settings, "CURRENT_TARGET_SYMBOLS", None):
             base_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
             alts = await pipeline.fetch_top_altcoins_by_volume(
@@ -944,8 +921,23 @@ async def main():
             )
             settings.CURRENT_TARGET_SYMBOLS = base_symbols + alts
 
+            logger.info(
+                f"📡 [V16] 최초 포트폴리오 15종목 동적 선정 결과: {settings.CURRENT_TARGET_SYMBOLS}"
+            )
+            await warm_up_data(settings.CURRENT_TARGET_SYMBOLS, pipeline)
+
         hft_pipeline = HFTDataPipeline(settings.CURRENT_TARGET_SYMBOLS)
         asyncio.create_task(hft_pipeline.start())
+
+        # [V16] 백그라운드 태스크는 최초 진입 시 한 번만 가동
+        asyncio.create_task(htf_refresh_loop(pipeline))
+        asyncio.create_task(orderbook_twap_loop(pipeline))
+        asyncio.create_task(snapshot_flush_loop())
+        # [V16.3] 12시간 주기 동적 타임프레임 갱신 루프 가동
+        asyncio.create_task(target_refresh_loop(pipeline, execution))
+        logger.info(
+            "[V16] 백그라운드 태스크(HTF / TWAP / Snapshot Flush / Refresher) 가동 완료."
+        )
 
         # [V16] 메인 웹소켓 루프 / 스테이트 머신 / 샹들리에 모니터링 병렬 가동
         async def guarded(coro, name):
