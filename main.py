@@ -640,7 +640,7 @@ async def chandelier_monitoring_loop(
 
                         await notifier.send_message(
                             f"🔴 <b>Chandelier Exit 발동</b>\n"
-                            f"[{symbol}] 현재가={current_price:.4f} | 손절선={ce_result['chandelier_stop']:.4f}\n"
+                            f"[{symbol}] 현재가={curr_price:.4f} | 손절선={ce_result['chandelier_stop']:.4f}\n"
                             f"트레일링 스탑 돌파로 시장가 청산 완료."
                         )
 
