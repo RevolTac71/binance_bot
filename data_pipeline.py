@@ -140,8 +140,9 @@ class DataPipeline:
         df["Upper_Band"] = df["VWAP"] + df["StdDev"] * vwap_mult
         df["Lower_Band"] = df["VWAP"] - df["StdDev"] * vwap_mult
 
-        # 과매도/과매수 판단을 위한 RSI (14)
-        df["RSI_14"] = df.ta.rsi(length=14)
+        # 과매도/과매수 판단을 위한 RSI (동적 Period 지원)
+        rsi_period = getattr(settings, "RSI_PERIOD", 14)
+        df["RSI"] = df.ta.rsi(length=rsi_period)
 
         # V15.0 거래량 스파이크 판별을 위한 Volume SMA (20)
         df["Vol_SMA_20"] = df.ta.sma(close=df["volume"], length=20)

@@ -224,9 +224,9 @@ class StrategyEngine:
     def __init__(self, exchange=None):
         self.exchange = exchange
 
-        # RSI 과매도/과매수 기준
-        self.rsi_os = 30
-        self.rsi_ob = 70
+        # RSI 과매도/과매수 기준 (설정 파일 우선 적용, 없으면 기본값)
+        self.rsi_os = getattr(settings, "RSI_OS", 30)
+        self.rsi_ob = getattr(settings, "RSI_OB", 70)
 
         # 세션 필터 (VWAP 리셋 후 최소 안정화 봉수)
         self.session_filter_bars = 30
@@ -416,7 +416,7 @@ class StrategyEngine:
         low_price = float(current["low"])
         volume = float(current["volume"])
 
-        rsi_val = current.get("RSI_14", 50)
+        rsi_val = current.get("RSI", 50)
         lower_band = current.get("Lower_Band", None)
         upper_band = current.get("Upper_Band", None)
         vwap_mid = current.get("VWAP", market_price)

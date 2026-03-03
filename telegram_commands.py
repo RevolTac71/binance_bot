@@ -57,6 +57,9 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "time_exit  — 최대 보유 시간 분 (int, 0=비활성)\n"
         "max_trades — (NEW) 동시 진입 한도 (int, 기본 3)\n"
         "mtf_filter — (NEW) 상위 프레임 필터 (on/off, 기본 on)\n"
+        "rsi_period — RSI 계산 기간 (int, 기본 14)\n"
+        "rsi_ob     — 과매수/숏 기준치 (int, 기본 70)\n"
+        "rsi_os     — 과매도/롱 기준치 (int, 기본 30)\n"
         "vol_mult   — 거래량 스파이크 배수 (float, 기본 1.5)\n"
         "atr_ratio  — 단/장기 ATR 비율 필터 (float, 기본 1.2)\n"
         "sl         — SL 배율 ×ATR (float, 기본 3.0 = 넓은 손절)\n"
@@ -147,6 +150,11 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"캔들봉    : {getattr(settings, 'TIMEFRAME', '3m')}\n"
         f"증거금 %  : {settings.RISK_PERCENTAGE * 100:.1f}%\n"
         f"Time Exit : {getattr(settings, 'TIME_EXIT_MINUTES', 0)}분\n"
+        f"HTF 1H: {getattr(settings, 'HTF_TIMEFRAME_1H', '1h')}\n"
+        f"HTF 15m: {getattr(settings, 'HTF_TIMEFRAME_15M', '15m')}\n"
+        f"RSI Period: {getattr(settings, 'RSI_PERIOD', 14)}\n"
+        f"RSI OB: {getattr(settings, 'RSI_OB', 70)}\n"
+        f"RSI OS: {getattr(settings, 'RSI_OS', 30)}\n"
         f"Vol Mult  : {getattr(settings, 'VOL_MULT', 1.5)}\n"
         f"ATR Ratio : {getattr(settings, 'ATR_RATIO_MULT', 1.2)}\n"
         f"Cooldown  : {getattr(settings, 'LOSS_COOLDOWN_MINUTES', 15)}분\n"
@@ -301,6 +309,9 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "max_trades": ("MAX_TRADES", int, "MAX_TRADES"),
             "htf_1h": ("HTF_TIMEFRAME_1H", str, "HTF_TIMEFRAME_1H"),
             "htf_15m": ("HTF_TIMEFRAME_15M", str, "HTF_TIMEFRAME_15M"),
+            "rsi_period": ("RSI_PERIOD", int, "RSI_PERIOD"),
+            "rsi_ob": ("RSI_OB", int, "RSI_OB"),
+            "rsi_os": ("RSI_OS", int, "RSI_OS"),
             "mtf_filter": (None, None, None),  # Custom logic
             "mode": (None, None, None),  # dry 또는 real
         }
