@@ -13,12 +13,12 @@ from sklearn.preprocessing import RobustScaler
 from sqlalchemy import delete
 from database import AsyncSessionLocal, MarketData_1m
 from schemas import HFTFeatures1m
-from config import settings
+from config import settings, get_logger
 
-logger = logging.getLogger("HFTPipeline")
+logger = get_logger("HFTPipeline")
 
 # 설정
-WS_URL = "wss://fstream.binance.com/ws"
+WS_BASE_URL = "wss://fstream.binance.com"
 # Ticks는 메모리 상에 최대 10만건만 보관하여 누수 방지
 MAX_DEQUE_SIZE = 100000
 RETENTION_DAYS = 7
@@ -56,9 +56,9 @@ class HFTDataPipeline:
             await self.session.close()
 
     # ── 1. 웹소켓 스트림 (지수 백오프 자동 재연결) ──
-    async def connect_websocket(self, stream_name: str, handler):
+    async def connect_websocket(self, stream_path: str, handler):
         attempt = 0
-        url = f"{WS_URL}/{stream_name}"
+        url = f"{WS_BASE_URL}/{stream_path}"
         while True:
             try:
                 async with websockets.connect(url) as ws:

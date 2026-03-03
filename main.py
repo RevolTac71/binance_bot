@@ -773,11 +773,6 @@ async def websocket_loop(
     # [V16.3] 12시간 주기 동적 타임프레임 갱신 루프 가동
     asyncio.create_task(target_refresh_loop(pipeline, execution))
 
-    # [V16.6] HFT Pipeline 병렬 가동 (동적 심볼 사용)
-    target_symbols = getattr(settings, "CURRENT_TARGET_SYMBOLS", [])
-    hft_pipeline = HFTDataPipeline(target_symbols)
-    asyncio.create_task(hft_pipeline.start())
-
     while True:
         try:
             target_symbols = getattr(settings, "CURRENT_TARGET_SYMBOLS", [])
@@ -927,6 +922,17 @@ async def main():
             await app.initialize()
             await app.start()
             await app.updater.start_polling()
+
+        # [V16.9] HFT Pipeline 최초 가동 (종목 선정 전이면 기본 선정 수행)
+        if not getattr(settings, "CURRENT_TARGET_SYMBOLS", None):
+            base_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+            alts = await pipeline.fetch_top_altcoins_by_volume(
+                limit=13, exclude_symbols=base_symbols
+            )
+            settings.CURRENT_TARGET_SYMBOLS = base_symbols + alts
+
+        hft_pipeline = HFTDataPipeline(settings.CURRENT_TARGET_SYMBOLS)
+        asyncio.create_task(hft_pipeline.start())
 
         # [V16] 메인 웹소켓 루프 / 스테이트 머신 / 샹들리에 모니터링 병렬 가동
         async def guarded(coro, name):
