@@ -19,8 +19,8 @@ logger = get_logger("HFTPipeline")
 
 # 설정
 WS_BASE_URL = "wss://fstream.binance.com"
-# Ticks는 메모리 상에 최대 10만건만 보관하여 누수 방지
-MAX_DEQUE_SIZE = 100000
+# Ticks는 메모리 상에 최대 2만건만 보관하여 누수 방지
+MAX_DEQUE_SIZE = 20000
 RETENTION_DAYS = 7
 
 # 인메모리 버퍼 (Symbol -> deque)

@@ -87,8 +87,9 @@ class DataPipeline:
         주어진 심볼의 바이낸스 캔들 데이터를 비동기로 불러와 DataFrame으로 변환합니다.
         (V15: 1분봉 당일 누적 데이터 수집을 위해 최대 한도 1500개를 끌어옵니다)
         """
+        # [V16.9.2] 1500 -> 1000 (RAM 최적화)
         candles = await self.exchange.fetch_ohlcv(
-            symbol, timeframe, since=since, limit=1500
+            symbol, timeframe, since=since, limit=1000
         )
 
         df = pd.DataFrame(
@@ -96,7 +97,10 @@ class DataPipeline:
         )
         df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms")
         df.set_index("datetime", inplace=True)
-        return df
+        # [V16.9.2] float32 다운캐스팅
+        return df.astype(
+            {col: "float32" for col in df.select_dtypes(include=["float64"]).columns}
+        )
 
     def calculate_vwap_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """

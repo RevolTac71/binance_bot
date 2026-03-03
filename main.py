@@ -80,7 +80,8 @@ async def warm_up_differential_data(new_symbols: set, pipeline: DataPipeline):
     global df_map, htf_df_1h, htf_df_15m
     logger.info(f"🆕 신규 편입 종목 웜업 시작: {new_symbols}")
 
-    since_ts = get_today_0000_utc_timestamp() - (1500 * 60 * 1000)
+    # [V16.9.2] 1500 -> 1000으로 단축 (RAM 절감)
+    since_ts = get_today_0000_utc_timestamp() - (1000 * 60 * 1000)
 
     tasks_3m = [
         pipeline.fetch_ohlcv_since(sym, timeframe=settings.TIMEFRAME, since=since_ts)
@@ -140,6 +141,8 @@ cvd_data: dict[str, float] = {}
 # 캔들 마감 시점의 CVD 스냅샷 저장 (추세 판단용)
 cvd_history: dict[str, list] = {}
 
+import gc # [V16.9.2] RAM 최적화용 가비지 컬렉터
+
 # [V16.2 ML] 호가창 불균형(Imbalance) TWAP 내역 및 스냅샷 큐
 imbalance_history: dict[str, list] = {}
 snapshot_queue: list[dict] = []
@@ -172,17 +175,20 @@ async def warm_up_data(symbols: list, pipeline: DataPipeline):
         for sym in symbols
     ]
 
-    results_3m, results_1h, results_15m = await asyncio.gather(
-        asyncio.gather(*tasks_3m, return_exceptions=True),
+    results_3m = await asyncio.gather(*tasks_3m, return_exceptions=True)
+    results_1h, results_15m = await asyncio.gather(
         asyncio.gather(*tasks_1h, return_exceptions=True),
         asyncio.gather(*tasks_15m, return_exceptions=True),
     )
 
     for sym, res in zip(symbols, results_3m):
         if isinstance(res, Exception):
-            logger.error(f"[{sym}] 웜업 3m 데이터 로딩 실패: {res}")
+            logger.error(f"[{sym}] 웜업 데이터 로딩 실패: {res}")
             continue
-        df_map[sym] = res
+        # [V16.9.2] float32 다운캐스팅으로 메모리 50% 절감
+        df_map[sym] = res.astype({col: "float32" for col in res.select_dtypes(include=["float64"]).columns})
+    
+    gc.collect() # 웜업 후 파편화된 메모리 정리
         logger.info(
             f"[{sym}] {settings.TIMEFRAME} 캔들 초기 데이터 {len(res)}개 장전 완료."
         )
@@ -255,8 +261,11 @@ async def process_closed_kline(
         else:
             df.loc[new_dt] = new_row.iloc[0]
 
-        # 최대 500개 유지 (메모리 롤링 최적화)
-        df_map[symbol] = df.tail(500)
+        # [V16.9.2] 메모리 점유 방지를 위해 1000개만 유지 및 다운캐스팅
+        df = df.astype({col: "float32" for col in df.select_dtypes(include=["float64"]).columns}).tail(1000)
+        df_map[symbol] = df
+        gc.collect() # 매 캔들 마감 연산 후 GC 호출 (선택적)
+
         curr_df = df_map[symbol]
 
         if is_funding_fee_cutoff():
