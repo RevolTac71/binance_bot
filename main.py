@@ -419,7 +419,7 @@ async def process_closed_kline(
         logger.error(f"[{symbol}] KLINE 마감 처리 중 에러: {e}")
 
 
-async def htf_refresh_loop(symbols: list, pipeline: DataPipeline):
+async def htf_refresh_loop(pipeline: DataPipeline):
     """
     [V16 MTF] 15분마다 1H·15m 상위 타임프레임 데이터를 갱신하는 독립 루프.
     WebSocket 루프와 별도로 asyncio.create_task()로 병렬 가동됩니다.
@@ -432,6 +432,10 @@ async def htf_refresh_loop(symbols: list, pipeline: DataPipeline):
     while True:
         # 15분 대기 후 갱신 (첫 실행은 warm_up에서 이미 로드되었으므로 대기 먼저)
         await asyncio.sleep(15 * 60)
+        
+        symbols = getattr(settings, "CURRENT_TARGET_SYMBOLS", [])
+        if not symbols:
+            continue
 
         logger.info("[HTF Refresh] 상위 타임프레임 데이터 갱신 시작...")
         tasks_1h = [
@@ -469,7 +473,7 @@ async def htf_refresh_loop(symbols: list, pipeline: DataPipeline):
         logger.info(f"[HTF Refresh] {updated_count}/{len(symbols)}종목 HTF 갱신 완료.")
 
 
-async def orderbook_twap_loop(symbols: list, pipeline: DataPipeline):
+async def orderbook_twap_loop(pipeline: DataPipeline):
     """
     [V16.2 ML] 매 5초 단위로 15개 종목의 오더북 Imbalance를 폴링하여
     지속적으로 기록해 두고, 최근 6회(30초)의 TWAP을 산출하기 위한 메인 루프.
@@ -477,6 +481,11 @@ async def orderbook_twap_loop(symbols: list, pipeline: DataPipeline):
     global imbalance_history
     while True:
         try:
+            symbols = getattr(settings, "CURRENT_TARGET_SYMBOLS", [])
+            if not symbols:
+                await asyncio.sleep(5)
+                continue
+                
             tasks = [pipeline.fetch_orderbook_imbalance(sym) for sym in symbols]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
