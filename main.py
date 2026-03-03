@@ -644,12 +644,11 @@ async def chandelier_monitoring_loop(
                             f"트레일링 스탑 돌파로 시장가 청산 완료."
                         )
 
-                        # execution 내부 상태에서도 제거
-                        if symbol in execution.active_positions:
-                            del execution.active_positions[symbol]
-
-                    # 포트폴리오 상태에서도 제거
-                    portfolio.close_position(symbol)
+                        # 포지션 트래킹 삭제 로직 제거 (V16.5)
+                        # - 여기서 수동으로 삭제해버리면 state_machine_loop가 체결(청산)을 감지하지 못해
+                        #   DB 기록(Trade, TradeLog) 로직이 통째로 씹히는 치명적 버그가 발생합니다.
+                        # - 따라서 봇은 오직 거래소 청산 호출만 날리고, 추적망 삭제와 DB 기록은
+                        #   execution.check_active_positions_state() 폴링 루프에 전적으로 위임합니다.
 
                 except Exception as e:
                     logger.error(f"[Chandelier Exit] {symbol} 청산 중 에러: {e}")
