@@ -552,32 +552,38 @@ async def chandelier_monitoring_loop(
         # 포트폴리오에 등록된 심볼 목록 복사 (순회 중 dict 변경 방지)
         tracked_symbols = list(portfolio.positions.keys())
 
+        if not tracked_symbols:
+            continue
+
+        try:
+            # [Fix] 실시간 현재가(Tickers) 조회 (과거 3분봉 꼬리로 인한 오작동 방지)
+            tickers = await execution.exchange.fetch_tickers(tracked_symbols)
+        except Exception as e:
+            logger.error(f"[Chandelier Loop] Tickers Fetch Error: {e}")
+            continue
+
         for symbol in tracked_symbols:
             pos = portfolio.positions.get(symbol)
             if pos is None:
                 continue
 
-            # 현재 시세를 df_map에서 참조 (API 호출 없이 인메모리 활용)
-            df = df_map.get(symbol)
-            if df is None or len(df) == 0:
+            ticker = tickers.get(symbol)
+            if ticker is None or ticker.get("last") is None:
                 continue
 
-            last_bar = df.iloc[-1]
-            curr_price = float(last_bar["close"])
-            curr_high = float(last_bar["high"])
-            curr_low = float(last_bar["low"])
-            curr_atr = last_bar.get("ATR_14", curr_price * 0.005)
-
-            if pd.isna(curr_atr):
-                continue
+            # 실시간 현재가
+            curr_price = float(ticker["last"])
+            # 백업용으로 등록 시의 ATR 사용 (실시간 ATR 계산 우회)
+            curr_atr = pos.get("atr", curr_price * 0.005)
 
             # 샹들리에 손절선 갱신 + 돌파 여부 확인
+            # 실시간 체크이므로 고가/저가/현재가를 모두 curr_price로 동일하게 취급하여 갱신합니다.
             ce_result = strategy.check_chandelier_exit(
                 symbol=symbol,
                 portfolio=portfolio,
                 current_price=curr_price,
-                current_high=curr_high,
-                current_low=curr_low,
+                current_high=curr_price,
+                current_low=curr_price,
                 current_atr=float(curr_atr),
             )
 
