@@ -4,6 +4,9 @@ import json
 import aiohttp
 from datetime import datetime, timezone, timedelta
 import pandas as pd
+import numpy as np
+from sklearn.preprocessing import RobustScaler
+import traceback
 from config import logger, settings
 from database import check_db_connection, Trade, MarketSnapshot, AsyncSessionLocal
 from data_pipeline import DataPipeline
@@ -433,6 +436,7 @@ async def process_closed_kline(
 
     except Exception as e:
         logger.error(f"[{symbol}] KLINE 마감 처리 중 에러: {e}")
+        logger.error(traceback.format_exc())
 
 
 async def htf_refresh_loop(pipeline: DataPipeline):
