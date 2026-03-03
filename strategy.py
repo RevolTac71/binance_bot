@@ -419,24 +419,30 @@ class StrategyEngine:
         low_price = float(current["low"])
         volume = float(current["volume"])
 
-        rsi_val = current.get("RSI", 50)
-        lower_band = current.get("Lower_Band", None)
-        upper_band = current.get("Upper_Band", None)
+        rsi_val = current.get("RSI", 50.0)
+        lower_band = current.get("Lower_Band")
+        upper_band = current.get("Upper_Band")
         vwap_mid = current.get("VWAP", market_price)
-        vol_sma_20 = current.get("Vol_SMA_20", volume)
+        vol_sma_20 = current.get("Vol_SMA_20")
         atr_14 = current.get("ATR_14", market_price * 0.005)
 
         atr_long_len = getattr(settings, "ATR_LONG_LEN", 200)
         atr_long = current.get(f"ATR_{atr_long_len}", atr_14)
 
-        # 결측치 방어
+        # 결측치 방어 (NoneType 예외 차단 로직 강화)
         if (
-            pd.isna(lower_band)
+            lower_band is None
+            or upper_band is None
+            or vol_sma_20 is None
+            or pd.isna(lower_band)
             or pd.isna(upper_band)
             or pd.isna(atr_14)
             or pd.isna(vol_sma_20)
         ):
-            return {"signal": None, "reason": "지표 결측치 발생"}
+            return {
+                "signal": None,
+                "reason": "지표 결측치 발생 (밴드 또는 거래량 SMA 없음)",
+            }
 
         # ── STEP 1: Session Filter ────────────────────────────────────────
         # [V16.1] 24-Hour Rolling VWAP 설계 도입으로 인해, 00:00 기준 리셋 대기시간(Session Block) 삭제
