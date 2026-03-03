@@ -1,6 +1,7 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy import Column, Integer, String, Float, DateTime, Text, text, Boolean
+from sqlalchemy.dialects.postgresql import JSONB
 from config import settings, logger
 
 # 명시적으로 기존 DataBase 스키마를 선언합니다 (Reflection 대신 사용)
@@ -23,6 +24,8 @@ class Trade(Base):
     # 거래 당시의 전략 파라미터 스냅샷 (JSON 문자열)
     # 예: {"k_value": 2.0, "vol_mult": 1.5, "atr_ratio": 1.2, "leverage": 10, "timeframe": "3m", ...}
     params = Column(Text, nullable=True)
+    # 진입 시점의 시장 지표 스냅샷 (JSONB 형식으로 저장하여 PostgreSQL 내부 검색/인덱싱 최적화)
+    market_data = Column(JSONB, nullable=True)
 
 
 class BalanceHistory(Base):

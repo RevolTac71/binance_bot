@@ -643,6 +643,7 @@ class StrategyEngine:
                     "atr_val": float(atr_14),
                     "vwap_mid": float(vwap_mid),
                     "reason": discarded_reason,
+                    "market_data": None,
                 }
 
             if signal_type == "SHORT" and current_shorts >= max_same_dir:
@@ -657,6 +658,7 @@ class StrategyEngine:
                     "atr_val": float(atr_14),
                     "vwap_mid": float(vwap_mid),
                     "reason": discarded_reason,
+                    "market_data": None,
                 }
 
         if signal_type is None and not reason:
@@ -713,4 +715,19 @@ class StrategyEngine:
             "atr_val": float(atr_14),
             "vwap_mid": float(vwap_mid),
             "reason": reason,
+            "market_data": {
+                "rsi_14": float(rsi_val),
+                "lower_band": float(lower_band) if lower_band is not None else None,
+                "upper_band": float(upper_band) if upper_band is not None else None,
+                "vol_sma_20": float(vol_sma_20) if vol_sma_20 is not None else None,
+                "volume": float(volume),
+                "atr_14": float(atr_14),
+                "adx_15m": float(mtf["adx"]) if "adx" in mtf else None,
+                "htf_bias": str(htf_bias) if htf_bias else None,
+                "mtf_regime": str(regime) if regime else None,
+                "mtf_momentum": str(momentum) if momentum else None,
+                "cvd_trend": str(cvd_trend) if cvd_trend else None,
+            }
+            if signal_type is not None
+            else None,
         }

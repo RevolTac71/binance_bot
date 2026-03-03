@@ -405,6 +405,7 @@ async def process_closed_kline(
                 reason=reason,
                 tp_dist=sizing["tp_dist"],
                 sl_dist=sizing["sl_dist"],
+                market_data=decision.get("market_data"),
             )
 
             # [V16] 포트폴리오 상태에 포지션 등록 (Chandelier 추적 시작)

@@ -227,6 +227,7 @@ class ExecutionEngine:
         reason: str,
         tp_dist: float = 0.0,
         sl_dist: float = 0.0,
+        market_data: dict = None,
     ) -> bool:
         """
         [V16.1] 시장가(Market) 대신 포스트 온리(Maker) 지정가로 호가를 추격(Chasing)하며 진입합니다.
@@ -475,6 +476,7 @@ class ExecutionEngine:
                 "sl_price": sl_price,
                 "execution_time_ms": int(time.time() * 1000) - start_time_ms,
                 "reason": reason,
+                "market_data": market_data,
             }
 
             # --- [HOTFIX] 진입 직후 봇 추적망에 즉각 편입하여 수동진입 감지(오작동) 방지 ---
@@ -596,6 +598,7 @@ class ExecutionEngine:
                     reason=f"{dr_prefix}V16 시장가/추격 진입 완료",
                     dry_run=settings.DRY_RUN,
                     params=self._snapshot_params(),
+                    market_data=entry_info.get("market_data"),
                 )
                 session.add(new_trade)
 
