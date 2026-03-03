@@ -47,6 +47,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/status — 봇 상태·포지션·잔고 요약\n"
         "/pause — 신규 진입 일시정지 (기존 포지션 감시 유지)\n"
         "/resume — 일시정지 해제\n"
+        "/params — 현재 설정된 봇의 모든 파라미터(설정값) 조회\n"
         "/panic — 비상! 전량 시장가 청산 후 정지\n"
         "/restart — 봇 프로세스 강제 재부팅\n\n"
         "── 파라미터 변경: /setparam [키] [값] ──\n"
@@ -460,6 +461,37 @@ async def close_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ 청산 중 에러 발생: {e}")
 
 
+async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_admin(update):
+        return
+
+    mode = "모의투자(DRY_RUN)" if settings.DRY_RUN else "실전매매(REAL)"
+    mtf = "ON" if getattr(settings, "MTF_FILTER", True) else "OFF"
+
+    msg = (
+        "⚙️ [현재 설정 파라미터]\n"
+        f"모드      : {mode}\n"
+        f"K-Value   : {getattr(settings, 'K_VALUE', 2.0)}\n"
+        f"레버리지  : {settings.LEVERAGE}x\n"
+        f"리스크    : {settings.RISK_PERCENTAGE * 100:.1f}%\n"
+        f"캔들타임  : {getattr(settings, 'TIMEFRAME', '3m')}\n"
+        f"MaxTrades : {getattr(settings, 'MAX_TRADES', 3)}\n"
+        f"Time Exit : {getattr(settings, 'TIME_EXIT_MINUTES', 0)}분\n"
+        f"MTF Filter: {mtf}\n"
+        f"HTF 1H    : {getattr(settings, 'HTF_TIMEFRAME_1H', '1h')}\n"
+        f"HTF 15m   : {getattr(settings, 'HTF_TIMEFRAME_15M', '15m')}\n"
+        f"RSI 주기  : {getattr(settings, 'RSI_PERIOD', 14)}\n"
+        f"RSI 반전  : (롱: {getattr(settings, 'RSI_OS', 30)}, 숏: {getattr(settings, 'RSI_OB', 70)})\n"
+        f"거래량배수: {getattr(settings, 'VOL_MULT', 1.5)}x\n"
+        f"ATR Ratio : {getattr(settings, 'ATR_RATIO_MULT', 1.2)}\n"
+        f"SL 배수   : {getattr(settings, 'SL_MULT', 3.0)}\n"
+        f"TP 배수   : {getattr(settings, 'TP_MULT', 6.0)}\n"
+        f"재진입대기: {getattr(settings, 'LOSS_COOLDOWN_MINUTES', 15)}분\n\n"
+        "💡 변경은 /setparam [옵션] [값] 이용"
+    )
+    await update.message.reply_text(msg)
+
+
 def setup_telegram_bot(execution_engine):
     """
     python-telegram-bot Application 인스턴스를 빌드하고 핸들러를 붙여 반환합니다.
@@ -478,6 +510,7 @@ def setup_telegram_bot(execution_engine):
 
     application.add_handler(CommandHandler("start", start_cmd))
     application.add_handler(CommandHandler("help", help_cmd))
+    application.add_handler(CommandHandler("params", params_cmd))
     application.add_handler(CommandHandler("status", status_cmd))
     application.add_handler(CommandHandler("pause", pause_cmd))
     application.add_handler(CommandHandler("resume", resume_cmd))
