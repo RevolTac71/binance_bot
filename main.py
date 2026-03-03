@@ -770,6 +770,7 @@ async def websocket_loop(
             streams.extend(agg_streams)
         
             ws_url = "wss://fstream.binance.com/stream?streams=" + "/".join(streams)
+            global ws_reconnect_flag
             ws_reconnect_flag = False
 
             logger.info(f"⚡ 무지연 WebSocket 스트림({tf} {len(target_symbols)}종목) 접속 시도 중...")
