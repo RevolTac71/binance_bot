@@ -302,6 +302,8 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "rsi_ob": ("RSI_OB", int, "RSI_OB"),
             "rsi_os": ("RSI_OS", int, "RSI_OS"),
             "mtf_filter": (None, None, None),  # Custom logic
+            "mtf": (None, None, None),  # Custom logic alias
+            "mtf_mode": (None, None, None),  # Custom logic alias
             "mode": (None, None, None),  # dry 또는 real
         }
 
