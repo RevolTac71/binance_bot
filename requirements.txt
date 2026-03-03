@@ -10,3 +10,4 @@ psutil
 aiohttp
 websockets
 scikit-learn
+pydantic>=2.4.1

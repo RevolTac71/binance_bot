@@ -23,6 +23,7 @@ from __future__ import annotations
 import pandas as pd
 import numpy as np
 from typing import Optional
+from schemas import MarketDataSnapshot
 from config import settings, logger
 
 
@@ -713,28 +714,29 @@ class StrategyEngine:
             else:
                 logger.info(f"[{symbol}] ✖ [STEP8] 복합 조건 미충족 — {reason}")
 
+        # [V16.8] Pydantic Schema Validation
+        market_data_obj = None
+        if signal_type is not None:
+            market_data_obj = MarketDataSnapshot(
+                rsi=float(rsi_val),
+                lower_band=float(lower_band) if lower_band is not None else None,
+                upper_band=float(upper_band) if upper_band is not None else None,
+                sma_20=float(vol_sma_20) if vol_sma_20 is not None else None,
+                volume=float(volume),
+                atr_14=float(atr_14),
+                adx_15m=float(mtf["adx"])
+                if "adx" in mtf and mtf["adx"] is not None
+                else None,
+                mtf_bias_1h=str(htf_bias) if htf_bias else None,
+                regime=str(regime) if regime else None,
+                twap_imbalance=float(bid_ask_imbalance),
+            ).model_dump(exclude_none=True)
+
         return {
             "signal": signal_type,
             "market_price": market_price,
             "atr_val": float(atr_14),
             "vwap_mid": float(vwap_mid),
             "reason": reason,
-            "market_data": {
-                "rsi_14": float(rsi_val),
-                "lower_band": float(lower_band) if lower_band is not None else None,
-                "upper_band": float(upper_band) if upper_band is not None else None,
-                "vol_sma_20": float(vol_sma_20) if vol_sma_20 is not None else None,
-                "volume": float(volume),
-                "atr_14": float(atr_14),
-                "adx_15m": float(mtf["adx"])
-                if "adx" in mtf and mtf["adx"] is not None
-                else None,
-                "htf_bias": str(htf_bias) if htf_bias else None,
-                "mtf_regime": str(regime) if regime else None,
-                "mtf_momentum": str(momentum) if momentum else None,
-                "cvd_trend": str(cvd_trend) if cvd_trend else None,
-                "bid_ask_imbalance": float(bid_ask_imbalance),
-            }
-            if signal_type is not None
-            else None,
+            "market_data": market_data_obj,
         }

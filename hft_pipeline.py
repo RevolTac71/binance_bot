@@ -12,6 +12,7 @@ from sklearn.preprocessing import RobustScaler
 
 from sqlalchemy import delete
 from database import AsyncSessionLocal, MarketData_1m
+from schemas import HFTFeatures1m
 from config import settings
 
 logger = logging.getLogger("HFTPipeline")
@@ -35,10 +36,16 @@ class HFTDataPipeline:
         self.session = None
         self.scaler = RobustScaler()
 
+        # [V16.8] 동시성 제어 락 (주기적인 Snapshot 시 스레드 경합 방지)
+        self.buffer_locks = {}
+        # [V16.8] DB Insert 실패 시 재적재를 위한 메모리 큐
+        self.retry_queue = []
+
         # Initialize deques for each symbol
         for sym in self.symbols:
             orderbook_buffer[sym] = deque(maxlen=MAX_DEQUE_SIZE)
             trade_buffer[sym] = deque(maxlen=MAX_DEQUE_SIZE)
+            self.buffer_locks[sym] = asyncio.Lock()
 
     async def init_session(self):
         if not self.session:
@@ -59,11 +66,18 @@ class HFTDataPipeline:
                     attempt = 0  # 연결 성공 시 백오프 초기화
                     async for message in ws:
                         await handler(json.loads(message))
+            except websockets.exceptions.ConnectionClosed as e:
+                attempt += 1
+                wait_time = min(2**attempt, 60)
+                logger.warning(
+                    f"[HFT] WS Connection Closed ({stream_name}): Code {e.code}, Reason {e.reason}. Reconnecting in {wait_time}s..."
+                )
+                await asyncio.sleep(wait_time)
             except Exception as e:
                 attempt += 1
                 wait_time = min(2**attempt, 60)  # Max 60초 대기
-                logger.warning(
-                    f"[HFT] WS Disconnected ({stream_name}): {e}. Reconnecting in {wait_time}s..."
+                logger.error(
+                    f"[HFT] WS Unexpected Error ({stream_name}): {type(e).__name__} - {e}. Reconnecting in {wait_time}s..."
                 )
                 await asyncio.sleep(wait_time)
 
@@ -83,7 +97,8 @@ class HFTDataPipeline:
                 "ask_price": float(msg["a"]),
                 "ask_qty": float(msg["A"]),
             }
-            orderbook_buffer[sym].append(record)
+            async with self.buffer_locks[sym]:
+                orderbook_buffer[sym].append(record)
 
     async def handle_aggtrade(self, msg: dict):
         """틱 단위 체결 내역 핸들링 (@aggTrade)"""
@@ -99,20 +114,20 @@ class HFTDataPipeline:
                 "qty": float(msg["q"]),
                 "is_buyer_maker": msg["m"],  # True = Sell Trade
             }
-            trade_buffer[sym].append(record)
+            async with self.buffer_locks[sym]:
+                trade_buffer[sym].append(record)
 
     # ── 3. 1분 단위 데이터 백업 & OFI 계산 (스레드 분리) ──
     def _process_1m_snapshot_sync(
-        self, sym: str, timestamp_1m: datetime, oi: float, funding: float
+        self,
+        sym: str,
+        timestamp_1m: datetime,
+        oi: float,
+        funding: float,
+        ob_ticks: list,
+        tr_ticks: list,
     ) -> dict | None:
         """CPU Bound 연산: RobustScaler 및 OFI 계산"""
-        # 1. 큐 데이터 스냅샷 (얉은 복사 후 즉시 클리어)
-        ob_ticks = list(orderbook_buffer[sym])
-        tr_ticks = list(trade_buffer[sym])
-
-        orderbook_buffer[sym].clear()
-        trade_buffer[sym].clear()
-
         if not tr_ticks:
             return None
 
@@ -132,14 +147,16 @@ class HFTDataPipeline:
         sell_qty = df_tr[df_tr["is_buyer_maker"] == True]["qty"].sum()
         ofi = buy_qty - sell_qty
 
-        # 5. 이상치 방어 (RobustScaler) 적용 연습
-        # 현재는 단일 Row라서 fitting에 의미가 적으나, 추후 Window 기반 처리 고려용 뼈대
-        features_dict = {
-            "ofi_1m": ofi,
-            "open_interest": oi,
-            "funding_rate": funding,
-            "tick_count": len(tr_ticks),
-        }
+        # 5. [V16.8] NOFI (Normalized OFI) 계산 및 Pydantic 스키마 검증
+        nofi = ofi / volume if volume > 0 else 0.0
+
+        features_dict = HFTFeatures1m(
+            ofi_1m=float(ofi),
+            nofi_1m=float(nofi),
+            open_interest=float(oi),
+            funding_rate=float(funding),
+            tick_count=len(tr_ticks),
+        ).model_dump()
 
         return {
             "symbol": sym.upper(),
@@ -187,26 +204,38 @@ class HFTDataPipeline:
 
             logger.info(f"[HFT] Creating 1-Min Snapshot at {snapshot_time}")
 
+            # 모든 심볼 연산 완료 대기 및 큐 스왑
             snapshot_tasks = []
             for sym in self.symbols:
-                # API 호출은 Event Loop에서 비동기로
                 oi, funding = await self.fetch_derivatives_data(sym)
 
-                # CPU 집약적 OFI/Pandas 연산은 ThreadPool로 오프로드 (블로킹 방지)
-                # requirements: import asyncio
+                # [V16.8] O(1) Queue Swap with AsyncLock
+                async with self.buffer_locks[sym]:
+                    ob_ticks = list(orderbook_buffer[sym])
+                    tr_ticks = list(trade_buffer[sym])
+                    orderbook_buffer[sym].clear()
+                    trade_buffer[sym].clear()
+
                 task = asyncio.to_thread(
-                    self._process_1m_snapshot_sync, sym, snapshot_time, oi, funding
+                    self._process_1m_snapshot_sync,
+                    sym,
+                    snapshot_time,
+                    oi,
+                    funding,
+                    ob_ticks,
+                    tr_ticks,
                 )
                 snapshot_tasks.append(task)
 
-            # 모든 심볼 연산 완료 대기
             results = await asyncio.gather(*snapshot_tasks)
             valid_results = [r for r in results if r is not None]
 
-            # 6. DB Bulk Insert (단일 트랜잭션. 심볼 갯수만큼의 행만 존재함)
-            if valid_results:
+            # 6. [V16.8] DB Bulk Insert 및 Retry Fallback
+            insert_batch = self.retry_queue + valid_results
+
+            if insert_batch:
                 async with AsyncSessionLocal() as session:
-                    for res in valid_results:
+                    for res in insert_batch:
                         new_row = MarketData_1m(
                             timestamp=res["timestamp"],
                             symbol=res["symbol"],
@@ -220,9 +249,16 @@ class HFTDataPipeline:
                         session.add(new_row)
                     try:
                         await session.commit()
+                        logger.info(
+                            f"[HFT] Successfully inserted {len(insert_batch)} 1M snapshots."
+                        )
+                        self.retry_queue.clear()
                     except Exception as e:
                         await session.rollback()
-                        logger.error(f"[HFT] 1-Min Insert Failed: {e}")
+                        logger.error(
+                            f"[HFT] 1-Min Insert Failed: {e}. Buffered {len(insert_batch)} items for retry."
+                        )
+                        self.retry_queue = insert_batch
 
     # ── 4. DB 용량 관리 (Retention Policy) ──
     async def retention_policy_loop(self):
@@ -241,7 +277,7 @@ class HFTDataPipeline:
             except Exception as e:
                 logger.error(f"[HFT GC] Pruning Error: {e}")
 
-            # 24시간 대기
+            # 24 시 간 대기
             await asyncio.sleep(86400)
 
     async def start(self):
