@@ -12,6 +12,7 @@ from risk_management import RiskManager
 from execution import ExecutionEngine
 from notification import notifier
 from telegram_commands import setup_telegram_bot
+from hft_pipeline import HFTDataPipeline
 
 
 def get_today_0000_utc_timestamp() -> int:
@@ -771,6 +772,11 @@ async def websocket_loop(
 
     # [V16.3] 12시간 주기 동적 타임프레임 갱신 루프 가동
     asyncio.create_task(target_refresh_loop(pipeline, execution))
+
+    # [V16.6] HFT Pipeline 병렬 가동 (동적 심볼 사용)
+    target_symbols = getattr(settings, "CURRENT_TARGET_SYMBOLS", [])
+    hft_pipeline = HFTDataPipeline(target_symbols)
+    asyncio.create_task(hft_pipeline.start())
 
     while True:
         try:

@@ -137,6 +137,26 @@ class OrderEvent(Base):
     attempt_count = Column(Integer, default=1)  # 몇 번째 Chasing 시도인지
 
 
+class MarketData_1m(Base):
+    """
+    [V16.6 HFT] 인메모리 파이프라인 전용 1분 단위 압축 스냅샷
+    원시 틱 데이터를 DB에 적재하지 않고, OHLCV와 파생지표(OI, 펀딩비, OFI 등)를
+    단일 JSON 컬럼으로 통합 보관하여 DB 부하(Write)를 최소화합니다.
+    """
+
+    __tablename__ = "market_data_1m"
+
+    timestamp = Column(DateTime, primary_key=True)
+    symbol = Column(String(20), primary_key=True)
+    open = Column(Float, nullable=True)
+    high = Column(Float, nullable=True)
+    low = Column(Float, nullable=True)
+    close = Column(Float, nullable=True)
+    volume = Column(Float, nullable=True)
+    # 펀딩비, 미결제약정(OI), 머신러닝 피처(OFI 등) 압축 적재
+    features = Column(JSONB, nullable=True)
+
+
 from sqlalchemy.pool import NullPool
 import uuid
 
