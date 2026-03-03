@@ -59,10 +59,11 @@ class HFTDataPipeline:
     async def connect_websocket(self, stream_path: str, handler):
         attempt = 0
         url = f"{WS_BASE_URL}/{stream_path}"
+        logger.info(f"[HFT] Attempting to connect to WS: {url}")
         while True:
             try:
                 async with websockets.connect(url) as ws:
-                    logger.info(f"[HFT] Connected to WS: {stream_name}")
+                    logger.info(f"[HFT] Connected to WS Successfully: {stream_path}")
                     attempt = 0  # 연결 성공 시 백오프 초기화
                     async for message in ws:
                         await handler(json.loads(message))
