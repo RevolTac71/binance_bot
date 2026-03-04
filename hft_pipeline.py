@@ -177,14 +177,16 @@ class HFTDataPipeline:
         try:
             # Open Interest
             async with self.session.get(
-                f"https://fapi.binance.com/fapi/v1/openInterest?symbol={sym.upper()}"
+                f"https://fapi.binance.com/fapi/v1/openInterest?symbol={sym.upper()}",
+                timeout=5,
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     oi = float(data.get("openInterest", 0.0))
             # Funding Rate
             async with self.session.get(
-                f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={sym.upper()}"
+                f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={sym.upper()}",
+                timeout=5,
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -264,9 +266,9 @@ class HFTDataPipeline:
                     except Exception as e:
                         await session.rollback()
                         logger.error(
-                            f"[HFT] 1-Min Insert Failed: {e}. Buffered {len(insert_batch)} items for retry."
+                            f"[HFT] 1-Min Insert Failed: {e}. Clearing retry queue to avoid infinite DB lock."
                         )
-                        self.retry_queue = insert_batch
+                        self.retry_queue.clear()
 
     # ── 4. DB 용량 관리 (Retention Policy) ──
     async def retention_policy_loop(self):
