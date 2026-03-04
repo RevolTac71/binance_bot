@@ -61,7 +61,6 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "rsi_period — RSI 계산 기간 (int, 기본 14)\n"
         "rsi_ob     — 과매수/숏 기준치 (int, 기본 70)\n"
         "rsi_os     — 과매도/롱 기준치 (int, 기본 30)\n"
-        "vol_mult   — 거래량 스파이크 배수 (float, 기본 1.5)\n"
         "atr_ratio  — 단/장기 ATR 비율 필터 (float, 기본 1.2)\n"
         "sl         — SL 배율 ×ATR (float, 기본 3.0 = 넓은 손절)\n"
         "tp         — TP 배율 ×ATR (float, 기본 6.0, R:R=tp/sl)\n"
@@ -290,7 +289,6 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "leverage": ("LEVERAGE", int, "LEVERAGE"),
             "timeframe": ("TIMEFRAME", str, "TIMEFRAME"),
             "time_exit": ("TIME_EXIT_MINUTES", int, "TIME_EXIT_MINUTES"),
-            "vol_mult": ("VOL_MULT", float, "VOL_MULT"),
             "atr_ratio": ("ATR_RATIO_MULT", float, "ATR_RATIO_MULT"),
             "adx": ("ADX_THRESHOLD", float, "ADX_THRESHOLD"),
             "chandelier": ("CHANDELIER_MULT", float, "CHANDELIER_MULT"),
@@ -537,12 +535,12 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"MTF Filter: {mtf}\n"
         f"HTF 1     : {getattr(settings, 'HTF_TIMEFRAME_1H', '1h')}\n"
         f"HTF 2     : {getattr(settings, 'HTF_TIMEFRAME_15M', '15m')}\n"
+        f"ADX 임계값: {getattr(settings, 'ADX_THRESHOLD', 20.0)}\n"
         f"ADX 추세배수: {getattr(settings, 'ADX_TREND_MULTIPLIER', 1.0)}\n"
         f"MTF 끄기배수: {getattr(settings, 'AUTO_MTF_LOWER_MULTIPLIER', 0.8)}\n"
         f"MTF 켜기배수: {getattr(settings, 'AUTO_MTF_UPPER_MULTIPLIER', 1.0)}\n"
         f"RSI 주기  : {getattr(settings, 'RSI_PERIOD', 14)}\n"
         f"RSI 반전  : (롱: {getattr(settings, 'RSI_OS', 30)}, 숏: {getattr(settings, 'RSI_OB', 70)})\n"
-        f"거래량배수: {getattr(settings, 'VOL_MULT', 1.5)}x\n"
         f"ATR Ratio : {getattr(settings, 'ATR_RATIO_MULT', 1.2)}\n"
         f"SL 배수   : {getattr(settings, 'SL_MULT', 3.0)}\n"
         f"TP 배수   : {getattr(settings, 'TP_MULT', 6.0)}\n"
