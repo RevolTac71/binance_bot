@@ -18,10 +18,14 @@ def update_env_variable(key: str, value: str):
     실행 중 메모리의 환경변수를 갱신하고 동시에 .env 파일에도 덮어씁니다.
     """
     os.environ[key] = str(value)
-    if os.path.exists(dotenv_path):
+    try:
+        # .env 파일이 없으면 빈 파일로 자동 생성하여 영구 저장 보장
+        if not os.path.exists(dotenv_path):
+            with open(dotenv_path, "a", encoding="utf-8") as f:
+                pass
         set_key(dotenv_path, key, str(value))
-    else:
-        logger.warning(f".env 파일을 찾을 수 없어 {key} 설정이 영구 저장되지 않습니다.")
+    except Exception as e:
+        logger.error(f".env 파일 갱신 실패 ({key}): {e}")
 
 
 # KST Timezone 설정

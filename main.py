@@ -30,24 +30,27 @@ def get_today_0000_utc_timestamp() -> int:
 
 def calc_next_refresh_seconds() -> float:
     """
-    다음 종목 리프레시 시점(UTC 02:15, 08:15, 14:15, 20:15)까지 남은 초(seconds)를 계산합니다.
+    다음 종목 리프레시 시점(UTC 02:15부터 3시간 간격)까지 남은 초(seconds)를 계산합니다.
+    (예: 02:15, 05:15, 08:15, 11:15, 14:15, 17:15, 20:15, 23:15)
     """
     now_utc = datetime.now(timezone.utc)
 
-    # 오늘 02:15, 08:15, 14:15, 20:15 후보 생성
-    c1 = now_utc.replace(hour=2, minute=15, second=0, microsecond=0)
-    c2 = now_utc.replace(hour=8, minute=15, second=0, microsecond=0)
-    c3 = now_utc.replace(hour=14, minute=15, second=0, microsecond=0)
-    c4 = now_utc.replace(hour=20, minute=15, second=0, microsecond=0)
-    # 내일 02:15 후보 생성
-    c5 = c1 + timedelta(days=1)
+    # 오늘 02:15부터 3시간 간격 후보 생성
+    candidates = []
+    for h in range(2, 24, 3):
+        candidates.append(now_utc.replace(hour=h, minute=15, second=0, microsecond=0))
+
+    # 내일 02:15 첫 후보 생성
+    candidates.append(
+        now_utc.replace(hour=2, minute=15, second=0, microsecond=0) + timedelta(days=1)
+    )
 
     # 현재 시각 이후의 가장 빠른 후보를 찾음
-    for target in [c1, c2, c3, c4, c5]:
+    for target in candidates:
         if target > now_utc:
             return (target - now_utc).total_seconds()
 
-    return 6 * 3600  # Fallback
+    return 3 * 3600  # Fallback (3시간)
 
 
 def is_funding_fee_cutoff() -> bool:
