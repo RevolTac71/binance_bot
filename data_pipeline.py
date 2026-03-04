@@ -162,7 +162,40 @@ class DataPipeline:
         else:
             df[f"ATR_{atr_long_len}"] = df["ATR_14"]
 
+        # V17: 로그 변환 Z-Score 거래량 (우측 꼬리 왜곡 방지)
+        log_vol = np.log1p(df["volume"])
+        log_vol_mean = log_vol.rolling(window=100, min_periods=20).mean()
+        log_vol_std = log_vol.rolling(window=100, min_periods=20).std()
+        df["Log_Vol_ZScore"] = (log_vol - log_vol_mean) / log_vol_std.replace(0, 1)
+
         return df
+
+    def calculate_fracdiff(
+        self, series: pd.Series, d: float = 0.4, window: int = 50
+    ) -> pd.Series:
+        """
+        V17: 부분 차분 (Fractional Differentiation)
+        가격 데이터의 장기 기억을 훼손하지 않으면서 정상성을 확보합니다.
+        - d: 차분 차수 (0 < d < 1, 0.4가 일반적)
+        - window: 가중치 절단 윈도우 (계산 효율)
+        """
+        # 부분 차분 가중치 산출
+        weights = [1.0]
+        for k in range(1, window):
+            w = -weights[-1] * (d - k + 1) / k
+            if abs(w) < 1e-6:
+                break
+            weights.append(w)
+        weights = np.array(weights[::-1])  # 역순 (가장 오래된 → 최신)
+
+        # 롤링 내적으로 부분 차분 시계열 생성
+        result = pd.Series(index=series.index, dtype="float64")
+        for i in range(len(weights) - 1, len(series)):
+            window_slice = series.iloc[i - len(weights) + 1 : i + 1].values
+            if len(window_slice) == len(weights):
+                result.iloc[i] = np.dot(weights, window_slice)
+
+        return result
 
     @with_exponential_backoff(max_retries=3)
     async def fetch_ohlcv_htf(

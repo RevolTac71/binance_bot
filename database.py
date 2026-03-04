@@ -74,6 +74,10 @@ class MarketSnapshot(Base):
     # 4. 기타 시장 정보
     funding_rate_match = Column(Integer, nullable=True)  # 1(일치), 0(불일치), -1(반대)
 
+    # 5. V17 확장 피처
+    log_vol_zscore = Column(Float, nullable=True)  # 로그 변환 거래량 Z-Score
+    correlation_max = Column(Float, nullable=True)  # 동조화 최대 상관계수
+
 
 class TradeLog(Base):
     """

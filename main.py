@@ -255,7 +255,9 @@ async def process_closed_kline(
 
     try:
         new_ts = int(kline["t"])
-        new_dt = pd.to_datetime(new_ts, unit="ms")
+        new_dt = pd.to_datetime(new_ts, unit="ms") + pd.Timedelta(
+            hours=9
+        )  # UTC → KST 통일
 
         # 새 캔들 row
         new_row = pd.DataFrame(
@@ -355,6 +357,24 @@ async def process_closed_kline(
         cvd_15m_sum = sum(hist[-5:]) if len(hist) > 0 else current_cvd
         cvd_slope = (current_cvd - hist[-1]) if len(hist) > 0 else 0.0
 
+        # V17: 현재 종목과 활성 포지션 간 최대 상관계수 산출
+        max_corr = 0.0
+        if df_15m is not None and not df_15m.empty:
+            target_returns = df_15m["close"].pct_change().dropna().tail(100)
+            if len(target_returns) >= 50:
+                for active_sym, pos_info in portfolio.positions.items():
+                    active_df = htf_df_15m.get(active_sym)
+                    if active_df is not None and not active_df.empty:
+                        active_returns = (
+                            active_df["close"].pct_change().dropna().tail(100)
+                        )
+                        aligned = pd.concat(
+                            [target_returns, active_returns], axis=1, join="inner"
+                        ).dropna()
+                        if len(aligned) >= 50:
+                            corr = abs(aligned.iloc[:, 0].corr(aligned.iloc[:, 1]))
+                            max_corr = max(max_corr, corr)
+
         snapshot = {
             "timestamp": new_dt.to_pydatetime()
             if hasattr(new_dt, "to_pydatetime")
@@ -373,6 +393,9 @@ async def process_closed_kline(
             "cvd_delta_slope": float(cvd_slope),
             "bid_ask_imbalance": float(twap_imbalance),
             "funding_rate_match": fr_match,
+            # V17 확장 피처
+            "log_vol_zscore": float(df_ind.iloc[-1].get("Log_Vol_ZScore", 0.0)),
+            "correlation_max": float(max_corr),
         }
         snapshot_queue.append(snapshot)
 

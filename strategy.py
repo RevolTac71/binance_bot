@@ -520,8 +520,10 @@ class StrategyEngine:
             else 0.0
         )
 
-        is_vol_spike = z_score >= 2.0
-        is_extreme_vol = z_score >= 3.0
+        spike_z = getattr(settings, "VOL_SPIKE_Z", 2.0)
+        extreme_z = getattr(settings, "VOL_EXTREME_Z", 3.0)
+        is_vol_spike = z_score >= spike_z
+        is_extreme_vol = z_score >= extreme_z
 
         # ── [V16.4 NEW] Auto-MTF 로직 (Hysteresis 완충 지대 적용) ───────────
         mtf_mode = getattr(settings, "MTF_MODE", "AUTO").upper()
@@ -801,7 +803,7 @@ class StrategyEngine:
             elif not is_vol_spike and not is_extreme_vol:
                 logger.info(
                     f"[{symbol}] 📉 [STEP5 Volume] 거래량 부족 — "
-                    f"Z-Score={z_score:.2f} (돌파 기준 +2.0σ 미달, 원시 캔들 {vol_ratio:.2f}x)"
+                    f"Z-Score={z_score:.2f} (돌파 기준 +{spike_z}σ 미달, 원시 캔들 {vol_ratio:.2f}x)"
                 )
             elif not (long_rejection or short_rejection):
                 logger.info(

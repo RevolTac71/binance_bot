@@ -51,3 +51,11 @@ class HFTFeatures1m(BaseModel):
     open_interest: float = Field(description="현재 미결제약정")
     funding_rate: float = Field(description="현재 펀딩비율")
     tick_count: int = Field(description="해당 분봉의 원시 체결 틱 갯수")
+    # V17 신규 미시구조 피처
+    buy_ratio: float = Field(default=0.5, description="매수 체결 비율 (0~1, 0.5=중립)")
+    spread_avg: float = Field(
+        default=0.0, description="1분간 평균 호가 스프레드 (ask-bid)"
+    )
+    log_volume_zscore: float = Field(
+        default=0.0, description="로그 변환 거래량 Z-Score"
+    )

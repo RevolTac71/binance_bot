@@ -24,13 +24,26 @@ WS_BASE_URL = (
     if getattr(settings, "USE_TESTNET", False)
     else "wss://fstream.binance.com"
 )
+
+# REST API 베이스 (OI/펀딩비 조회용)
+REST_BASE_URL = (
+    "https://testnet.binancefuture.com"
+    if getattr(settings, "USE_TESTNET", False)
+    else "https://fapi.binance.com"
+)
+
 # Ticks는 메모리 상에 최대 2만건만 보관하여 누수 방지
 MAX_DEQUE_SIZE = 20000
 RETENTION_DAYS = 7
+# V17: OI/펀딩비 조회 주기 (초) — Rate Limit 방어
+DERIVATIVES_FETCH_INTERVAL = 300  # 5분
 
 # 인메모리 버퍼 (Symbol -> deque)
 orderbook_buffer = {}
 trade_buffer = {}
+
+# V17: 1분 로그 거래량 히스토리 (Z-Score 산출용)
+log_volume_history = {}  # {sym: deque(maxlen=100)}
 
 
 class HFTDataPipeline:
@@ -46,11 +59,16 @@ class HFTDataPipeline:
         # [V16.8] DB Insert 실패 시 재적재를 위한 메모리 큐
         self.retry_queue = []
 
+        # V17: OI/펀딩비 5분 캐시 (Rate Limit 회피)
+        self._derivatives_cache = {}  # {sym: (oi, funding)}
+        self._derivatives_last_fetch = 0  # UTC timestamp
+
         # Initialize deques for each symbol
         for sym in self.symbols:
             orderbook_buffer[sym] = deque(maxlen=MAX_DEQUE_SIZE)
             trade_buffer[sym] = deque(maxlen=MAX_DEQUE_SIZE)
             self.buffer_locks[sym] = asyncio.Lock()
+            log_volume_history[sym] = deque(maxlen=100)
 
     async def init_session(self):
         if not self.session:
@@ -92,7 +110,6 @@ class HFTDataPipeline:
     # ── 2. 인메모리 버퍼 적재 핸들러 (DB Insert 아님) ──
     async def handle_bookticker(self, msg: dict):
         """Best Bid/Ask 스냅샷 핸들링 (@bookTicker)"""
-        # msg: {'e':'bookTicker', 's':'BTCUSDT', 'b':'...', 'B':'...', 'a':'...', 'A':'...', 'E':1612...}
         if "s" not in msg:
             return
 
@@ -110,7 +127,6 @@ class HFTDataPipeline:
 
     async def handle_aggtrade(self, msg: dict):
         """틱 단위 체결 내역 핸들링 (@aggTrade)"""
-        # msg: {'e':'aggTrade', 's':'BTCUSDT', 'p':'...', 'q':'...', 'm':True, 'E':1612...}
         if "s" not in msg:
             return
 
@@ -125,6 +141,68 @@ class HFTDataPipeline:
             async with self.buffer_locks[sym]:
                 trade_buffer[sym].append(record)
 
+    # ── 2.5 V17: OI/펀딩비 5분 캐시 조회 ──
+    async def _fetch_single_derivatives(self, sym: str) -> tuple:
+        """단일 종목 OI·펀딩비 REST 조회"""
+        raw_sym = sym.upper()
+        oi = 0.0
+        funding = 0.0
+
+        try:
+            # 미결제약정 (OI)
+            async with self.session.get(
+                f"{REST_BASE_URL}/fapi/v1/openInterest",
+                params={"symbol": raw_sym},
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    oi = float(data.get("openInterest", 0.0))
+        except Exception as e:
+            logger.warning(f"[HFT] {raw_sym} OI 조회 실패: {e}")
+
+        try:
+            # 펀딩비
+            async with self.session.get(
+                f"{REST_BASE_URL}/fapi/v1/premiumIndex",
+                params={"symbol": raw_sym},
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    funding = float(data.get("lastFundingRate", 0.0))
+        except Exception as e:
+            logger.warning(f"[HFT] {raw_sym} 펀딩비 조회 실패: {e}")
+
+        return oi, funding
+
+    async def _refresh_derivatives_cache(self):
+        """5분마다 종목별 OI·펀딩비를 직렬 조회 (Rate Limit 회피)"""
+        now = datetime.utcnow().timestamp()
+        if now - self._derivatives_last_fetch < DERIVATIVES_FETCH_INTERVAL:
+            return  # 아직 갱신 주기 도달 안 함
+
+        await self.init_session()
+        logger.info("[HFT] OI/펀딩비 캐시 갱신 시작")
+
+        for sym in self.symbols:
+            try:
+                oi, funding = await self._fetch_single_derivatives(sym)
+                self._derivatives_cache[sym] = (oi, funding)
+            except Exception as e:
+                logger.warning(f"[HFT] {sym} OI/Funding 캐시 갱신 실패: {e}")
+            # 종목당 300ms 간격으로 Rate Limit 방어
+            await asyncio.sleep(0.3)
+
+        self._derivatives_last_fetch = now
+        logger.info(
+            f"[HFT] OI/펀딩비 캐시 갱신 완료 ({len(self._derivatives_cache)}종목)"
+        )
+
+    def fetch_derivatives_data_cached(self, sym: str) -> tuple:
+        """캐시된 OI/펀딩비 반환 (없으면 0.0)"""
+        return self._derivatives_cache.get(sym, (0.0, 0.0))
+
     # ── 3. 1분 단위 데이터 백업 & OFI 계산 (스레드 분리) ──
     def _process_1m_snapshot_sync(
         self,
@@ -135,35 +213,66 @@ class HFTDataPipeline:
         ob_ticks: list,
         tr_ticks: list,
     ) -> dict | None:
-        """CPU Bound 연산: RobustScaler 및 OFI 계산"""
+        """CPU Bound 연산: OFI, 체결 강도, 스프레드, 로그 Z-Score 계산"""
         if not tr_ticks:
             return None
 
-        # 2. DataFrame 변환
+        # DataFrame 변환
         df_tr = pd.DataFrame(tr_ticks)
 
-        # 3. 1분봉 OHLCV 기초 생성
+        # 1분봉 OHLCV 기초 생성
         open_p = df_tr["price"].iloc[0]
         high_p = df_tr["price"].max()
         low_p = df_tr["price"].min()
         close_p = df_tr["price"].iloc[-1]
         volume = df_tr["qty"].sum()
 
-        # 4. 기능 추출: OFI (Order Flow Imbalance) 계산
-        # 간단한 틱 기반 근사치 계산: 체결된 Buy Qty - Sell Qty
+        # OFI (Order Flow Imbalance) 계산
         buy_qty = df_tr[df_tr["is_buyer_maker"] == False]["qty"].sum()
         sell_qty = df_tr[df_tr["is_buyer_maker"] == True]["qty"].sum()
         ofi = buy_qty - sell_qty
 
-        # 5. [V16.8] NOFI (Normalized OFI) 계산 및 Pydantic 스키마 검증
+        # NOFI (Normalized OFI)
         nofi = ofi / volume if volume > 0 else 0.0
 
+        # V17: 매수 체결 비율 (Buy Ratio) — 체결 강도 지표
+        buy_ratio = float(buy_qty / volume) if volume > 0 else 0.5
+
+        # V17: 평균 호가 스프레드 — 유동성 지표
+        spread_avg = 0.0
+        if ob_ticks:
+            spreads = [
+                t["ask_price"] - t["bid_price"]
+                for t in ob_ticks
+                if t.get("ask_price", 0) > 0 and t.get("bid_price", 0) > 0
+            ]
+            if spreads:
+                spread_avg = float(np.mean(spreads))
+
+        # V17: 로그 Z-Score 거래량 — 극단 스파이크 통계 판별
+        log_vol_zscore = 0.0
+        vol_hist = log_volume_history.get(sym, deque(maxlen=100))
+        log_vol = float(np.log1p(volume))
+        vol_hist.append(log_vol)
+        log_volume_history[sym] = vol_hist
+
+        if len(vol_hist) >= 20:
+            arr = np.array(vol_hist)
+            mean_val = arr.mean()
+            std_val = arr.std()
+            if std_val > 0:
+                log_vol_zscore = float((log_vol - mean_val) / std_val)
+
+        # Pydantic 스키마 검증 후 features JSONB 구성
         features_dict = HFTFeatures1m(
             ofi_1m=float(ofi),
             nofi_1m=float(nofi),
             open_interest=float(oi),
             funding_rate=float(funding),
             tick_count=len(tr_ticks),
+            buy_ratio=buy_ratio,
+            spread_avg=spread_avg,
+            log_volume_zscore=log_vol_zscore,
         ).model_dump()
 
         return {
@@ -176,14 +285,6 @@ class HFTDataPipeline:
             "volume": volume,
             "features": features_dict,
         }
-
-    async def fetch_derivatives_data(self, sym: str) -> tuple[float, float]:
-        """
-        REST API: 미결제약정(OI) 및 펀딩비 조회
-        [V16.9.3] Binance REST Rate Limit 및 aiohttp 동시성 타임아웃 방지를 위해
-        HFT 파이프라인에서의 OI/Funding 조회를 비활성화하고 (0.0, 0.0)을 기본값으로 반환합니다.
-        """
-        return 0.0, 0.0
 
     async def aggregator_loop(self):
         """매 정각 1분(00초)마다 스냅샷을 찍고 DB에 1 Row Insert"""
@@ -203,21 +304,14 @@ class HFTDataPipeline:
 
             logger.info(f"[HFT] Creating 1-Min Snapshot at {snapshot_time}")
 
-            # REST Fetch 15종목 병렬 스케줄링 (I/O 블로킹 최소화) 및 실패 시 (0,0) 반환 래퍼 적용
-            async def safe_fetch(sym_name):
-                try:
-                    return await self.fetch_derivatives_data(sym_name)
-                except Exception as e:
-                    logger.error(f"[HFT] Safe Fetch Error {sym_name}: {e}")
-                    return (0.0, 0.0)
-
-            fetch_tasks = [safe_fetch(sym) for sym in self.symbols]
-            derivatives_results = await asyncio.gather(*fetch_tasks)
+            # V17: 5분 주기 OI/펀딩비 캐시 갱신
+            await self._refresh_derivatives_cache()
 
             # 모든 심볼 연산 완료 대기 및 큐 스왑
             snapshot_tasks = []
-            for idx, sym in enumerate(self.symbols):
-                oi, funding = derivatives_results[idx]
+            for sym in self.symbols:
+                # V17: 캐시된 OI/펀딩비 사용
+                oi, funding = self.fetch_derivatives_data_cached(sym)
 
                 # [V16.8] O(1) Queue Swap with AsyncLock
                 async with self.buffer_locks[sym]:
@@ -240,7 +334,7 @@ class HFTDataPipeline:
             results = await asyncio.gather(*snapshot_tasks)
             valid_results = [r for r in results if r is not None]
 
-            # 6. [V16.8] DB Bulk Insert 및 Retry Fallback
+            # [V16.8] DB Bulk Insert 및 Retry Fallback
             insert_batch = self.retry_queue + valid_results
 
             if insert_batch:
@@ -287,7 +381,7 @@ class HFTDataPipeline:
             except Exception as e:
                 logger.error(f"[HFT GC] Pruning Error: {e}")
 
-            # 24 시 간 대기
+            # 24시간 대기
             await asyncio.sleep(86400)
 
     async def start(self):
@@ -301,8 +395,7 @@ class HFTDataPipeline:
 
         stream_param = "/".join(streams)
 
-        # 바이낸스는 한번에 여러 스트림을 구독할 수 있습니다 (wss://.../stream?streams=...)
-        # 코딩 편의상 전체 통합 커넥션 1개, 이벤트 파싱 1개로 처리
+        # 바이낸스는 한번에 여러 스트림을 구독할 수 있습니다
         async def combined_handler(msg):
             # Combined stream wrapper format: {"stream": "...", "data": {...}}
             if "data" in msg and "e" in msg["data"]:
