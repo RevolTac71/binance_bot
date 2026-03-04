@@ -777,7 +777,7 @@ class StrategyEngine:
             elif not is_vol_spike and not is_extreme_vol:
                 logger.info(
                     f"[{symbol}] 📉 [STEP5 Volume] 거래량 부족 — "
-                    f"{vol_ratio:.2f}x (진입 기준 {vol_mult:.1f}x 미달)"
+                    f"Z-Score={z_score:.2f} (돌파 기준 +2.0σ 미달, 원시 캔들 {vol_ratio:.2f}x)"
                 )
             elif not (long_rejection or short_rejection):
                 logger.info(
