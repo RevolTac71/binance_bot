@@ -1,24 +1,91 @@
 from config import settings, logger
+from database import TradeLog, AsyncSessionLocal
+from sqlalchemy.future import select
 
 
 class RiskManager:
     def __init__(self, data_pipeline):
         """
-        V15.0 리스크 매니지먼트 (Kelly-Risk Parity 버전)
-        - ATR 기반 투입 갯수 산출 (리스크 패리티 방식: 손절 시 고정 비율만 잃음)
-        - 설정(config / .env)된 RISK_PERCENTAGE(기본 0.5% = 0.005)를 총 자본의 허용 손실금으로 사용
+        V17 리스크 매니지먼트 (Half-Kelly + Risk Parity 하이브리드)
+        - KELLY_SIZING=True 시: 최근 거래 기록의 승률(p)과 손익비(b)로 투입 비중 자동 계산
+        - KELLY_SIZING=False 시: 기존 RISK_PERCENTAGE 고정 비율 방식 유지
         """
         self.pipeline = data_pipeline
         self.risk_pct = settings.RISK_PERCENTAGE  # 허용 손실 비율 (예: 0.005)
         self.leverage = settings.LEVERAGE
         self.min_order_usdt = 6.0  # 바이낸스 선물 최소 주문 금액 방어망
 
-    def calculate_position_size(
+        # Kelly 캐시 (매 거래마다 DB 조회를 방지하기 위해 주기적 갱신)
+        self._kelly_cache = None
+        self._kelly_cache_count = 0
+
+    async def _fetch_recent_stats(self, min_trades: int = 20) -> tuple:
+        """
+        최근 거래 기록에서 승률(p)과 평균 손익비(b)를 산출합니다.
+        Returns: (win_rate, avg_win_loss_ratio) 또는 데이터 부족 시 (None, None)
+        """
+        try:
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    select(TradeLog.realized_pnl)
+                    .where(TradeLog.realized_pnl.isnot(None))
+                    .order_by(TradeLog.exit_time.desc())
+                    .limit(100)
+                )
+                pnls = [row[0] for row in result.fetchall()]
+
+            if len(pnls) < min_trades:
+                logger.info(
+                    f"[Kelly] 표본 부족 ({len(pnls)}/{min_trades}). "
+                    f"고정 비율({self.risk_pct * 100:.1f}%) 폴백."
+                )
+                return None, None
+
+            wins = [p for p in pnls if p > 0]
+            losses = [abs(p) for p in pnls if p < 0]
+
+            if not losses or not wins:
+                return None, None
+
+            # 승률과 평균 손익비 산출
+            p = len(wins) / len(pnls)
+            b = (sum(wins) / len(wins)) / (sum(losses) / len(losses))
+
+            logger.info(
+                f"[Kelly] 표본={len(pnls)}, 승률={p:.2%}, "
+                f"손익비={b:.2f}, 순수 Kelly={(p * (b + 1) - 1) / b:.4f}"
+            )
+            return p, b
+        except Exception as e:
+            logger.error(f"[Kelly] 거래 기록 조회 중 에러: {e}")
+            return None, None
+
+    def _half_kelly(self, p: float, b: float) -> float:
+        """
+        Half-Kelly 비율 산출.
+        공식: f* = (p(b+1) - 1) / b
+        꼬리 위험 방어를 위해 산출값의 절반 사용.
+        """
+        kelly = (p * (b + 1) - 1) / b
+        kelly = max(0.0, kelly)  # 음수면 베팅하지 않음 (손실 기대)
+        half_kelly = kelly / 2  # 꼬리 위험 방어
+
+        # 최대 투입 비율 캡 적용
+        max_frac = getattr(settings, "KELLY_MAX_FRACTION", 0.05)
+        result = min(half_kelly, max_frac)
+
+        logger.info(
+            f"[Kelly] 풀 Kelly={kelly:.4f}, "
+            f"Half-Kelly={half_kelly:.4f}, 캡 적용={result:.4f}"
+        )
+        return result
+
+    async def calculate_position_size(
         self, symbol: str, capital: float, entry_price: float, atr_val: float
     ) -> dict:
         """
-        사용자 설정 비율 기반 거래 수량 동적 산출.
-        단, TP/SL 거리는 시세 변동폭(ATR)을 반영합니다.
+        V17 하이브리드 사이징: Kelly 활성 시 동적 비중, 비활성 시 고정 비율.
+        TP/SL 거리는 시세 변동폭(ATR)을 반영합니다.
 
         Returns:
             dict: {
@@ -31,11 +98,25 @@ class RiskManager:
         if capital <= 0 or entry_price <= 0 or atr_val <= 0:
             return {"size": 0.0, "invest_usdt": 0.0, "tp_dist": 0.0, "sl_dist": 0.0}
 
-        # 1. 1회 투입 증거금 액수 산출 (총 자본금 * 사용자가 설정한 투입 비율)
-        # (이전의 Kelly-Risk Parity 방식이 아닌 단순 증거금 분할 투입 방식)
-        margin_invest = capital * self.risk_pct
+        # V17: Kelly 사이징이 활성화되었고 캐시가 비었다면 DB에서 산출
+        risk_pct = self.risk_pct  # 폴백 기본값
 
-        # 2. 거래당 스탑폭/익절폭 금액 산출 (settings에서 읽어 유연하게 조정 가능)
+        if getattr(settings, "KELLY_SIZING", False):
+            min_trades = getattr(settings, "KELLY_MIN_TRADES", 20)
+            p, b = await self._fetch_recent_stats(min_trades)
+            if p is not None and b is not None:
+                risk_pct = self._half_kelly(p, b)
+                if risk_pct <= 0:
+                    logger.info(
+                        "[Kelly] 산출 비율이 0 이하 → 손실 기대 구간. "
+                        f"고정 비율({self.risk_pct * 100:.1f}%)로 폴백."
+                    )
+                    risk_pct = self.risk_pct
+
+        # 1. 1회 투입 증거금 액수 산출
+        margin_invest = capital * risk_pct
+
+        # 2. 거래당 스탑폭/익절폭 금액 산출
         sl_mult = getattr(settings, "SL_MULT", 3.0)
         tp_mult = getattr(settings, "TP_MULT", 6.0)
         sl_distance = atr_val * sl_mult
@@ -64,14 +145,19 @@ class RiskManager:
         except Exception as e:
             final_size = calc_size
 
-        # 실제 투입 증거금 재계산 (소수점 절사 등에 의해 미미하게 달라질 수 있음)
+        # 실제 투입 증거금 재계산
         actual_margin_invest = (final_size * entry_price) / self.leverage
 
         # 예상되는 달러 손절 금액 (수량 * 스탑폭)
         expected_loss = final_size * sl_distance
 
+        sizing_method = (
+            "Half-Kelly"
+            if (getattr(settings, "KELLY_SIZING", False) and risk_pct != self.risk_pct)
+            else "고정비율"
+        )
         logger.info(
-            f"[Position Sizing] {symbol} | 증거금 투입 설정: {self.risk_pct * 100:.2f}% | "
+            f"[Position Sizing] {symbol} | 방식: {sizing_method} ({risk_pct * 100:.2f}%) | "
             f"실투입 증거금: {actual_margin_invest:.2f} USDT | 수량: {final_size} | "
             f"TP: +{tp_distance:.4f} / SL: -{sl_distance:.4f} (예상손실: {expected_loss:.2f} USDT)"
         )

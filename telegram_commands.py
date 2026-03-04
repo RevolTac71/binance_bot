@@ -74,6 +74,14 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "be_trigger — 본절(B/E) 발동 수익배수 (float, 범위 0.5~3.0)\n"
         "be_profit  — 본절(B/E) 보존 수익배수 (float, 범위 0.0~3.0)\n"
         "mode       — dry 또는 real\n\n"
+        "── V17 신규 옵션 ──\n"
+        "adx_pctl_window — ADX 백분위수 산출 기간 (int, 기본 100)\n"
+        "adx_pctl_rank   — ADX 백분위수 순위 (float, 기본 0.8)\n"
+        "rsi_os_trend    — 추세장 RSI 과매도 임계 (int, 기본 25)\n"
+        "rsi_ob_trend    — 추세장 RSI 과매수 임계 (int, 기본 75)\n"
+        "kelly      — Kelly 사이징 (on/off, 기본 off)\n"
+        "partial_tp — 분할 익절 비율 (float, 기본 0.5)\n"
+        "chasing_wait — Chasing 대기 시간 초 (float, 기본 5.0)\n\n"
         "── (NEW) 개별 종목 제어 ──\n"
         "/ignore [코인] — 블랙리스트 추가 (진입 차단, 예: /ignore LINK/USDT)\n"
         "/allow [코인]  — 블랙리스트 제거 (진입 허용, 예: /allow LINK/USDT)\n"
@@ -322,6 +330,14 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "mtf": (None, None, None),  # Custom logic alias
             "mtf_mode": (None, None, None),  # Custom logic alias
             "mode": (None, None, None),  # dry 또는 real
+            # V17 신규 파라미터 매핑
+            "adx_pctl_window": ("ADX_PCTL_WINDOW", int, "ADX_PCTL_WINDOW"),
+            "adx_pctl_rank": ("ADX_PCTL_RANK", float, "ADX_PCTL_RANK"),
+            "rsi_os_trend": ("RSI_OS_TREND", int, "RSI_OS_TREND"),
+            "rsi_ob_trend": ("RSI_OB_TREND", int, "RSI_OB_TREND"),
+            "partial_tp": ("PARTIAL_TP_RATIO", float, "PARTIAL_TP_RATIO"),
+            "chasing_wait": ("CHASING_WAIT_SEC", float, "CHASING_WAIT_SEC"),
+            "kelly": (None, None, None),  # Custom logic
         }
 
         if key not in mapping:
@@ -374,6 +390,17 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     update_env_variable("MTF_MODE", "OFF")
                     update_env_variable("MTF_FILTER", "False")
                     await update.message.reply_text("✅ MTF 필터 모드 → OFF 설정 완료")
+            return
+
+        # V17: Kelly 사이징 on/off 특별 처리
+        elif key == "kelly":
+            is_on = raw_val.lower() in ("true", "1", "yes", "on")
+            settings.KELLY_SIZING = is_on
+            update_env_variable("KELLY_SIZING", str(is_on).capitalize())
+            label = (
+                "활성화 (Half-Kelly 동적 사이징)" if is_on else "비활성화 (고정 비율)"
+            )
+            await update.message.reply_text(f"✅ Kelly 사이징 → {label} 설정 완료")
             return
 
         # 일반 키 처리 (변경 전 값을 먼저 읽어둠)
@@ -547,6 +574,13 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"본절발동(B/E Trigger): {getattr(settings, 'BREAKEVEN_TRIGGER_MULT', 1.5)}x\n"
         f"본절보존(B/E Profit): {getattr(settings, 'BREAKEVEN_PROFIT_MULT', 0.2)}x\n"
         f"재진입대기: {getattr(settings, 'LOSS_COOLDOWN_MINUTES', 15)}분\n\n"
+        f"── V17 신규 ──\n"
+        f"ADX 백분위  : {getattr(settings, 'ADX_PCTL_WINDOW', 100)}기간 / "
+        f"{getattr(settings, 'ADX_PCTL_RANK', 0.8) * 100:.0f}%tile\n"
+        f"RSI(추세) : (롱: {getattr(settings, 'RSI_OS_TREND', 25)}, 숏: {getattr(settings, 'RSI_OB_TREND', 75)})\n"
+        f"Kelly    : {'ON' if getattr(settings, 'KELLY_SIZING', False) else 'OFF'}\n"
+        f"분할익절 : {getattr(settings, 'PARTIAL_TP_RATIO', 0.5) * 100:.0f}%\n"
+        f"Chasing  : {getattr(settings, 'CHASING_WAIT_SEC', 5.0)}초\n\n"
         "💡 변경은 /setparam [옵션] [값] 이용"
     )
     await update.message.reply_text(msg)

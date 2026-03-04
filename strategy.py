@@ -323,11 +323,16 @@ class StrategyEngine:
         adx_threshold = getattr(settings, "ADX_THRESHOLD", 25.0)
         adx_trend_mult = getattr(settings, "ADX_TREND_MULTIPLIER", 1.0)
 
-        # ADX 기반 장세 분류
+        # ADX 기반 장세 분류 — V17: 백분위수 우선, 폴백으로 SMA·고정 임계값 순서
+        adx_pctl = last.get("ADX_PCTL_80", None)
         if adx is not None and not pd.isna(adx):
             result["adx"] = float(adx)
             if adx_sma is not None and not pd.isna(adx_sma):
                 result["adx_sma"] = float(adx_sma)
+            # V17: 백분위수가 있으면 종목별 고유 기준으로 TREND/RANGE 판별
+            if adx_pctl is not None and not pd.isna(adx_pctl):
+                result["regime"] = "TREND" if adx >= float(adx_pctl) else "RANGE"
+            elif adx_sma is not None and not pd.isna(adx_sma):
                 result["regime"] = (
                     "TREND" if adx >= (float(adx_sma) * adx_trend_mult) else "RANGE"
                 )
@@ -572,14 +577,33 @@ class StrategyEngine:
             )
 
         # ── STEP 6: Price Action Rejection / Extreme Outlier ──────────────
-        long_rejection = (low_price <= lower_band) and (market_price > lower_band)
-        short_rejection = (high_price >= upper_band) and (market_price < upper_band)
+        # V17: 추세장에서는 밴드 중심(VWAP) 부근 눌림목 리젝션, 횡보장에서는 밴드 상/하단 리젝션
+        if regime == "TREND":
+            # 추세장 눌림목 — VWAP 부근까지 되돌린 후 반등하면 순추세 진입 타점
+            long_rejection = (low_price <= vwap_mid * 1.002) and (
+                market_price > vwap_mid
+            )
+            short_rejection = (high_price >= vwap_mid * 0.998) and (
+                market_price < vwap_mid
+            )
+        else:
+            # 횡보장 — 기존 밴드 상/하단 리젝션 유지
+            long_rejection = (low_price <= lower_band) and (market_price > lower_band)
+            short_rejection = (high_price >= upper_band) and (market_price < upper_band)
 
         # ── STEP 7: 정규화 OFI (NOFI) 기반 지정가 역배열 필터 (V16+) ──────────
         nofi = float(current.get("NOFI", 0.0)) if "NOFI" in current else 0.0
         # 역배열 압력이 극심한 경우 (-0.5 이하 시 롱 금지, +0.5 이상 시 숏 금지)
         cvd_long_ok = (cvd_trend != "SELL_PRESSURE") and (nofi >= -0.5)
         cvd_short_ok = (cvd_trend != "BUY_PRESSURE") and (nofi <= 0.5)
+
+        # ── STEP 7.5: [V17] Dynamic Zone RSI — 국면별 RSI 임계값 자동 조정 ──
+        if regime == "TREND":
+            rsi_os_threshold = getattr(settings, "RSI_OS_TREND", 25)
+            rsi_ob_threshold = getattr(settings, "RSI_OB_TREND", 75)
+        else:
+            rsi_os_threshold = self.rsi_os  # 횡보장: 기존 30
+            rsi_ob_threshold = self.rsi_ob  # 횡보장: 기존 70
 
         # ── STEP 8: 장세별 분기 + HTF 방향 일치 필터 ──────────────────────
         signal_type = None
@@ -596,7 +620,7 @@ class StrategyEngine:
             if (
                 long_htf_ok
                 and cvd_long_ok
-                and rsi_val <= self.rsi_os
+                and rsi_val <= rsi_os_threshold
                 and (
                     (is_vol_spike and long_rejection)
                     or (is_extreme_vol and low_price <= lower_band)
@@ -604,7 +628,7 @@ class StrategyEngine:
             ):
                 signal_type = "LONG"
                 reason = (
-                    f"[RANGE 역추세 롱] RSI={rsi_val:.1f}≤{self.rsi_os} | "
+                    f"[RANGE 역추세 롱] RSI={rsi_val:.1f}≤{rsi_os_threshold} | "
                     f"HTF={htf_bias} | VolSpike={volume / vol_sma_20:.1f}x | "
                     f"ATR={atr_14:.4f} | CVD={cvd_trend}"
                 )
@@ -612,7 +636,7 @@ class StrategyEngine:
             elif (
                 short_htf_ok
                 and cvd_short_ok
-                and rsi_val >= self.rsi_ob
+                and rsi_val >= rsi_ob_threshold
                 and (
                     (is_vol_spike and short_rejection)
                     or (is_extreme_vol and high_price >= upper_band)
@@ -620,7 +644,7 @@ class StrategyEngine:
             ):
                 signal_type = "SHORT"
                 reason = (
-                    f"[RANGE 역추세 숏] RSI={rsi_val:.1f}≥{self.rsi_ob} | "
+                    f"[RANGE 역추세 숏] RSI={rsi_val:.1f}≥{rsi_ob_threshold} | "
                     f"HTF={htf_bias} | VolSpike={volume / vol_sma_20:.1f}x | "
                     f"ATR={atr_14:.4f} | CVD={cvd_trend}"
                 )
@@ -642,7 +666,7 @@ class StrategyEngine:
             if (
                 long_htf_ok
                 and cvd_long_ok
-                and rsi_val <= self.rsi_os
+                and rsi_val <= rsi_os_threshold
                 and (
                     (is_vol_spike and long_rejection)
                     or (is_extreme_vol and low_price <= lower_band)
@@ -650,7 +674,7 @@ class StrategyEngine:
             ):
                 signal_type = "LONG"
                 reason = (
-                    f"[TREND 모멘텀 롱] ADX={adx_print}≥{getattr(settings, 'ADX_THRESHOLD', 25)} | "
+                    f"[TREND 눌림목 롱] ADX={adx_print} | "
                     f"HTF={htf_bias} | MACD={momentum} | "
                     f"VolSpike={volume / vol_sma_20:.1f}x | CVD={cvd_trend}"
                 )
@@ -658,7 +682,7 @@ class StrategyEngine:
             elif (
                 short_htf_ok
                 and cvd_short_ok
-                and rsi_val >= self.rsi_ob
+                and rsi_val >= rsi_ob_threshold
                 and (
                     (is_vol_spike and short_rejection)
                     or (is_extreme_vol and high_price >= upper_band)
@@ -666,7 +690,7 @@ class StrategyEngine:
             ):
                 signal_type = "SHORT"
                 reason = (
-                    f"[TREND 모멘텀 숏] ADX={adx_print}≥{getattr(settings, 'ADX_THRESHOLD', 25)} | "
+                    f"[TREND 눌림목 숏] ADX={adx_print} | "
                     f"HTF={htf_bias} | MACD={momentum} | "
                     f"VolSpike={volume / vol_sma_20:.1f}x | CVD={cvd_trend}"
                 )
@@ -784,10 +808,10 @@ class StrategyEngine:
                     f"[{symbol}] ↩️ [STEP6 PriceAction] 밴드 터치/리젝션 없음 — "
                     f"Close={market_price:.4f}, Lower={lower_band:.4f}, Upper={upper_band:.4f}"
                 )
-            elif rsi_val > self.rsi_os and rsi_val < self.rsi_ob:
+            elif rsi_val > rsi_os_threshold and rsi_val < rsi_ob_threshold:
                 logger.info(
                     f"[{symbol}] 〽️ [STEP8 RSI] RSI 중립 구간 — "
-                    f"RSI={rsi_val:.1f} (과매도≤{self.rsi_os} / 과매수≥{self.rsi_ob} 아님)"
+                    f"RSI={rsi_val:.1f} (과매도≤{rsi_os_threshold} / 과매수≥{rsi_ob_threshold} 아님)"
                 )
             else:
                 logger.info(f"[{symbol}] ✖ [STEP8] 복합 조건 미충족 — {reason}")

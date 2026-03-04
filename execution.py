@@ -69,6 +69,14 @@ class ExecutionEngine:
                 "max_same_dir": getattr(settings, "MAX_CONCURRENT_SAME_DIR", None),
                 "be_trigger": getattr(settings, "BREAKEVEN_TRIGGER_MULT", None),
                 "be_profit": getattr(settings, "BREAKEVEN_PROFIT_MULT", None),
+                # V17 신규 파라미터
+                "adx_pctl_window": getattr(settings, "ADX_PCTL_WINDOW", None),
+                "adx_pctl_rank": getattr(settings, "ADX_PCTL_RANK", None),
+                "rsi_os_trend": getattr(settings, "RSI_OS_TREND", None),
+                "rsi_ob_trend": getattr(settings, "RSI_OB_TREND", None),
+                "kelly_sizing": getattr(settings, "KELLY_SIZING", None),
+                "partial_tp_ratio": getattr(settings, "PARTIAL_TP_RATIO", None),
+                "chasing_wait_sec": getattr(settings, "CHASING_WAIT_SEC", None),
             },
             ensure_ascii=False,
         )
@@ -350,8 +358,9 @@ class ExecutionEngine:
                             session.add(oe)
                             await session.commit()
 
-                        # 3. 3.5초 대기
-                        await asyncio.sleep(3.5)
+                        # 3. V17: Config 기반 Chasing 대기 시간
+                        chasing_wait = getattr(settings, "CHASING_WAIT_SEC", 5.0)
+                        await asyncio.sleep(chasing_wait)
 
                         # 4. 체결 상태 확인
                         fetched_order = await self.exchange.fetch_order(
@@ -567,10 +576,15 @@ class ExecutionEngine:
         체결이 완료된 포지션에 대해 Reduce-Only 파라미터가 포함된 TP/SL 주문을 전송합니다.
         """
         signal_type = entry_info["signal"]
-        amount = entry_info["amount"]
+        total_amount = entry_info["amount"]
         tp_price = entry_info["tp_price"]
         sl_price = entry_info["sl_price"]
         entry_price = entry_info["limit_price"]
+
+        # V17: 분할 익절 — TP 주문은 전체 수량의 일부만, SL은 전량 유지
+        partial_ratio = getattr(settings, "PARTIAL_TP_RATIO", 0.5)
+        tp_amount = total_amount * partial_ratio
+        sl_amount = total_amount  # SL은 전량 (안전망)
 
         # Long이면 매도(Sell)로 청산, Short이면 매수(Buy)로 청산
         exit_side = "sell" if signal_type == "LONG" else "buy"
@@ -608,8 +622,8 @@ class ExecutionEngine:
                     action=signal_type,
                     symbol=symbol,
                     price=entry_price,
-                    quantity=amount,
-                    reason=f"{dr_prefix}V16 시장가/추격 진입 완료",
+                    quantity=total_amount,
+                    reason=f"{dr_prefix}V17 시장가/추격 진입 완료 (분할TP {partial_ratio * 100:.0f}%)",
                     dry_run=settings.DRY_RUN,
                     params=self._snapshot_params(),
                     market_data=entry_info.get("market_data"),
@@ -620,11 +634,11 @@ class ExecutionEngine:
                 new_tradelog = TradeLog(
                     symbol=symbol,
                     direction=signal_type,
-                    qty=amount,
+                    qty=total_amount,
                     entry_time=now_kst,
-                    target_price=entry_price,  # 이상적인 슬리피지 계산용으론 추후 보완 필요
+                    target_price=entry_price,
                     execution_price=entry_price,
-                    slippage=0.0,  # 추격 주문 완료 평균가를 기준으로 설정(0)
+                    slippage=0.0,
                     entry_reason=entry_info.get("reason", "자동 진입"),
                     execution_time_ms=entry_info.get("execution_time_ms", 0),
                     # exit 관련은 NULL 유지
@@ -638,66 +652,71 @@ class ExecutionEngine:
                 self.active_positions[symbol] = True
                 return True
 
-            # 1. Take Profit (LIMIT 방식)
-            # -4164(Order's notional) 혹은 Margin insufficient 에러 거절 방지를 위해 예외 감지 기능 탑재
+            # 1. Take Profit (LIMIT 방식) — V17: 분할 익절 (partial_ratio만큼만)
+            # TP 수량 정밀도 보정
             try:
-                await self.exchange.create_order(
-                    symbol=symbol,
-                    type="limit",
-                    side=exit_side,
-                    amount=amount,
-                    price=tp_price,
-                    params={"reduceOnly": True},
-                )
-            except Exception as tp_err:
-                logger.warning(
-                    f"[{symbol}] 지정가(Limit) TP 생성 거절됨. 시장가 우회(TAKE_PROFIT_MARKET)로 재시도합니다. 사유: {tp_err}"
-                )
+                tp_amount_str = self.exchange.amount_to_precision(symbol, tp_amount)
+                tp_amount_final = float(tp_amount_str)
+            except Exception:
+                tp_amount_final = tp_amount
+
+            if tp_amount_final > 0:
                 try:
                     await self.exchange.create_order(
                         symbol=symbol,
-                        type="take_profit_market",
+                        type="limit",
                         side=exit_side,
-                        amount=amount,
-                        params={"stopPrice": tp_price, "reduceOnly": True},
+                        amount=tp_amount_final,
+                        price=tp_price,
+                        params={"reduceOnly": True},
                     )
-                except Exception as tp_algo_err:
-                    err_msg = str(tp_algo_err)
-                    if "-4120" in err_msg or "Algo Order API" in err_msg:
-                        formatted_amount_tp = self.exchange.amount_to_precision(
-                            symbol, amount
+                except Exception as tp_err:
+                    logger.warning(
+                        f"[{symbol}] 지정가(Limit) TP 생성 거절됨. 시장가 우회(TAKE_PROFIT_MARKET)로 재시도합니다. 사유: {tp_err}"
+                    )
+                    try:
+                        await self.exchange.create_order(
+                            symbol=symbol,
+                            type="take_profit_market",
+                            side=exit_side,
+                            amount=tp_amount_final,
+                            params={"stopPrice": tp_price, "reduceOnly": True},
                         )
-                        formatted_price_tp = self.exchange.price_to_precision(
-                            symbol, tp_price
-                        )
-                        raw_sym = self.exchange.market(symbol)["id"]
-                        req_tp = {
-                            "symbol": raw_sym,
-                            "side": exit_side.upper(),
-                            "type": "TAKE_PROFIT_MARKET",
-                            "quantity": formatted_amount_tp,
-                            "stopPrice": formatted_price_tp,
-                            "reduceOnly": "true",
-                            "algoType": "CONDITIONAL",
-                        }
-                        await self.exchange.request(
-                            path="algoOrder",
-                            api="fapiPrivate",
-                            method="POST",
-                            params=req_tp,
-                        )
-                    else:
-                        raise tp_algo_err
+                    except Exception as tp_algo_err:
+                        err_msg = str(tp_algo_err)
+                        if "-4120" in err_msg or "Algo Order API" in err_msg:
+                            formatted_amount_tp = self.exchange.amount_to_precision(
+                                symbol, tp_amount_final
+                            )
+                            formatted_price_tp = self.exchange.price_to_precision(
+                                symbol, tp_price
+                            )
+                            raw_sym = self.exchange.market(symbol)["id"]
+                            req_tp = {
+                                "symbol": raw_sym,
+                                "side": exit_side.upper(),
+                                "type": "TAKE_PROFIT_MARKET",
+                                "quantity": formatted_amount_tp,
+                                "stopPrice": formatted_price_tp,
+                                "reduceOnly": "true",
+                                "algoType": "CONDITIONAL",
+                            }
+                            await self.exchange.request(
+                                path="algoOrder",
+                                api="fapiPrivate",
+                                method="POST",
+                                params=req_tp,
+                            )
+                        else:
+                            raise tp_algo_err
 
-            # 2. Stop Loss (STOP_MARKET 방식, reduceOnly)
-            # 바이낸스 퓨처스 API 업데이트로 인해 일반 엔드포인트에서 예외(-4120)가 발생할 수 있습니다.
-            # 이 경우 AlgoOrder 전용 엔드포인트를 우회 호출하는 폴백 로직을 가동합니다.
+            # 2. Stop Loss (STOP_MARKET 방식, reduceOnly) — V17: SL은 전량 유지 (안전망)
             try:
                 await self.exchange.create_order(
                     symbol=symbol,
                     type="stop_market",
                     side=exit_side,
-                    amount=amount,
+                    amount=total_amount,
                     params={"stopPrice": sl_price, "reduceOnly": True},
                 )
             except Exception as e:
@@ -708,7 +727,9 @@ class ExecutionEngine:
                     )
 
                     # 수량과 호가단위를 거래소 규격에 맞는 문자열 형태로 포맷팅
-                    formatted_amount = self.exchange.amount_to_precision(symbol, amount)
+                    formatted_amount = self.exchange.amount_to_precision(
+                        symbol, total_amount
+                    )
                     formatted_price = self.exchange.price_to_precision(symbol, sl_price)
                     raw_symbol = self.exchange.market(symbol)["id"]
 
@@ -735,8 +756,9 @@ class ExecutionEngine:
             await notifier.send_message(
                 f"✅ 포지션 진입 완료\n[{symbol}] {signal_type}\n"
                 f"체결가: {entry_price:.4f}\n"
-                f"TP 지정가: {tp_price}\n"
-                f"SL 시장가: {sl_price}\n"
+                f"TP 지정가: {tp_price} (수량: {tp_amount_final}, {partial_ratio * 100:.0f}%)\n"
+                f"SL 시장가: {sl_price} (전량)\n"
+                f"잔량 {(1 - partial_ratio) * 100:.0f}%는 Chandelier 추적\n"
                 f"Real R:R: 1 : {abs(real_tp_pct / real_sl_pct) if real_sl_pct != 0 else 0:.2f}"
             )
 

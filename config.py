@@ -61,7 +61,7 @@ class Config:
     TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
     # Strategy Global Parameters
-    STRATEGY_VERSION = os.getenv("STRATEGY_VERSION", "V16")  # 전략 버전 식별자
+    STRATEGY_VERSION = os.getenv("STRATEGY_VERSION", "V17")  # 전략 버전 식별자
     TIMEFRAME = os.getenv("TIMEFRAME", "3m")
     K_VALUE = float(os.getenv("K_VALUE", "2.0"))
     RISK_PERCENTAGE = float(os.getenv("RISK_PERCENTAGE", "0.005"))
@@ -124,6 +124,32 @@ class Config:
     # 본절(Breakeven) 추적 로직 (V16+)
     BREAKEVEN_TRIGGER_MULT = float(os.getenv("BREAKEVEN_TRIGGER_MULT", "1.5"))
     BREAKEVEN_PROFIT_MULT = float(os.getenv("BREAKEVEN_PROFIT_MULT", "0.2"))
+
+    # ── V17 국면 판별 고도화 파라미터 ─────────────────────────────────────
+    # ADX 백분위수 기반 동적 국면 분류 (하드코딩 임계값 대체)
+    ADX_PCTL_WINDOW = int(
+        os.getenv("ADX_PCTL_WINDOW", "100")
+    )  # 백분위수 산출 롤링 기간
+    ADX_PCTL_RANK = float(os.getenv("ADX_PCTL_RANK", "0.8"))  # 80번째 백분위수
+
+    # Dynamic Zone RSI (국면별 RSI 임계값 자동 조정)
+    RSI_OS_TREND = int(os.getenv("RSI_OS_TREND", "25"))  # 추세장 과매도 임계
+    RSI_OB_TREND = int(os.getenv("RSI_OB_TREND", "75"))  # 추세장 과매수 임계
+
+    # ── V17 체결 & 사이징 파라미터 ────────────────────────────────────────
+    # Half-Kelly 동적 사이징 (승률·손익비 기반 투입 비중 자동 조절)
+    KELLY_SIZING = os.getenv("KELLY_SIZING", "False").lower() == "true"
+    KELLY_MIN_TRADES = int(os.getenv("KELLY_MIN_TRADES", "20"))  # 최소 표본 수
+    KELLY_MAX_FRACTION = float(
+        os.getenv("KELLY_MAX_FRACTION", "0.05")
+    )  # 최대 투입 비율 캡
+
+    # Chasing 지정가 체결 대기 시간 (초)
+    CHASING_WAIT_SEC = float(os.getenv("CHASING_WAIT_SEC", "5.0"))
+
+    # ── V17 분할 익절 파라미터 ────────────────────────────────────────────
+    # TP 도달 시 전체 물량 중 이 비율만 1차 익절, 잔량은 Chandelier 추적
+    PARTIAL_TP_RATIO = float(os.getenv("PARTIAL_TP_RATIO", "0.5"))  # 50% 분할 익절
 
     # Dry Run Mode (True면 실제 매매하지 않고 DB 기록만 함)
     DRY_RUN = os.getenv("DRY_RUN", "True").lower() == "true"

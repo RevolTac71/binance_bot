@@ -220,6 +220,12 @@ class DataPipeline:
             # 종목별 ADX 평균치 (기준선) 산출 (판다스 내장 rolling 함수 사용)
             if "ADX_14" in df_15m.columns:
                 df_15m["ADX_SMA_50"] = df_15m["ADX_14"].rolling(window=50).mean()
+                # V17: 동적 백분위수 기반 국면 판별용 (종목별 고유 변동성 보정)
+                pctl_window = getattr(settings, "ADX_PCTL_WINDOW", 100)
+                pctl_rank = getattr(settings, "ADX_PCTL_RANK", 0.8)
+                df_15m["ADX_PCTL_80"] = (
+                    df_15m["ADX_14"].rolling(window=pctl_window).quantile(pctl_rank)
+                )
 
             # MACD: 모멘텀 연산 방어코드 적용
             try:

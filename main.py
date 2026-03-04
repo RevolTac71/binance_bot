@@ -418,8 +418,8 @@ async def process_closed_kline(
             reason = decision["reason"]
             atr_val = decision.get("atr_val", market_price * 0.005)
 
-            # 3. 투입 사이즈 산출
-            sizing = risk.calculate_position_size(
+            # 3. 투입 사이즈 산출 (V17: Kelly 사이징 async 호출)
+            sizing = await risk.calculate_position_size(
                 symbol, capital, market_price, atr_val
             )
 
