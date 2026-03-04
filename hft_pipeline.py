@@ -72,14 +72,14 @@ class HFTDataPipeline:
                 attempt += 1
                 wait_time = min(2**attempt, 60)
                 logger.warning(
-                    f"[HFT] WS Connection Closed ({stream_name}): Code {e.code}, Reason {e.reason}. Reconnecting in {wait_time}s..."
+                    f"[HFT] WS Connection Closed ({stream_path}): Code {e.code}, Reason {e.reason}. Reconnecting in {wait_time}s..."
                 )
                 await asyncio.sleep(wait_time)
             except Exception as e:
                 attempt += 1
                 wait_time = min(2**attempt, 60)  # Max 60초 대기
                 logger.error(
-                    f"[HFT] WS Unexpected Error ({stream_name}): {type(e).__name__} - {e}. Reconnecting in {wait_time}s..."
+                    f"[HFT] WS Unexpected Error ({stream_path}): {type(e).__name__} - {e}. Reconnecting in {wait_time}s..."
                 )
                 await asyncio.sleep(wait_time)
 

@@ -285,6 +285,7 @@ class StrategyEngine:
                 "regime"      : "TREND" | "RANGE"          (장세 유형)
                 "momentum"    : "BULLISH" | "BEARISH" | "NEUTRAL"  (MACD 방향)
                 "adx"         : float | None
+                "adx_sma"     : float | None
                 "macd"        : float | None
                 "macd_signal" : float | None
         """
@@ -292,24 +293,33 @@ class StrategyEngine:
             "regime": "RANGE",  # 데이터 없으면 기본적으로 횡보장으로 가정
             "momentum": "NEUTRAL",
             "adx": None,
+            "adx_sma": None,
             "macd": None,
             "macd_signal": None,
         }
 
-        if df_15m is None or len(df_15m) < 35:
+        if df_15m is None or len(df_15m) < 100:
             return result
 
         last = df_15m.iloc[-1]
         adx = last.get("ADX_14", None)
+        adx_sma = last.get("ADX_SMA_50", None)
         macd = last.get("MACD", None)
         macd_s = last.get("MACD_S", None)
 
         adx_threshold = getattr(settings, "ADX_THRESHOLD", 25.0)
+        adx_trend_mult = getattr(settings, "ADX_TREND_MULTIPLIER", 1.0)
 
         # ADX 기반 장세 분류
         if adx is not None and not pd.isna(adx):
             result["adx"] = float(adx)
-            result["regime"] = "TREND" if adx >= adx_threshold else "RANGE"
+            if adx_sma is not None and not pd.isna(adx_sma):
+                result["adx_sma"] = float(adx_sma)
+                result["regime"] = (
+                    "TREND" if adx >= (float(adx_sma) * adx_trend_mult) else "RANGE"
+                )
+            else:
+                result["regime"] = "TREND" if adx >= adx_threshold else "RANGE"
 
         # MACD 기반 모멘텀 방향 분류
         if (
@@ -490,9 +500,18 @@ class StrategyEngine:
             mtf_filter = False
         else:
             # AUTO 모드
-            adx_val = mtf["adx"]
-            lower_th = getattr(settings, "AUTO_MTF_LOWER_THRESHOLD", 14.0)
-            upper_th = getattr(settings, "AUTO_MTF_UPPER_THRESHOLD", 16.0)
+            adx_val = mtf.get("adx")
+            adx_sma = mtf.get("adx_sma")
+
+            # 동적 임계값 설정 (우선), 지원 안되면 fallback 고정값
+            if adx_sma is not None:
+                lower_mult = getattr(settings, "AUTO_MTF_LOWER_MULTIPLIER", 0.8)
+                upper_mult = getattr(settings, "AUTO_MTF_UPPER_MULTIPLIER", 1.0)
+                lower_th = adx_sma * lower_mult
+                upper_th = adx_sma * upper_mult
+            else:
+                lower_th = getattr(settings, "AUTO_MTF_LOWER_THRESHOLD", 14.0)
+                upper_th = getattr(settings, "AUTO_MTF_UPPER_THRESHOLD", 16.0)
 
             # 이전 상태가 없으면 무난하게 True로 초기화
             prev_state = self.symbol_mtf_states.get(symbol, True)

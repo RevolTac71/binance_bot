@@ -298,6 +298,17 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "max_trades": ("MAX_TRADES", int, "MAX_TRADES"),
             "htf_1h": ("HTF_TIMEFRAME_1H", str, "HTF_TIMEFRAME_1H"),
             "htf_15m": ("HTF_TIMEFRAME_15M", str, "HTF_TIMEFRAME_15M"),
+            "adx_trend_mult": ("ADX_TREND_MULTIPLIER", float, "ADX_TREND_MULTIPLIER"),
+            "mtf_lower_mult": (
+                "AUTO_MTF_LOWER_MULTIPLIER",
+                float,
+                "AUTO_MTF_LOWER_MULTIPLIER",
+            ),
+            "mtf_upper_mult": (
+                "AUTO_MTF_UPPER_MULTIPLIER",
+                float,
+                "AUTO_MTF_UPPER_MULTIPLIER",
+            ),
             "rsi_period": ("RSI_PERIOD", int, "RSI_PERIOD"),
             "rsi_ob": ("RSI_OB", int, "RSI_OB"),
             "rsi_os": ("RSI_OS", int, "RSI_OS"),
@@ -362,6 +373,16 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 일반 키 처리 (변경 전 값을 먼저 읽어둠)
         old_val = getattr(settings, attr_name, "(없음)")
         new_val = cast_fn(raw_val)
+
+        # 변동성 추세 배수에 대한 하드 리미트 안정성 유효성 검사 (0.5 ~ 3.0)
+        if key in ("adx_trend_mult", "mtf_lower_mult", "mtf_upper_mult"):
+            if new_val < 0.5 or new_val > 3.0:
+                await update.message.reply_text(
+                    f"❌ [거부됨] 해당 설정값({new_val})은 비정상적인 범위입니다.\n"
+                    f"안전장치에 의해 거부되었습니다. 올바른 범위(0.5 ~ 3.0) 내의 값을 지정해주세요."
+                )
+                return
+
         setattr(settings, attr_name, new_val)
         update_env_variable(env_key, str(new_val))
 
@@ -377,7 +398,9 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     except ValueError:
-        await update.message.reply_text(f"❌ [{key}]에 올바른 형식의 값을 입력하세요.")
+        await update.message.reply_text(
+            f"❌ [{key}]에 올바른 형식의 값을 입력하세요. (문자 입력 및 자료형 불일치 방지)"
+        )
 
 
 async def ignore_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -497,6 +520,9 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"MTF Filter: {mtf}\n"
         f"HTF 1     : {getattr(settings, 'HTF_TIMEFRAME_1H', '1h')}\n"
         f"HTF 2     : {getattr(settings, 'HTF_TIMEFRAME_15M', '15m')}\n"
+        f"ADX 추세배수: {getattr(settings, 'ADX_TREND_MULTIPLIER', 1.0)}\n"
+        f"MTF 끄기배수: {getattr(settings, 'AUTO_MTF_LOWER_MULTIPLIER', 0.8)}\n"
+        f"MTF 켜기배수: {getattr(settings, 'AUTO_MTF_UPPER_MULTIPLIER', 1.0)}\n"
         f"RSI 주기  : {getattr(settings, 'RSI_PERIOD', 14)}\n"
         f"RSI 반전  : (롱: {getattr(settings, 'RSI_OS', 30)}, 숏: {getattr(settings, 'RSI_OB', 70)})\n"
         f"거래량배수: {getattr(settings, 'VOL_MULT', 1.5)}x\n"

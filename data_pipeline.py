@@ -205,12 +205,15 @@ class DataPipeline:
             df_1h.ta.ema(length=200, append=True, col_names=("EMA_200",))
 
         # ── 15분봉 지표 ──────────────────────────────────────────────────
-        if df_15m is not None and len(df_15m) >= 35:
+        if df_15m is not None and len(df_15m) >= 100:
             df_15m = df_15m.copy()
             # ADX: 추세 강도 (DMP_, DMN_ 컬럼도 함께 생성)
             df_15m.ta.adx(
                 length=14, append=True, col_names=("ADX_14", "DMP_14", "DMN_14")
             )
+            # 종목별 ADX 평균치 (기준선) 산출 (50기간)
+            df_15m["ADX_SMA_50"] = df_15m.ta.sma(close=df_15m["ADX_14"], length=50)
+
             # MACD: 기본 12/26/9 파라미터
             df_15m.ta.macd(
                 fast=12,

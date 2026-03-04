@@ -112,6 +112,11 @@ class Config:
     AUTO_MTF_LOWER_THRESHOLD = float(os.getenv("AUTO_MTF_LOWER_THRESHOLD", "14.0"))
     AUTO_MTF_UPPER_THRESHOLD = float(os.getenv("AUTO_MTF_UPPER_THRESHOLD", "16.0"))
 
+    # 신규 시그널: 종목별 상대적 ADX 기준 (ADX_SMA 대비 배수)
+    ADX_TREND_MULTIPLIER = float(os.getenv("ADX_TREND_MULTIPLIER", "1.0"))
+    AUTO_MTF_LOWER_MULTIPLIER = float(os.getenv("AUTO_MTF_LOWER_MULTIPLIER", "0.8"))
+    AUTO_MTF_UPPER_MULTIPLIER = float(os.getenv("AUTO_MTF_UPPER_MULTIPLIER", "1.0"))
+
     # Dry Run Mode (True면 실제 매매하지 않고 DB 기록만 함)
     DRY_RUN = os.getenv("DRY_RUN", "True").lower() == "true"
 

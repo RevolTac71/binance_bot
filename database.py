@@ -146,7 +146,7 @@ class MarketData_1m(Base):
 
     __tablename__ = "market_data_1m"
 
-    timestamp = Column(DateTime, primary_key=True)
+    timestamp = Column(DateTime, primary_key=True, index=True)
     symbol = Column(String(20), primary_key=True)
     open = Column(Float, nullable=True)
     high = Column(Float, nullable=True)

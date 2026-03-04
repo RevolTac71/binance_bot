@@ -58,6 +58,13 @@ class ExecutionEngine:
                 "tp_mult": getattr(settings, "TP_MULT", None),
                 # V16 신규 파라미터
                 "adx_threshold": getattr(settings, "ADX_THRESHOLD", None),
+                "adx_trend_mult": getattr(settings, "ADX_TREND_MULTIPLIER", None),
+                "auto_mtf_lower_mult": getattr(
+                    settings, "AUTO_MTF_LOWER_MULTIPLIER", None
+                ),
+                "auto_mtf_upper_mult": getattr(
+                    settings, "AUTO_MTF_UPPER_MULTIPLIER", None
+                ),
                 "chandelier_mult": getattr(settings, "CHANDELIER_MULT", None),
                 "max_same_dir": getattr(settings, "MAX_CONCURRENT_SAME_DIR", None),
             },
