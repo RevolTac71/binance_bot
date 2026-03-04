@@ -217,10 +217,17 @@ async def warm_up_data(symbols: list, pipeline: DataPipeline):
 
         # 두 프레임 모두 있을 때 지표 연산
         if htf_df_1h.get(sym) is not None and htf_df_15m.get(sym) is not None:
-            htf_df_1h[sym], htf_df_15m[sym] = pipeline.calculate_htf_indicators(
-                htf_df_1h[sym], htf_df_15m[sym]
-            )
-            logger.info(f"[{sym}] HTF(1H/15m) 지표 웜업 완료.")
+            try:
+                htf_df_1h[sym], htf_df_15m[sym] = pipeline.calculate_htf_indicators(
+                    htf_df_1h[sym], htf_df_15m[sym]
+                )
+                logger.info(f"[{sym}] HTF(1H/15m) 지표 웜업 완료.")
+            except Exception as e:
+                import traceback
+
+                logger.error(f"[{sym}] HTF(1H/15m) 지표 웜업 중 치명적 예외 발생: {e}")
+                logger.error(traceback.format_exc())
+                continue
 
 
 async def process_closed_kline(
