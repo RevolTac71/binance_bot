@@ -122,8 +122,8 @@ class Config:
 
     # 신규 시그널: 종목별 상대적 ADX 기준 (ADX_SMA 대비 배수)
     ADX_TREND_MULTIPLIER = float(os.getenv("ADX_TREND_MULTIPLIER", "1.0"))
-    AUTO_MTF_LOWER_MULTIPLIER = float(os.getenv("AUTO_MTF_LOWER_MULTIPLIER", "0.8"))
-    AUTO_MTF_UPPER_MULTIPLIER = float(os.getenv("AUTO_MTF_UPPER_MULTIPLIER", "1.0"))
+    AUTO_MTF_LOWER_MULTIPLIER = float(os.getenv("AUTO_MTF_LOWER_MULTIPLIER", "0.9"))
+    AUTO_MTF_UPPER_MULTIPLIER = float(os.getenv("AUTO_MTF_UPPER_MULTIPLIER", "1.2"))
 
     # 본절(Breakeven) 추적 로직 (V16+)
     BREAKEVEN_TRIGGER_MULT = float(os.getenv("BREAKEVEN_TRIGGER_MULT", "1.5"))
