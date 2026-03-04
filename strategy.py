@@ -138,26 +138,39 @@ class PortfolioState:
             return None
 
         mult = getattr(settings, "CHANDELIER_MULT", 2.0)
+        be_trigger = getattr(settings, "BREAKEVEN_TRIGGER_MULT", 1.5)
+        be_profit = getattr(settings, "BREAKEVEN_PROFIT_MULT", 0.2)
         direction = pos["direction"]
         prev_stop = pos["chandelier_stop"]
+        entry = pos["entry_price"]
 
         if direction == "LONG":
-            # 최고점 경신 시 갱신
             if current_high > pos["extreme"]:
                 pos["extreme"] = current_high
-            # ATR 기반 새 손절선 계산 (항상 상승 방향으로만 이동)
-            new_stop = pos["extreme"] - current_atr * mult
+
+            # 본절(Breakeven) 추적 로직 적용
+            if (pos["extreme"] - entry) >= (current_atr * be_trigger):
+                floor = entry + (current_atr * be_profit)
+                new_stop = max(pos["extreme"] - current_atr * mult, floor)
+            else:
+                new_stop = pos["extreme"] - current_atr * mult
+
             pos["chandelier_stop"] = max(new_stop, prev_stop)
 
         else:  # SHORT
-            # 최저점 경신 시 갱신
             if current_low < pos["extreme"]:
                 pos["extreme"] = current_low
-            # ATR 기반 새 손절선 계산 (항상 하락 방향으로만 이동)
-            new_stop = pos["extreme"] + current_atr * mult
+
+            # 본절(Breakeven) 추적 로직 적용
+            if (entry - pos["extreme"]) >= (current_atr * be_trigger):
+                ceiling = entry - (current_atr * be_profit)
+                new_stop = min(pos["extreme"] + current_atr * mult, ceiling)
+            else:
+                new_stop = pos["extreme"] + current_atr * mult
+
             pos["chandelier_stop"] = min(new_stop, prev_stop)
 
-        pos["atr"] = current_atr  # ATR도 최신 값으로 갱신
+        pos["atr"] = current_atr
         return pos["chandelier_stop"]
 
     def is_chandelier_triggered(self, symbol: str, current_price: float) -> bool:
@@ -397,6 +410,7 @@ class StrategyEngine:
         df_15m: Optional[pd.DataFrame] = None,
         cvd_trend: Optional[str] = None,
         bid_ask_imbalance: float = 0.5,
+        all_htf_15m: Optional[dict] = None,
     ) -> dict:
         """
         [V16] 다중 시간 프레임 기반 진입 신호를 판단합니다.
@@ -421,8 +435,8 @@ class StrategyEngine:
                 "reason"      : str
         """
         # ── 기초 데이터 검증 ──────────────────────────────────────────────
-        if len(df) < 50:
-            return {"signal": None, "reason": "데이터 부족 (최소 50개 필요)"}
+        if len(df) < 250:
+            return {"signal": None, "reason": "데이터 부족 (최소 250개 필요)"}
 
         current = df.iloc[-1]
 
@@ -482,14 +496,19 @@ class StrategyEngine:
         regime = mtf["regime"]  # "TREND" | "RANGE"
         momentum = mtf["momentum"]  # "BULLISH" | "BEARISH" | "NEUTRAL"
 
-        # ── STEP 5: Volume Spike 판별 ─────────────────────────────────────
-        # ★ vol_mult를 MTF 상태 로그보다 먼저 선언해야 참조 오류가 발생하지 않음
-        vol_mult = getattr(settings, "VOL_MULT", 1.5)  # 일반 돌파: 1.5x~2.0x
-        extreme_mult = getattr(
-            settings, "EXTREME_VOL_MULT", 2.5
-        )  # 극단 소진: 2.5x~3.0x
-        is_vol_spike = volume > (vol_sma_20 * vol_mult)
-        is_extreme_vol = volume > (vol_sma_20 * extreme_mult)
+        # ── STEP 5: Volume Spike 판별 (Z-score 기반) ────────────────────────
+        # 통계적 이상치(Z-score ≥ +2.0σ)를 돌파로 인식, +3.0σ 이상을 소진으로 규정
+        vol_series = df["volume"]
+        vol_mean = vol_series.rolling(20).mean().iloc[-1]
+        vol_std = vol_series.rolling(20).std().iloc[-1]
+
+        # 분모 0 방어를 위해 작은 값 더함
+        z_score = (
+            (volume - vol_mean) / (vol_std + 1e-9) if not pd.isna(vol_std) else 0.0
+        )
+
+        is_vol_spike = z_score >= 2.0
+        is_extreme_vol = z_score >= 3.0
 
         # ── [V16.4 NEW] Auto-MTF 로직 (Hysteresis 완충 지대 적용) ───────────
         mtf_mode = getattr(settings, "MTF_MODE", "AUTO").upper()
@@ -548,16 +567,11 @@ class StrategyEngine:
         long_rejection = (low_price <= lower_band) and (market_price > lower_band)
         short_rejection = (high_price >= upper_band) and (market_price < upper_band)
 
-        # ── STEP 7: [V16 NEW] CVD 오더플로우 검증 (Placeholder) ──────────
-        # cvd_trend가 실제로 공급되면 방향 불일치 시 진입 차단
-        # 현재는 None이 기본값이므로 필터가 작동하지 않음 (무조건 통과)
-        #
-        # 향후 구현 예시:
-        #   - 바이낸스 aggTrade 웹소켓 수신
-        #   - buy_vol, sell_vol 누적 → CVD = buy_vol - sell_vol
-        #   - CVD > 0 → "BUY_PRESSURE", CVD < 0 → "SELL_PRESSURE"
-        cvd_long_ok = cvd_trend != "SELL_PRESSURE"  # 롱 진입 시 강한 매도 압력이면 차단
-        cvd_short_ok = cvd_trend != "BUY_PRESSURE"  # 숏 진입 시 강한 매수 압력이면 차단
+        # ── STEP 7: 정규화 OFI (NOFI) 기반 지정가 역배열 필터 (V16+) ──────────
+        nofi = float(current.get("NOFI", 0.0)) if "NOFI" in current else 0.0
+        # 역배열 압력이 극심한 경우 (-0.5 이하 시 롱 금지, +0.5 이상 시 숏 금지)
+        cvd_long_ok = (cvd_trend != "SELL_PRESSURE") and (nofi >= -0.5)
+        cvd_short_ok = (cvd_trend != "BUY_PRESSURE") and (nofi <= 0.5)
 
         # ── STEP 8: 장세별 분기 + HTF 방향 일치 필터 ──────────────────────
         signal_type = None
@@ -649,11 +663,44 @@ class StrategyEngine:
                     f"VolSpike={volume / vol_sma_20:.1f}x | CVD={cvd_trend}"
                 )
 
-        # ── STEP 9: [V16 NEW] 포트폴리오 동시 진입 제한 ──────────────────
+        # ── STEP 9: [V16 NEW] 포트폴리오 동시 진입 제한 (방향 & 상관계수) ─────
         if signal_type is not None:
             max_same_dir = getattr(settings, "MAX_CONCURRENT_SAME_DIR", 2)
             current_longs = portfolio.open_longs
             current_shorts = portfolio.open_shorts
+
+            # 상관관계(Pearson) 동조화 자산 동시 진입 차단 (V16+)
+            if all_htf_15m is not None and df_15m is not None and not df_15m.empty:
+                target_series = df_15m["close"].tail(100)
+                if len(target_series) >= 50:
+                    for active_sym, pos_info in portfolio.positions.items():
+                        # 같은 방향의 포지션만 상관관계 체크
+                        if pos_info["direction"] == signal_type:
+                            active_df = all_htf_15m.get(active_sym)
+                            if active_df is not None and not active_df.empty:
+                                active_series = active_df["close"].tail(100)
+                                # 인덱스 정렬 후 상관계수 도출
+                                aligned_df = pd.concat(
+                                    [target_series, active_series], axis=1, join="inner"
+                                ).dropna()
+                                if len(aligned_df) >= 50:
+                                    corr = aligned_df.iloc[:, 0].corr(
+                                        aligned_df.iloc[:, 1]
+                                    )
+                                    if corr >= 0.8:
+                                        discarded_reason = (
+                                            f"[Pearson 차단] 기존 포지션 {active_sym}({signal_type})와 "
+                                            f"상관계수 +{corr:.2f}로 동조화 심화. 신규 진입 Discard."
+                                        )
+                                        logger.info(f"[{symbol}] {discarded_reason}")
+                                        return {
+                                            "signal": None,
+                                            "market_price": market_price,
+                                            "atr_val": float(atr_14),
+                                            "vwap_mid": float(vwap_mid),
+                                            "reason": discarded_reason,
+                                            "market_data": None,
+                                        }
 
             if signal_type == "LONG" and current_longs >= max_same_dir:
                 discarded_reason = (

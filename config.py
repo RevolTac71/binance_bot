@@ -121,6 +121,10 @@ class Config:
     AUTO_MTF_LOWER_MULTIPLIER = float(os.getenv("AUTO_MTF_LOWER_MULTIPLIER", "0.8"))
     AUTO_MTF_UPPER_MULTIPLIER = float(os.getenv("AUTO_MTF_UPPER_MULTIPLIER", "1.0"))
 
+    # 본절(Breakeven) 추적 로직 (V16+)
+    BREAKEVEN_TRIGGER_MULT = float(os.getenv("BREAKEVEN_TRIGGER_MULT", "1.5"))
+    BREAKEVEN_PROFIT_MULT = float(os.getenv("BREAKEVEN_PROFIT_MULT", "0.2"))
+
     # Dry Run Mode (True면 실제 매매하지 않고 DB 기록만 함)
     DRY_RUN = os.getenv("DRY_RUN", "True").lower() == "true"
 

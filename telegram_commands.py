@@ -312,6 +312,8 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "rsi_period": ("RSI_PERIOD", int, "RSI_PERIOD"),
             "rsi_ob": ("RSI_OB", int, "RSI_OB"),
             "rsi_os": ("RSI_OS", int, "RSI_OS"),
+            "be_trigger": ("BREAKEVEN_TRIGGER_MULT", float, "BREAKEVEN_TRIGGER_MULT"),
+            "be_profit": ("BREAKEVEN_PROFIT_MULT", float, "BREAKEVEN_PROFIT_MULT"),
             "mtf_filter": (None, None, None),  # Custom logic
             "mtf": (None, None, None),  # Custom logic alias
             "mtf_mode": (None, None, None),  # Custom logic alias
@@ -375,11 +377,20 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_val = cast_fn(raw_val)
 
         # 변동성 추세 배수에 대한 하드 리미트 안정성 유효성 검사 (0.5 ~ 3.0)
-        if key in ("adx_trend_mult", "mtf_lower_mult", "mtf_upper_mult"):
+        if key in ("adx_trend_mult", "mtf_lower_mult", "mtf_upper_mult", "be_trigger"):
             if new_val < 0.5 or new_val > 3.0:
                 await update.message.reply_text(
                     f"❌ [거부됨] 해당 설정값({new_val})은 비정상적인 범위입니다.\n"
                     f"안전장치에 의해 거부되었습니다. 올바른 범위(0.5 ~ 3.0) 내의 값을 지정해주세요."
+                )
+                return
+
+        # 본절 라인 수익률은 0.0 ~ 3.0 허용
+        if key == "be_profit":
+            if new_val < 0.0 or new_val > 3.0:
+                await update.message.reply_text(
+                    f"❌ [거부됨] 해당 설정값({new_val})은 비정상적인 범위입니다.\n"
+                    f"안전장치에 의해 거부되었습니다. 올바른 범위(0.0 ~ 3.0) 내의 값을 지정해주세요."
                 )
                 return
 
@@ -529,6 +540,8 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"ATR Ratio : {getattr(settings, 'ATR_RATIO_MULT', 1.2)}\n"
         f"SL 배수   : {getattr(settings, 'SL_MULT', 3.0)}\n"
         f"TP 배수   : {getattr(settings, 'TP_MULT', 6.0)}\n"
+        f"본절발동(B/E Trigger): {getattr(settings, 'BREAKEVEN_TRIGGER_MULT', 1.5)}x\n"
+        f"본절보존(B/E Profit): {getattr(settings, 'BREAKEVEN_PROFIT_MULT', 0.2)}x\n"
         f"재진입대기: {getattr(settings, 'LOSS_COOLDOWN_MINUTES', 15)}분\n\n"
         "💡 변경은 /setparam [옵션] [값] 이용"
     )

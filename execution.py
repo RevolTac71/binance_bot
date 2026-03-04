@@ -67,6 +67,8 @@ class ExecutionEngine:
                 ),
                 "chandelier_mult": getattr(settings, "CHANDELIER_MULT", None),
                 "max_same_dir": getattr(settings, "MAX_CONCURRENT_SAME_DIR", None),
+                "be_trigger": getattr(settings, "BREAKEVEN_TRIGGER_MULT", None),
+                "be_profit": getattr(settings, "BREAKEVEN_PROFIT_MULT", None),
             },
             ensure_ascii=False,
         )

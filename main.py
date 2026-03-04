@@ -399,6 +399,7 @@ async def process_closed_kline(
             df_15m=df_15m,
             cvd_trend=cvd_trend,
             bid_ask_imbalance=twap_imbalance,
+            all_htf_15m=htf_df_15m,
         )
 
         if decision["signal"]:
