@@ -178,37 +178,12 @@ class HFTDataPipeline:
         }
 
     async def fetch_derivatives_data(self, sym: str) -> tuple[float, float]:
-        """REST API: 미결제약정(OI) 및 펀딩비 조회"""
-        oi, funding = 0.0, 0.0
-        base_url = (
-            "https://testnet.binancefuture.com"
-            if getattr(settings, "USE_TESTNET", False)
-            else "https://fapi.binance.com"
-        )
-        try:
-            timeout_cfg = aiohttp.ClientTimeout(total=10)
-            # Open Interest
-            async with self.session.get(
-                f"{base_url}/fapi/v1/openInterest?symbol={sym.upper()}",
-                timeout=timeout_cfg,
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    oi = float(data.get("openInterest", 0.0))
-            # Funding Rate
-            async with self.session.get(
-                f"{base_url}/fapi/v1/premiumIndex?symbol={sym.upper()}",
-                timeout=timeout_cfg,
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    funding = float(data.get("lastFundingRate", 0.0))
-        except asyncio.TimeoutError:
-            logger.warning(f"[HFT] REST Fetch Timeout for {sym} (10s초과)")
-        except Exception as e:
-            logger.error(f"[HFT] REST Fetch Error for {sym}: {type(e).__name__} - {e}")
-
-        return oi, funding
+        """
+        REST API: 미결제약정(OI) 및 펀딩비 조회
+        [V16.9.3] Binance REST Rate Limit 및 aiohttp 동시성 타임아웃 방지를 위해
+        HFT 파이프라인에서의 OI/Funding 조회를 비활성화하고 (0.0, 0.0)을 기본값으로 반환합니다.
+        """
+        return 0.0, 0.0
 
     async def aggregator_loop(self):
         """매 정각 1분(00초)마다 스냅샷을 찍고 DB에 1 Row Insert"""
