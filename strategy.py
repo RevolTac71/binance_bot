@@ -496,15 +496,23 @@ class StrategyEngine:
         regime = mtf["regime"]  # "TREND" | "RANGE"
         momentum = mtf["momentum"]  # "BULLISH" | "BEARISH" | "NEUTRAL"
 
-        # ── STEP 5: Volume Spike 판별 (Z-score 기반) ────────────────────────
-        # 통계적 이상치(Z-score ≥ +2.0σ)를 돌파로 인식, +3.0σ 이상을 소진으로 규정
-        vol_series = df["volume"]
-        vol_mean = vol_series.rolling(20).mean().iloc[-1]
-        vol_std = vol_series.rolling(20).std().iloc[-1]
+        # ── STEP 5: Volume Spike 판별 (Log-normal Z-score 기반) ────────────────
+        # 통계적 이상치 판별 시, 거래량의 Long-tail 분포를 정규화하기 위해 자연로그 적용
+        # (Z-score ≥ +2.0σ)를 돌파로 인식, +3.0σ 이상을 소진으로 규정
+        import numpy as np
 
-        # 분모 0 방어를 위해 작은 값 더함
+        vol_series = df["volume"]
+        log_vol_series = np.log(vol_series + 1e-9)  # 0 또는 음수 방어
+
+        log_vol_mean = log_vol_series.rolling(20).mean().iloc[-1]
+        log_vol_std = log_vol_series.rolling(20).std().iloc[-1]
+
+        current_log_vol = np.log(volume + 1e-9)
+
         z_score = (
-            (volume - vol_mean) / (vol_std + 1e-9) if not pd.isna(vol_std) else 0.0
+            (current_log_vol - log_vol_mean) / (log_vol_std + 1e-9)
+            if not pd.isna(log_vol_std)
+            else 0.0
         )
 
         is_vol_spike = z_score >= 2.0
@@ -671,17 +679,21 @@ class StrategyEngine:
 
             # 상관관계(Pearson) 동조화 자산 동시 진입 차단 (V16+)
             if all_htf_15m is not None and df_15m is not None and not df_15m.empty:
-                target_series = df_15m["close"].tail(100)
-                if len(target_series) >= 50:
+                target_returns = df_15m["close"].pct_change().dropna().tail(100)
+                if len(target_returns) >= 50:
                     for active_sym, pos_info in portfolio.positions.items():
                         # 같은 방향의 포지션만 상관관계 체크
                         if pos_info["direction"] == signal_type:
                             active_df = all_htf_15m.get(active_sym)
                             if active_df is not None and not active_df.empty:
-                                active_series = active_df["close"].tail(100)
+                                active_returns = (
+                                    active_df["close"].pct_change().dropna().tail(100)
+                                )
                                 # 인덱스 정렬 후 상관계수 도출
                                 aligned_df = pd.concat(
-                                    [target_series, active_series], axis=1, join="inner"
+                                    [target_returns, active_returns],
+                                    axis=1,
+                                    join="inner",
                                 ).dropna()
                                 if len(aligned_df) >= 50:
                                     corr = aligned_df.iloc[:, 0].corr(

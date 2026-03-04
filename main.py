@@ -174,12 +174,13 @@ async def warm_up_data(symbols: list, pipeline: DataPipeline):
     ]
 
     # [V16 MTF] 1H·15m 로드 태스크 (동시 병렬 처리)
+    # 장기 지표(EMA200, ATR200 등) 수렴(Smoothing)을 위해 최소 1000개 로드
     tasks_1h = [
-        pipeline.fetch_ohlcv_htf(sym, timeframe=settings.HTF_TIMEFRAME_1H, limit=300)
+        pipeline.fetch_ohlcv_htf(sym, timeframe=settings.HTF_TIMEFRAME_1H, limit=1000)
         for sym in symbols
     ]
     tasks_15m = [
-        pipeline.fetch_ohlcv_htf(sym, timeframe=settings.HTF_TIMEFRAME_15M, limit=200)
+        pipeline.fetch_ohlcv_htf(sym, timeframe=settings.HTF_TIMEFRAME_15M, limit=1000)
         for sym in symbols
     ]
 
