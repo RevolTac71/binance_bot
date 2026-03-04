@@ -201,27 +201,34 @@ class DataPipeline:
         # ── 1시간봉 지표 ───────────────────────────────────────────────────
         if df_1h is not None and len(df_1h) >= 50:
             df_1h = df_1h.copy()
-            df_1h.ta.ema(length=50, append=True, col_names=("EMA_50",))
-            df_1h.ta.ema(length=200, append=True, col_names=("EMA_200",))
+            # pandas 내장 기능으로 빠르고 안전하게 EMA 연산
+            df_1h["EMA_50"] = df_1h["close"].ewm(span=50, adjust=False).mean()
+            df_1h["EMA_200"] = df_1h["close"].ewm(span=200, adjust=False).mean()
 
         # ── 15분봉 지표 ──────────────────────────────────────────────────
         if df_15m is not None and len(df_15m) >= 100:
             df_15m = df_15m.copy()
-            # ADX: 추세 강도 (DMP_, DMN_ 컬럼도 함께 생성)
-            df_15m.ta.adx(
-                length=14, append=True, col_names=("ADX_14", "DMP_14", "DMN_14")
-            )
-            # 종목별 ADX 평균치 (기준선) 산출 (50기간)
-            df_15m["ADX_SMA_50"] = df_15m.ta.sma(close=df_15m["ADX_14"], length=50)
 
-            # MACD: 기본 12/26/9 파라미터
-            df_15m.ta.macd(
-                fast=12,
-                slow=26,
-                signal=9,
-                append=True,
-                col_names=("MACD", "MACD_H", "MACD_S"),
-            )
+            # ADX: 추세 강도 연산 방어코드 적용 (append 버그 우회)
+            try:
+                adx_res = df_15m.ta.adx(length=14)
+                if adx_res is not None and not adx_res.empty:
+                    df_15m = pd.concat([df_15m, adx_res], axis=1)
+            except Exception as e:
+                logger.error(f"[HTF] ADX 연산 에러: {e}")
+
+            # 종목별 ADX 평균치 (기준선) 산출 (판다스 내장 rolling 함수 사용)
+            if "ADX_14" in df_15m.columns:
+                df_15m["ADX_SMA_50"] = df_15m["ADX_14"].rolling(window=50).mean()
+
+            # MACD: 모멘텀 연산 방어코드 적용
+            try:
+                macd_res = df_15m.ta.macd(fast=12, slow=26, signal=9)
+                if macd_res is not None and not macd_res.empty:
+                    macd_res.columns = ["MACD", "MACD_H", "MACD_S"]
+                    df_15m = pd.concat([df_15m, macd_res], axis=1)
+            except Exception as e:
+                logger.error(f"[HTF] MACD 연산 에러: {e}")
 
         return df_1h, df_15m
 

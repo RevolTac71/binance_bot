@@ -19,7 +19,11 @@ logger = get_logger("HFTPipeline")
 logger.setLevel(logging.WARNING)  # routine snapshot 로그 무시
 
 # 설정
-WS_BASE_URL = "wss://fstream.binance.com"
+WS_BASE_URL = (
+    "wss://stream.binancefuture.com"
+    if getattr(settings, "USE_TESTNET", False)
+    else "wss://fstream.binance.com"
+)
 # Ticks는 메모리 상에 최대 2만건만 보관하여 누수 방지
 MAX_DEQUE_SIZE = 20000
 RETENTION_DAYS = 7
@@ -63,8 +67,10 @@ class HFTDataPipeline:
         logger.info(f"[HFT] Attempting to connect to WS: {url}")
         while True:
             try:
-                async with websockets.connect(url) as ws:
-                    logger.info(f"[HFT] Connected to WS Successfully: {stream_path}")
+                async with websockets.connect(
+                    url, ping_interval=20, ping_timeout=20
+                ) as ws:
+                    logger.info(f"[HFT] Connected to WS Successfully: {url}")
                     attempt = 0  # 연결 성공 시 백오프 초기화
                     async for message in ws:
                         await handler(json.loads(message))
@@ -72,14 +78,14 @@ class HFTDataPipeline:
                 attempt += 1
                 wait_time = min(2**attempt, 60)
                 logger.warning(
-                    f"[HFT] WS Connection Closed ({stream_path}): Code {e.code}, Reason {e.reason}. Reconnecting in {wait_time}s..."
+                    f"[HFT] WS Connection Closed: Code {e.code}, Reason {e.reason}. Reconnecting in {wait_time}s..."
                 )
                 await asyncio.sleep(wait_time)
             except Exception as e:
                 attempt += 1
                 wait_time = min(2**attempt, 60)  # Max 60초 대기
                 logger.error(
-                    f"[HFT] WS Unexpected Error ({stream_path}): {type(e).__name__} - {e}. Reconnecting in {wait_time}s..."
+                    f"[HFT] WS Unexpected Error: {type(e).__name__} - {e}. Reconnecting in {wait_time}s..."
                 )
                 await asyncio.sleep(wait_time)
 
@@ -174,25 +180,33 @@ class HFTDataPipeline:
     async def fetch_derivatives_data(self, sym: str) -> tuple[float, float]:
         """REST API: 미결제약정(OI) 및 펀딩비 조회"""
         oi, funding = 0.0, 0.0
+        base_url = (
+            "https://testnet.binancefuture.com"
+            if getattr(settings, "USE_TESTNET", False)
+            else "https://fapi.binance.com"
+        )
         try:
+            timeout_cfg = aiohttp.ClientTimeout(total=10)
             # Open Interest
             async with self.session.get(
-                f"https://fapi.binance.com/fapi/v1/openInterest?symbol={sym.upper()}",
-                timeout=5,
+                f"{base_url}/fapi/v1/openInterest?symbol={sym.upper()}",
+                timeout=timeout_cfg,
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     oi = float(data.get("openInterest", 0.0))
             # Funding Rate
             async with self.session.get(
-                f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={sym.upper()}",
-                timeout=5,
+                f"{base_url}/fapi/v1/premiumIndex?symbol={sym.upper()}",
+                timeout=timeout_cfg,
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     funding = float(data.get("lastFundingRate", 0.0))
+        except asyncio.TimeoutError:
+            logger.warning(f"[HFT] REST Fetch Timeout for {sym} (10s초과)")
         except Exception as e:
-            logger.error(f"[HFT] REST Fetch Error for {sym}: {e}")
+            logger.error(f"[HFT] REST Fetch Error for {sym}: {type(e).__name__} - {e}")
 
         return oi, funding
 
@@ -214,10 +228,21 @@ class HFTDataPipeline:
 
             logger.info(f"[HFT] Creating 1-Min Snapshot at {snapshot_time}")
 
+            # REST Fetch 15종목 병렬 스케줄링 (I/O 블로킹 최소화) 및 실패 시 (0,0) 반환 래퍼 적용
+            async def safe_fetch(sym_name):
+                try:
+                    return await self.fetch_derivatives_data(sym_name)
+                except Exception as e:
+                    logger.error(f"[HFT] Safe Fetch Error {sym_name}: {e}")
+                    return (0.0, 0.0)
+
+            fetch_tasks = [safe_fetch(sym) for sym in self.symbols]
+            derivatives_results = await asyncio.gather(*fetch_tasks)
+
             # 모든 심볼 연산 완료 대기 및 큐 스왑
             snapshot_tasks = []
-            for sym in self.symbols:
-                oi, funding = await self.fetch_derivatives_data(sym)
+            for idx, sym in enumerate(self.symbols):
+                oi, funding = derivatives_results[idx]
 
                 # [V16.8] O(1) Queue Swap with AsyncLock
                 async with self.buffer_locks[sym]:
