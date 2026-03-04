@@ -68,7 +68,7 @@ class HFTDataPipeline:
         while True:
             try:
                 async with websockets.connect(
-                    url, ping_interval=20, ping_timeout=20
+                    url, ping_interval=60, ping_timeout=60
                 ) as ws:
                     logger.info(f"[HFT] Connected to WS Successfully: {url}")
                     attempt = 0  # 연결 성공 시 백오프 초기화
