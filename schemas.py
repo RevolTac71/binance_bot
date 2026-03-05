@@ -27,9 +27,6 @@ class MarketDataSnapshot(BaseModel):
     ema_20_1h: Optional[float] = None
     ema_50_1h: Optional[float] = None
 
-    upper_band: Optional[float] = None
-    lower_band: Optional[float] = None
-
     vwap: Optional[float] = None
     volume: Optional[float] = None
     twap_imbalance: Optional[float] = None

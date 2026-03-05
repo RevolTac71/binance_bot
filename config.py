@@ -63,26 +63,14 @@ class Config:
     # Strategy Global Parameters
     STRATEGY_VERSION = os.getenv("STRATEGY_VERSION", "V18")  # 전략 버전 식별자
     TIMEFRAME = os.getenv("TIMEFRAME", "3m")
-    K_VALUE = float(os.getenv("K_VALUE", "2.0"))
     RISK_PERCENTAGE = float(os.getenv("RISK_PERCENTAGE", "0.005"))
     LEVERAGE = int(os.getenv("LEVERAGE", "5"))
     TIME_EXIT_MINUTES = int(
         os.getenv("TIME_EXIT_MINUTES", "90")
     )  # 하위 호환 유지 (Chandelier Exit 전환 후 비활성 예정)
 
-    # V15.2 New Parameters
-    VOL_MULT = float(
-        os.getenv("VOL_MULT", "1.5")
-    )  # 일반 거래량 스파이크 배수 (1.5x~2.0x)
-    EXTREME_VOL_MULT = float(
-        os.getenv("EXTREME_VOL_MULT", "2.5")
-    )  # 극단 소진 진입 배수 (2.5x~3.0x)
     ATR_RATIO_MULT = float(os.getenv("ATR_RATIO_MULT", "1.2"))
     ATR_LONG_LEN = int(os.getenv("ATR_LONG_LEN", "200"))
-
-    # V17: 로그 Z-Score 거래량 스파이크 판별 임계값
-    VOL_SPIKE_Z = float(os.getenv("VOL_SPIKE_Z", "2.0"))  # 일반 스파이크 σ 기준
-    VOL_EXTREME_Z = float(os.getenv("VOL_EXTREME_Z", "3.0"))  # 극단 스파이크 σ 기준
 
     # SL/TP 배율 (ATR 대비) - 기존 1.5/2.5에서 확장
     # SL을 넓혀 일시적 되돌림에 손절되지 않도록 함
@@ -117,32 +105,9 @@ class Config:
     # 전체 최대 동시 진입 허용 개수 (알트코인 연쇄 손절 방지용)
     MAX_TRADES = int(os.getenv("MAX_TRADES", "3"))
 
-    # ── V16 상위 프레임 필터(MTF) 온오프 스위치 ────────────────────────────
-    # 강세장/횡보장에 따라 MTF 필터 켜고 끄기
-    MTF_FILTER = os.getenv("MTF_FILTER", "True").lower() == "true"
-    MTF_MODE = os.getenv("MTF_MODE", "AUTO").upper()  # "ON", "OFF", "AUTO"
-    AUTO_MTF_LOWER_THRESHOLD = float(os.getenv("AUTO_MTF_LOWER_THRESHOLD", "14.0"))
-    AUTO_MTF_UPPER_THRESHOLD = float(os.getenv("AUTO_MTF_UPPER_THRESHOLD", "16.0"))
-
-    # 신규 시그널: 종목별 상대적 ADX 기준 (ADX_SMA 대비 배수)
-    ADX_TREND_MULTIPLIER = float(os.getenv("ADX_TREND_MULTIPLIER", "1.0"))
-    AUTO_MTF_LOWER_MULTIPLIER = float(os.getenv("AUTO_MTF_LOWER_MULTIPLIER", "0.9"))
-    AUTO_MTF_UPPER_MULTIPLIER = float(os.getenv("AUTO_MTF_UPPER_MULTIPLIER", "1.2"))
-
     # 본절(Breakeven) 추적 로직 (V16+)
     BREAKEVEN_TRIGGER_MULT = float(os.getenv("BREAKEVEN_TRIGGER_MULT", "1.5"))
     BREAKEVEN_PROFIT_MULT = float(os.getenv("BREAKEVEN_PROFIT_MULT", "0.2"))
-
-    # ── V17 국면 판별 고도화 파라미터 ─────────────────────────────────────
-    # ADX 백분위수 기반 동적 국면 분류 (하드코딩 임계값 대체)
-    ADX_PCTL_WINDOW = int(
-        os.getenv("ADX_PCTL_WINDOW", "100")
-    )  # 백분위수 산출 롤링 기간
-    ADX_PCTL_RANK = float(os.getenv("ADX_PCTL_RANK", "0.8"))  # 80번째 백분위수
-
-    # Dynamic Zone RSI (국면별 RSI 임계값 자동 조정)
-    RSI_OS_TREND = int(os.getenv("RSI_OS_TREND", "25"))  # 추세장 과매도 임계
-    RSI_OB_TREND = int(os.getenv("RSI_OB_TREND", "75"))  # 추세장 과매수 임계
 
     # ── V18 스코어링 진입 엔진 파라미터 ────────────────────────────────
     MIN_ENTRY_SCORE = int(os.getenv("MIN_ENTRY_SCORE", "5"))  # 진입 최소 합산 점수

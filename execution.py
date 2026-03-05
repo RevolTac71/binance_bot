@@ -46,37 +46,9 @@ class ExecutionEngine:
         return json.dumps(
             {
                 "strategy_version": getattr(settings, "STRATEGY_VERSION", "UNKNOWN"),
-                "k_value": getattr(settings, "K_VALUE", None),
-                "vol_mult": getattr(settings, "VOL_MULT", None),
-                "atr_ratio": getattr(settings, "ATR_RATIO_MULT", None),
-                "atr_long_len": getattr(settings, "ATR_LONG_LEN", None),
-                "leverage": getattr(settings, "LEVERAGE", None),
-                "risk_pct": getattr(settings, "RISK_PERCENTAGE", None),
-                "timeframe": getattr(settings, "TIMEFRAME", None),
-                "time_exit_min": getattr(settings, "TIME_EXIT_MINUTES", None),
-                "sl_mult": getattr(settings, "SL_MULT", None),
-                "tp_mult": getattr(settings, "TP_MULT", None),
-                # V16 신규 파라미터
-                "adx_threshold": getattr(settings, "ADX_THRESHOLD", None),
-                "adx_trend_mult": getattr(settings, "ADX_TREND_MULTIPLIER", None),
-                "auto_mtf_lower_mult": getattr(
-                    settings, "AUTO_MTF_LOWER_MULTIPLIER", None
-                ),
-                "auto_mtf_upper_mult": getattr(
-                    settings, "AUTO_MTF_UPPER_MULTIPLIER", None
-                ),
-                "chandelier_mult": getattr(settings, "CHANDELIER_MULT", None),
-                "max_same_dir": getattr(settings, "MAX_CONCURRENT_SAME_DIR", None),
-                "be_trigger": getattr(settings, "BREAKEVEN_TRIGGER_MULT", None),
-                "be_profit": getattr(settings, "BREAKEVEN_PROFIT_MULT", None),
-                # V17 신규 파라미터
-                "adx_pctl_window": getattr(settings, "ADX_PCTL_WINDOW", None),
-                "adx_pctl_rank": getattr(settings, "ADX_PCTL_RANK", None),
-                "rsi_os_trend": getattr(settings, "RSI_OS_TREND", None),
-                "rsi_ob_trend": getattr(settings, "RSI_OB_TREND", None),
-                "kelly_sizing": getattr(settings, "KELLY_SIZING", None),
-                "partial_tp_ratio": getattr(settings, "PARTIAL_TP_RATIO", None),
-                "chasing_wait_sec": getattr(settings, "CHASING_WAIT_SEC", None),
+                "min_entry_score": getattr(settings, "MIN_ENTRY_SCORE", None),
+                "pctl_window": getattr(settings, "PCTL_WINDOW", None),
+                "adx_boost_pctl": getattr(settings, "ADX_BOOST_PCTL", None),
             },
             ensure_ascii=False,
         )

@@ -238,15 +238,8 @@ class StrategyEngine:
     def __init__(self, exchange=None):
         self.exchange = exchange
 
-        # RSI 과매도/과매수 기준 (설정 파일 우선 적용, 없으면 기본값)
-        self.rsi_os = getattr(settings, "RSI_OS", 30)
-        self.rsi_ob = getattr(settings, "RSI_OB", 70)
-
         # 세션 필터 (VWAP 리셋 후 최소 안정화 봉수)
         self.session_filter_bars = 30
-
-        # [V16.4] 개별 종목의 Auto-MTF 상태 (Hysteresis Buffer 처리)
-        self.symbol_mtf_states = {}
 
     # ────────────────────────────────────────────────────────────────────────
     # 1. HTF 추세 방향 판별 (1시간봉 EMA 배열)
@@ -320,24 +313,20 @@ class StrategyEngine:
         macd = last.get("MACD", None)
         macd_s = last.get("MACD_S", None)
 
-        adx_threshold = getattr(settings, "ADX_THRESHOLD", 25.0)
-        adx_trend_mult = getattr(settings, "ADX_TREND_MULTIPLIER", 1.0)
-
-        # ADX 기반 장세 분류 — V17: 백분위수 우선, 폴백으로 SMA·고정 임계값 순서
+        # ADX 기반 장세 분류 — V17: 백분위수 활용
         adx_pctl = last.get("ADX_PCTL_80", None)
         if adx is not None and not pd.isna(adx):
             result["adx"] = float(adx)
             if adx_sma is not None and not pd.isna(adx_sma):
                 result["adx_sma"] = float(adx_sma)
-            # V17: 백분위수가 있으면 종목별 고유 기준으로 TREND/RANGE 판별
+
+            # V18: 백분위수가 있으면 종목별 고유 기준으로 TREND/RANGE 판별
             if adx_pctl is not None and not pd.isna(adx_pctl):
                 result["regime"] = "TREND" if adx >= float(adx_pctl) else "RANGE"
             elif adx_sma is not None and not pd.isna(adx_sma):
-                result["regime"] = (
-                    "TREND" if adx >= (float(adx_sma) * adx_trend_mult) else "RANGE"
-                )
+                result["regime"] = "TREND" if adx >= float(adx_sma) else "RANGE"
             else:
-                result["regime"] = "TREND" if adx >= adx_threshold else "RANGE"
+                result["regime"] = "TREND" if adx >= 20.0 else "RANGE"
 
         # MACD 기반 모멘텀 방향 분류
         if (
@@ -451,8 +440,6 @@ class StrategyEngine:
         volume = float(current["volume"])
 
         rsi_val = current.get("RSI", 50.0)
-        lower_band = current.get("Lower_Band")
-        upper_band = current.get("Upper_Band")
         vwap_mid = current.get("VWAP", market_price)
         vol_sma_20 = current.get("Vol_SMA_20")
         atr_14 = current.get("ATR_14", market_price * 0.005)
@@ -461,18 +448,10 @@ class StrategyEngine:
         atr_long = current.get(f"ATR_{atr_long_len}", atr_14)
 
         # 결측치 방어 (NoneType 예외 차단 로직 강화)
-        if (
-            lower_band is None
-            or upper_band is None
-            or vol_sma_20 is None
-            or pd.isna(lower_band)
-            or pd.isna(upper_band)
-            or pd.isna(atr_14)
-            or pd.isna(vol_sma_20)
-        ):
+        if vol_sma_20 is None or pd.isna(atr_14) or pd.isna(vol_sma_20):
             return {
                 "signal": None,
-                "reason": "지표 결측치 발생 (밴드 또는 거래량 SMA 없음)",
+                "reason": "지표 결측치 발생 (방어 로직 등 데이터 부족)",
             }
 
         # ── STEP 1: Session Filter ────────────────────────────────────────
@@ -591,8 +570,6 @@ class StrategyEngine:
         if signal_type is not None:
             market_data_obj = MarketDataSnapshot(
                 rsi=float(rsi_val),
-                lower_band=float(lower_band) if lower_band is not None else None,
-                upper_band=float(upper_band) if upper_band is not None else None,
                 sma_20=float(vol_sma_20) if vol_sma_20 is not None else None,
                 volume=float(volume),
                 atr_14=float(atr_14),

@@ -132,17 +132,7 @@ class DataPipeline:
         # VWAP 계산
         df["VWAP"] = rolling_vol_hlc3 / rolling_vol
 
-        # 분산(Variance) 계산 = (롤링(가격^2 * 거래량) / 롤링거래량) - VWAP^2
-        variance = (rolling_vol_hlc3_sq / rolling_vol) - (df["VWAP"] ** 2)
-        variance = np.maximum(0, variance)  # 음수 방지
-
-        # V16 표준편차 밴드 멀티플라이어 (K = 2.5)
-        vwap_mult = (
-            float(settings.K_VALUE) if getattr(settings, "K_VALUE", 2.5) else 2.5
-        )
-        df["StdDev"] = np.sqrt(variance)
-        df["Upper_Band"] = df["VWAP"] + df["StdDev"] * vwap_mult
-        df["Lower_Band"] = df["VWAP"] - df["StdDev"] * vwap_mult
+        # V18: VWAP 밴드 상하단(StdDev 기반) 계산 제거 (개별 지표 스코어링으로 대체됨)
 
         # 과매도/과매수 판단을 위한 RSI (동적 Period 지원)
         rsi_period = getattr(settings, "RSI_PERIOD", 14)

@@ -319,9 +319,6 @@ async def process_closed_kline(
         curr_atr_14 = float(df_ind.iloc[-1].get("ATR_14", 0))
         curr_atr_200 = float(df_ind.iloc[-1].get("ATR_200", 0))
         curr_rsi = float(df_ind.iloc[-1].get("RSI_14", 50))
-        curr_bb_width = float(
-            df_ind.iloc[-1].get("Upper_Band", 0) - df_ind.iloc[-1].get("Lower_Band", 0)
-        )
 
         macd_h = (
             float(df_15m.iloc[-1].get("MACD_H", 0))
@@ -385,7 +382,6 @@ async def process_closed_kline(
             "adx": adx_14,
             "atr_14": curr_atr_14,
             "atr_200": curr_atr_200,
-            "bb_width": curr_bb_width,
             "ema_1h_dist": ema_1h_dist,
             "ema_15m_dist": ema_15m_dist,
             "cvd_5m_sum": current_cvd,
