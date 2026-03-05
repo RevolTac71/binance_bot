@@ -1006,19 +1006,23 @@ class ExecutionEngine:
         """
         [Fail-Safe 방어 체계]
         거래소 실잔고와 DB/메모리 기록 사이의 불일치를 감지합니다.
+        DRY_RUN 모드에서는 실제 거래소 API를 호출하지 않습니다.
         """
+        # DRY_RUN 모드에서는 거래소 조회 불필요 — 스킵
+        if settings.DRY_RUN:
+            return
+
         try:
             # 바이낸스 선물 계좌 조회
             balance_info = await self.exchange.fetch_balance()
             usdt_total = balance_info.get("total", {}).get("USDT", 0.0)
 
             # 보유 선물 포지션 조회 (CCXT fetch_positions)
-            if not settings.DRY_RUN:
-                positions = await self.exchange.fetch_positions()
-                active_open = [p for p in positions if float(p.get("contracts", 0)) > 0]
+            positions = await self.exchange.fetch_positions()
+            active_open = [p for p in positions if float(p.get("contracts", 0)) > 0]
 
-                # 향후 로직 고도화: 실제 서버 포지션과 self.active_positions 불일치 방어
-                pass
+            # 향후 로직 고도화: 실제 서버 포지션과 self.active_positions 불일치 방어
+            pass
 
         except Exception as e:
             logger.error(f"State Mismatch 체크 중 오류: {e}")
