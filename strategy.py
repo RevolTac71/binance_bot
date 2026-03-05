@@ -493,330 +493,98 @@ class StrategyEngine:
                 ),
             }
 
-        # ── STEP 3: [V16 NEW] HTF Bias 판별 (1H EMA 배열) ────────────────
-        htf_bias = self.get_htf_bias(df_1h)
+        # ══════════════════════════════════════════════════════════════
+        # V18 스코어링 진입 엔진 (STEP 3~8 직렬 AND 게이트 전면 교체)
+        # ══════════════════════════════════════════════════════════════
 
-        # ── STEP 4: [V16 NEW] MTF Regime 판별 (15m ADX/MACD) ─────────────
-        mtf = self.get_mtf_regime(df_15m)
-        regime = mtf["regime"]  # "TREND" | "RANGE"
-        momentum = mtf["momentum"]  # "BULLISH" | "BEARISH" | "NEUTRAL"
-
-        # ── STEP 5: Volume Spike 판별 (Log-normal Z-score 기반) ────────────────
-        # 통계적 이상치 판별 시, 거래량의 Long-tail 분포를 정규화하기 위해 자연로그 적용
-        # (Z-score ≥ +2.0σ)를 돌파로 인식, +3.0σ 이상을 소진으로 규정
+        from scoring import compute_live_percentiles, calculate_entry_score
         import numpy as np
 
-        vol_series = df["volume"]
-        log_vol_series = np.log(vol_series + 1e-9)  # 0 또는 음수 방어
+        # 1. 실시간 백분위수 산출 (O(window) 최적화)
+        pctl_window = getattr(settings, "PCTL_WINDOW", 100)
 
-        log_vol_mean = log_vol_series.rolling(20).mean().iloc[-1]
-        log_vol_std = log_vol_series.rolling(20).std().iloc[-1]
+        # 콜드스타트 방어: 데이터 부족 시 진입 유보
+        if len(df) < 20:
+            return {
+                "signal": None,
+                "reason": f"V18 콜드스타트 — 데이터 {len(df)}개 (최소 20개 필요)",
+            }
 
-        current_log_vol = np.log(volume + 1e-9)
+        # 외부 전달 데이터를 df 컬럼으로 주입 (백분위수 산출 소스)
+        if "cvd_delta_slope" not in df.columns:
+            df["cvd_delta_slope"] = 0.0
+            if cvd_trend == "BUY_PRESSURE":
+                df.iloc[-1, df.columns.get_loc("cvd_delta_slope")] = 1.0
+            elif cvd_trend == "SELL_PRESSURE":
+                df.iloc[-1, df.columns.get_loc("cvd_delta_slope")] = -1.0
 
-        z_score = (
-            (current_log_vol - log_vol_mean) / (log_vol_std + 1e-9)
-            if not pd.isna(log_vol_std)
-            else 0.0
-        )
+        if "bid_ask_imbalance" not in df.columns:
+            df["bid_ask_imbalance"] = bid_ask_imbalance
 
-        spike_z = getattr(settings, "VOL_SPIKE_Z", 2.0)
-        extreme_z = getattr(settings, "VOL_EXTREME_Z", 3.0)
-        is_vol_spike = z_score >= spike_z
-        is_extreme_vol = z_score >= extreme_z
+        if "ADX_14" not in df.columns and df_15m is not None and not df_15m.empty:
+            df["ADX_14"] = df_15m.iloc[-1].get("ADX_14", 20.0)
 
-        # ── [V16.4 NEW] Auto-MTF 로직 (Hysteresis 완충 지대 적용) ───────────
-        mtf_mode = getattr(settings, "MTF_MODE", "AUTO").upper()
+        if "buy_ratio" not in df.columns:
+            df["buy_ratio"] = 0.5
 
-        if mtf_mode == "ON":
-            mtf_filter = True
-        elif mtf_mode == "OFF":
-            mtf_filter = False
-        else:
-            # AUTO 모드
-            adx_val = mtf.get("adx")
-            adx_sma = mtf.get("adx_sma")
+        if "NOFI" not in df.columns:
+            df["NOFI"] = 0.0
 
-            # 동적 임계값 설정 (우선), 지원 안되면 fallback 고정값
-            if adx_sma is not None:
-                lower_mult = getattr(settings, "AUTO_MTF_LOWER_MULTIPLIER", 0.8)
-                upper_mult = getattr(settings, "AUTO_MTF_UPPER_MULTIPLIER", 1.0)
-                lower_th = adx_sma * lower_mult
-                upper_th = adx_sma * upper_mult
-            else:
-                lower_th = getattr(settings, "AUTO_MTF_LOWER_THRESHOLD", 14.0)
-                upper_th = getattr(settings, "AUTO_MTF_UPPER_THRESHOLD", 16.0)
+        # 백분위수 산출
+        percentiles = compute_live_percentiles(df, window=pctl_window)
 
-            # 이전 상태가 없으면 무난하게 True로 초기화
-            prev_state = self.symbol_mtf_states.get(symbol, True)
+        # HTF bias를 환경 부스트용 펀딩비 방향으로 활용
+        htf_bias = self.get_htf_bias(df_1h)
+        funding_rate_match = 0
+        if htf_bias == "BULL":
+            funding_rate_match = 1
+        elif htf_bias == "BEAR":
+            funding_rate_match = -1
+        percentiles["funding_rate_match"] = funding_rate_match
 
-            if adx_val is None:
-                mtf_filter = prev_state  # 15m 데이터 수집 대기 중일 땐 기존 상태 유지
-            elif adx_val < lower_th:
-                mtf_filter = False  # 스캘핑 돌입 (MTF 끄기)
-            elif adx_val > upper_th:
-                mtf_filter = True  # 추세 추종 돌입 (MTF 켜기)
-            else:
-                mtf_filter = prev_state  # 기존 상태 유지 (완충 지대)
+        # 2. 스코어링 엔진 실행
+        adx_boost = getattr(settings, "ADX_BOOST_PCTL", 70.0)
+        score_result = calculate_entry_score(percentiles, adx_boost_pctl=adx_boost)
 
-            self.symbol_mtf_states[symbol] = mtf_filter
+        long_score = score_result["long_score"]
+        short_score = score_result["short_score"]
+        raw_signal = score_result["signal"]
+        score_detail = score_result["detail"]
 
-        # HTF/MTF 상태를 캔들마다 INFO로 출력 (봇 작동 여부 확인용)
-        # MTF_FILTER 켜져있을 때만 상세 출력 -> 이제 Auto-MTF 상태도 포함해서 출력
-        adx_print = f"{mtf['adx']:.1f}" if mtf["adx"] is not None else "N/A"
-        if mtf_filter:
-            logger.info(
-                f"[{symbol}] 📊 [MTF: ON] "
-                f"1H Bias={htf_bias} | "
-                f"Regime={regime} (ADX={adx_print}) | "
-                f"Momentum={momentum} | "
-                f"RSI={rsi_val:.1f} | Vol={volume / vol_sma_20:.1f}x"
-            )
-        elif mtf_mode == "AUTO":
-            # Auto-MTF로 인해 꺼졌을 때 간략히 로그
-            logger.info(
-                f"[{symbol}] ⚡ [MTF: OFF (Auto)] 박스권 스캘퍼 모드 가동 (ADX={adx_print})"
-            )
-
-        # ── STEP 6: Price Action Rejection / Extreme Outlier ──────────────
-        # V17: 추세장에서는 밴드 중심(VWAP) 부근 눌림목 리젝션, 횡보장에서는 밴드 상/하단 리젝션
-        if regime == "TREND":
-            # 추세장 눌림목 — VWAP 부근까지 되돌린 후 반등하면 순추세 진입 타점
-            long_rejection = (low_price <= vwap_mid * 1.002) and (
-                market_price > vwap_mid
-            )
-            short_rejection = (high_price >= vwap_mid * 0.998) and (
-                market_price < vwap_mid
-            )
-        else:
-            # 횡보장 — 기존 밴드 상/하단 리젝션 유지
-            long_rejection = (low_price <= lower_band) and (market_price > lower_band)
-            short_rejection = (high_price >= upper_band) and (market_price < upper_band)
-
-        # ── STEP 7: 정규화 OFI (NOFI) 기반 지정가 역배열 필터 (V16+) ──────────
-        nofi = float(current.get("NOFI", 0.0)) if "NOFI" in current else 0.0
-        # 역배열 압력이 극심한 경우 (-0.5 이하 시 롱 금지, +0.5 이상 시 숏 금지)
-        cvd_long_ok = (cvd_trend != "SELL_PRESSURE") and (nofi >= -0.5)
-        cvd_short_ok = (cvd_trend != "BUY_PRESSURE") and (nofi <= 0.5)
-
-        # ── STEP 7.5: [V17] Dynamic Zone RSI — 국면별 RSI 임계값 자동 조정 ──
-        if regime == "TREND":
-            rsi_os_threshold = getattr(settings, "RSI_OS_TREND", 25)
-            rsi_ob_threshold = getattr(settings, "RSI_OB_TREND", 75)
-        else:
-            rsi_os_threshold = self.rsi_os  # 횡보장: 기존 30
-            rsi_ob_threshold = self.rsi_ob  # 횡보장: 기존 70
-
-        # ── STEP 8: 장세별 분기 + HTF 방향 일치 필터 ──────────────────────
+        # 3. 최소 점수 임계값 필터
+        min_score = getattr(settings, "MIN_ENTRY_SCORE", 5)
         signal_type = None
         reason = ""
 
-        if regime == "RANGE":
-            # 횡보장: 평균 회귀(역추세) 로직 → RSI 과매도/과매수 + VWAP 밴드 반전
-            # ★ 엄격한 HTF 방향 필터: BULL이면 롱만 허용 / BEAR이면 숏만 허용
-            #   → NEUTRAL(EMA가 근접한 과도기)에서는 진입하지 않음
-            # (MTF_FILTER가 꺼져있으면 횡보장에서 아무방향이나 진입 허용)
-            long_htf_ok = (htf_bias == "BULL") if mtf_filter else True
-            short_htf_ok = (htf_bias == "BEAR") if mtf_filter else True
+        if raw_signal == 1 and long_score >= min_score:
+            signal_type = "LONG"
+            reason = f"[V18 SCORE LONG] {score_detail} (≥{min_score})"
+        elif raw_signal == -1 and short_score >= min_score:
+            signal_type = "SHORT"
+            reason = f"[V18 SCORE SHORT] {score_detail} (≥{min_score})"
 
-            if (
-                long_htf_ok
-                and cvd_long_ok
-                and rsi_val <= rsi_os_threshold
-                and (
-                    (is_vol_spike and long_rejection)
-                    or (is_extreme_vol and low_price <= lower_band)
-                )
-            ):
-                signal_type = "LONG"
-                reason = (
-                    f"[RANGE 역추세 롱] RSI={rsi_val:.1f}≤{rsi_os_threshold} | "
-                    f"HTF={htf_bias} | VolSpike={volume / vol_sma_20:.1f}x | "
-                    f"ATR={atr_14:.4f} | CVD={cvd_trend}"
-                )
+        # V18 진단 로그
+        adx_pctl_val = percentiles.get("adx_pctl", 0)
+        rsi_val_log = percentiles.get("rsi", 50)
+        vol_z_val = percentiles.get("vol_zscore", 0)
 
-            elif (
-                short_htf_ok
-                and cvd_short_ok
-                and rsi_val >= rsi_ob_threshold
-                and (
-                    (is_vol_spike and short_rejection)
-                    or (is_extreme_vol and high_price >= upper_band)
-                )
-            ):
-                signal_type = "SHORT"
-                reason = (
-                    f"[RANGE 역추세 숏] RSI={rsi_val:.1f}≥{rsi_ob_threshold} | "
-                    f"HTF={htf_bias} | VolSpike={volume / vol_sma_20:.1f}x | "
-                    f"ATR={atr_14:.4f} | CVD={cvd_trend}"
-                )
-
-        else:  # TREND 장세: 모멘텀 추종 로직
-            # 추세장: HTF Bias와 MACD 모멘텀이 모두 일치할 때만 진입
-            # (MTF_FILTER가 꺼져있으면 추세 필터 무시)
-            long_htf_ok = (
-                ((htf_bias == "BULL") and (momentum == "BULLISH"))
-                if mtf_filter
-                else True
-            )
-            short_htf_ok = (
-                ((htf_bias == "BEAR") and (momentum == "BEARISH"))
-                if mtf_filter
-                else True
-            )
-
-            if (
-                long_htf_ok
-                and cvd_long_ok
-                and rsi_val <= rsi_os_threshold
-                and (
-                    (is_vol_spike and long_rejection)
-                    or (is_extreme_vol and low_price <= lower_band)
-                )
-            ):
-                signal_type = "LONG"
-                reason = (
-                    f"[TREND 눌림목 롱] ADX={adx_print} | "
-                    f"HTF={htf_bias} | MACD={momentum} | "
-                    f"VolSpike={volume / vol_sma_20:.1f}x | CVD={cvd_trend}"
-                )
-
-            elif (
-                short_htf_ok
-                and cvd_short_ok
-                and rsi_val >= rsi_ob_threshold
-                and (
-                    (is_vol_spike and short_rejection)
-                    or (is_extreme_vol and high_price >= upper_band)
-                )
-            ):
-                signal_type = "SHORT"
-                reason = (
-                    f"[TREND 눌림목 숏] ADX={adx_print} | "
-                    f"HTF={htf_bias} | MACD={momentum} | "
-                    f"VolSpike={volume / vol_sma_20:.1f}x | CVD={cvd_trend}"
-                )
-
-        # ── STEP 9: [V16 NEW] 포트폴리오 동시 진입 제한 (방향 & 상관계수) ─────
         if signal_type is not None:
-            max_same_dir = getattr(settings, "MAX_CONCURRENT_SAME_DIR", 2)
-            current_longs = portfolio.open_longs
-            current_shorts = portfolio.open_shorts
-
-            # 상관관계(Pearson) 동조화 자산 동시 진입 차단 (V16+)
-            if all_htf_15m is not None and df_15m is not None and not df_15m.empty:
-                target_returns = df_15m["close"].pct_change().dropna().tail(100)
-                if len(target_returns) >= 50:
-                    for active_sym, pos_info in portfolio.positions.items():
-                        # 같은 방향의 포지션만 상관관계 체크
-                        if pos_info["direction"] == signal_type:
-                            active_df = all_htf_15m.get(active_sym)
-                            if active_df is not None and not active_df.empty:
-                                active_returns = (
-                                    active_df["close"].pct_change().dropna().tail(100)
-                                )
-                                # 인덱스 정렬 후 상관계수 도출
-                                aligned_df = pd.concat(
-                                    [target_returns, active_returns],
-                                    axis=1,
-                                    join="inner",
-                                ).dropna()
-                                if len(aligned_df) >= 50:
-                                    corr = aligned_df.iloc[:, 0].corr(
-                                        aligned_df.iloc[:, 1]
-                                    )
-                                    if corr >= 0.8:
-                                        discarded_reason = (
-                                            f"[Pearson 차단] 기존 포지션 {active_sym}({signal_type})와 "
-                                            f"상관계수 +{corr:.2f}로 동조화 심화. 신규 진입 Discard."
-                                        )
-                                        logger.info(f"[{symbol}] {discarded_reason}")
-                                        return {
-                                            "signal": None,
-                                            "market_price": market_price,
-                                            "atr_val": float(atr_14),
-                                            "vwap_mid": float(vwap_mid),
-                                            "reason": discarded_reason,
-                                            "market_data": None,
-                                        }
-
-            if signal_type == "LONG" and current_longs >= max_same_dir:
-                discarded_reason = (
-                    f"[Portfolio 제한] 롱 포지션 {current_longs}개 이미 존재 "
-                    f"(최대={max_same_dir}). 신규 롱 Discard."
-                )
-                logger.info(f"[{symbol}] {discarded_reason}")
-                return {
-                    "signal": None,
-                    "market_price": market_price,
-                    "atr_val": float(atr_14),
-                    "vwap_mid": float(vwap_mid),
-                    "reason": discarded_reason,
-                    "market_data": None,
-                }
-
-            if signal_type == "SHORT" and current_shorts >= max_same_dir:
-                discarded_reason = (
-                    f"[Portfolio 제한] 숏 포지션 {current_shorts}개 이미 존재 "
-                    f"(최대={max_same_dir}). 신규 숏 Discard."
-                )
-                logger.info(f"[{symbol}] {discarded_reason}")
-                return {
-                    "signal": None,
-                    "market_price": market_price,
-                    "atr_val": float(atr_14),
-                    "vwap_mid": float(vwap_mid),
-                    "reason": discarded_reason,
-                    "market_data": None,
-                }
-
-        if signal_type is None and not reason:
-            reason = (
-                f"진입 조건 불충족 | HTF={htf_bias} | Regime={regime} | "
-                f"Momentum={momentum} | RSI={rsi_val:.1f}"
+            logger.info(
+                f"[{symbol}] 🎯 [V18] {signal_type} 진입! "
+                f"{score_detail} | RSI={rsi_val_log:.1f} | VolZ={vol_z_val:.1f}"
             )
-
-        # [V16 진단 로그] 진입 실패 시 상세 원인 출력
-        if signal_type is None:
-            vol_ratio = volume / vol_sma_20
-            long_htf_ok_check = (
-                (htf_bias == "BULL")
-                if regime == "RANGE"
-                else ((htf_bias == "BULL") and (momentum == "BULLISH"))
+        else:
+            best = max(long_score, short_score)
+            best_dir = "L" if long_score >= short_score else "S"
+            if not reason:
+                reason = (
+                    f"V18 점수 미달 | {best_dir}={best}/{min_score} | "
+                    f"HTF={htf_bias} | RSI={rsi_val_log:.1f}"
+                )
+            logger.info(
+                f"[{symbol}] 📊 [V18] {best_dir}={best}/{min_score} | "
+                f"RSI={rsi_val_log:.1f} | ADX%={adx_pctl_val:.0f} | VolZ={vol_z_val:.1f}"
             )
-            short_htf_ok_check = (
-                (htf_bias == "BEAR")
-                if regime == "RANGE"
-                else ((htf_bias == "BEAR") and (momentum == "BEARISH"))
-            )
-
-            if mtf_filter and htf_bias == "NEUTRAL":
-                logger.info(
-                    f"[{symbol}] 🚫 [STEP3 HTF Block] 1H EMA 과도기(NEUTRAL) — "
-                    f"방향 미확정으로 진입 차단"
-                )
-            elif mtf_filter and not (long_htf_ok_check or short_htf_ok_check):
-                logger.info(
-                    f"[{symbol}] 🚫 [STEP3 HTF Block] 방향 불일치 — "
-                    f"HTF={htf_bias}, Regime={regime}, Momentum={momentum}"
-                )
-            elif not is_vol_spike and not is_extreme_vol:
-                logger.info(
-                    f"[{symbol}] 📉 [STEP5 Volume] 거래량 부족 — "
-                    f"Z-Score={z_score:.2f} (돌파 기준 +{spike_z}σ 미달, 원시 캔들 {vol_ratio:.2f}x)"
-                )
-            elif not (long_rejection or short_rejection):
-                logger.info(
-                    f"[{symbol}] ↩️ [STEP6 PriceAction] 밴드 터치/리젝션 없음 — "
-                    f"Close={market_price:.4f}, Lower={lower_band:.4f}, Upper={upper_band:.4f}"
-                )
-            elif rsi_val > rsi_os_threshold and rsi_val < rsi_ob_threshold:
-                logger.info(
-                    f"[{symbol}] 〽️ [STEP8 RSI] RSI 중립 구간 — "
-                    f"RSI={rsi_val:.1f} (과매도≤{rsi_os_threshold} / 과매수≥{rsi_ob_threshold} 아님)"
-                )
-            else:
-                logger.info(f"[{symbol}] ✖ [STEP8] 복합 조건 미충족 — {reason}")
 
         # [V16.8] Pydantic Schema Validation
         market_data_obj = None

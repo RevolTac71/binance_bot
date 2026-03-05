@@ -1,0 +1,112 @@
+# V18 스코어링 진입 엔진 리팩토링 계획
+
+## 목표
+
+`check_entry()`의 STEP 3~8 직렬 AND 게이트를 **병렬 스코어링 엔진**으로 교체.  
+방어 로직(STEP 2 변동성 필터, STEP 9 포트폴리오, 4중 청산)은 **100% 보존**.
+
+## 변경 범위
+
+```mermaid
+flowchart TD
+    A["캔들 마감"] --> B["STEP 2: ATR 변동성 필터 ✅유지"]
+    B --> S["V18 스코어링 엔진 🔄교체"]
+    S --> H["STEP 9: 포트폴리오 방어 ✅유지"]
+    H --> I["체결 → 청산 ✅유지"]
+
+    subgraph "V18 스코어링 (STEP 3~8 대체)"
+        S1["1. 실시간 백분위수 산출"]
+        S2["2. 8개 지표 점수 합산"]
+        S3["3. min_score ≥ 5 → 시그널"]
+        S1 --> S2 --> S3
+    end
+```
+
+---
+
+## Proposed Changes
+
+### [MODIFY] [strategy.py](file:///c:/Y/Study/1.Projects/Binance_Bot2/strategy.py)
+
+`check_entry()` 내부 STEP 3~8 (약 300행) 을 제거하고, 다음으로 교체:
+
+**1단계: 실시간 백분위수 산출** (df 기반 롤링 100기간)
+
+```python
+# 기존 df에 백분위수 컬럼 추가 (벡터화)
+pctl_window = 100
+for col, pctl_col in PCTL_COLUMNS.items():
+    df[pctl_col] = df[col].rolling(pctl_window).rank(pct=True) * 100
+```
+
+**2단계: 점수 합산** (마지막 행만 사용)
+
+```python
+from scoring import generate_scoring_signals
+scored = generate_scoring_signals(df.tail(1), min_score=settings.MIN_ENTRY_SCORE)
+signal = scored["signal"].iloc[0]  # 1=Long, -1=Short, 0=None
+```
+
+**3단계: 기존 환경 부스트를 점수에 통합** (이미 scoring.py에 포함)
+
+- `adx_pctl ≥ 70` → +1
+- `funding_rate_match == ±1` → +1
+
+**보존되는 코드:**
+
+- STEP 2 (ATR 변동성 필터) — 그대로
+- STEP 9 (Pearson 상관, 동일방향 제한, 쿨다운) — 그대로
+- 진단 로그 — 스코어 기반으로 재작성
+- MarketDataSnapshot 반환 구조 — 그대로
+
+> [!IMPORTANT]
+> 기존 입력 파라미터 (`cvd_trend`, `bid_ask_imbalance`, `df_1h`, `df_15m`)는 **백분위수 변환 소스**로 활용. 함수 시그니처 변경 없음.
+
+---
+
+### [MODIFY] [config.py](file:///c:/Y/Study/1.Projects/Binance_Bot2/config.py)
+
+```python
+# V18 스코어링 진입 파라미터
+MIN_ENTRY_SCORE = int(os.getenv("MIN_ENTRY_SCORE", "5"))
+PCTL_WINDOW = int(os.getenv("PCTL_WINDOW", "100"))
+STRATEGY_VERSION = "V18_SCORING"
+```
+
+---
+
+### [MODIFY] [telegram_commands.py](file:///c:/Y/Study/1.Projects/Binance_Bot2/telegram_commands.py)
+
+- `min_score` 를 `/setparam`에 추가
+- `/params`에 V18 스코어링 섹션 표시
+
+---
+
+### [MODIFY] [scoring.py](file:///c:/Y/Study/1.Projects/Binance_Bot2/scoring.py)
+
+- 단일 행 입력도 지원하는 `calculate_entry_score(row: dict)` 래퍼 추가
+- 기존 `generate_scoring_signals(df)` 유지 (백테스트용)
+
+---
+
+## 삭제되는 코드 (strategy.py 내부)
+
+| 기존 STEP              | 행 범위 | V18 역할 변경                          |
+| ---------------------- | ------- | -------------------------------------- |
+| STEP 3: HTF Bias       | 496~497 | `adx_pctl` 부스트로 흡수               |
+| STEP 4: MTF Regime     | 499~562 | `adx_pctl` 부스트로 흡수               |
+| STEP 5: Volume Z-Score | 504~526 | `vol_zscore` 점수 항목으로 이동        |
+| STEP 6: Price Action   | 581~594 | **삭제** (스코어가 대체)               |
+| STEP 7: OFI/CVD 필터   | 596~600 | `nofi_1m_pctl`, `cvd_pctl` 점수로 이동 |
+| STEP 7.5: Dynamic RSI  | 602~608 | `rsi` 점수로 이동                      |
+| STEP 8: 시그널 생성    | 610~698 | scoring 엔진이 대체                    |
+| 진단 로그              | 780~819 | 스코어 기반 로그로 재작성              |
+
+---
+
+## Verification Plan
+
+1. `py_compile` 전체 파일
+2. 단위 테스트: 스코어링 엔진 입출력 검증 (기존 13건 + 신규)
+3. `DRY_RUN=True` 봇 실행 → 로그에서 스코어 출력 확인
+4. 동일 시장 조건에서 V17 대비 시그널 발생 빈도 비교 (로그 기반)

@@ -51,19 +51,11 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/panic — 비상! 전량 시장가 청산 후 정지\n"
         "/restart — 봇 프로세스 강제 재부팅\n\n"
         "── 파라미터 변경: /setparam [키] [값] ──\n\n"
-        "📈 진입 조건\n"
-        "k           VWAP 밴드 너비 (float, 기본 2.0)\n"
-        "vol_spike_z  스파이크 Z-Score σ (float, 기본 2.0)\n"
-        "vol_extreme_z 극단 스파이크 σ (float, 기본 3.0)\n"
-        "rsi_os      횡보 과매도 (int, 기본 30)\n"
-        "rsi_ob      횡보 과매수 (int, 기본 70)\n"
-        "rsi_os_trend 추세 과매도 (int, 기본 25)\n"
-        "rsi_ob_trend 추세 과매수 (int, 기본 75)\n\n"
-        "📊 국면 판별\n"
-        "adx_pctl_window 백분위수 기간 (int, 기본 100)\n"
-        "adx_pctl_rank   백분위수 순위 (float, 기본 0.8)\n"
-        "adx         고정 임계 폴백 (float, 기본 20)\n"
-        "adx_trend_mult SMA 배수 폴백 (float)\n\n"
+        "📈 진입 조건 (V18 스코어링)\n"
+        "min_score   진입 최소 점수 (int, 기본 5)\n"
+        "adx_boost   추세 가점용 ADX 백분위수 (float, 기본 70)\n\n"
+        "📊 국면 판별 (백분위수 윈도우)\n"
+        "adx_pctl_window 백분위수 산출 기간 (int, 기본 100)\n\n"
         "💰 체결 & 사이징\n"
         "risk        1회 증거금 비율 (float, 예: 0.1)\n"
         "leverage    레버리지 배수 (int)\n"
@@ -311,7 +303,6 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "max_trades": ("MAX_TRADES", int, "MAX_TRADES"),
             "htf_1h": ("HTF_TIMEFRAME_1H", str, "HTF_TIMEFRAME_1H"),
             "htf_15m": ("HTF_TIMEFRAME_15M", str, "HTF_TIMEFRAME_15M"),
-            "adx_trend_mult": ("ADX_TREND_MULTIPLIER", float, "ADX_TREND_MULTIPLIER"),
             "mtf_lower_mult": (
                 "AUTO_MTF_LOWER_MULTIPLIER",
                 float,
@@ -323,24 +314,19 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "AUTO_MTF_UPPER_MULTIPLIER",
             ),
             "rsi_period": ("RSI_PERIOD", int, "RSI_PERIOD"),
-            "rsi_ob": ("RSI_OB", int, "RSI_OB"),
-            "rsi_os": ("RSI_OS", int, "RSI_OS"),
             "be_trigger": ("BREAKEVEN_TRIGGER_MULT", float, "BREAKEVEN_TRIGGER_MULT"),
             "be_profit": ("BREAKEVEN_PROFIT_MULT", float, "BREAKEVEN_PROFIT_MULT"),
             "mtf_filter": (None, None, None),  # Custom logic
             "mtf": (None, None, None),  # Custom logic alias
             "mtf_mode": (None, None, None),  # Custom logic alias
             "mode": (None, None, None),  # dry 또는 real
-            # V17 신규 파라미터 매핑
+            # V18 신규 파라미터
+            "min_score": ("MIN_ENTRY_SCORE", int, "MIN_ENTRY_SCORE"),
+            "adx_boost": ("ADX_BOOST_PCTL", float, "ADX_BOOST_PCTL"),
             "adx_pctl_window": ("ADX_PCTL_WINDOW", int, "ADX_PCTL_WINDOW"),
-            "adx_pctl_rank": ("ADX_PCTL_RANK", float, "ADX_PCTL_RANK"),
-            "rsi_os_trend": ("RSI_OS_TREND", int, "RSI_OS_TREND"),
-            "rsi_ob_trend": ("RSI_OB_TREND", int, "RSI_OB_TREND"),
             "partial_tp": ("PARTIAL_TP_RATIO", float, "PARTIAL_TP_RATIO"),
             "chasing_wait": ("CHASING_WAIT_SEC", float, "CHASING_WAIT_SEC"),
             "kelly": (None, None, None),  # Custom logic
-            "vol_spike_z": ("VOL_SPIKE_Z", float, "VOL_SPIKE_Z"),
-            "vol_extreme_z": ("VOL_EXTREME_Z", float, "VOL_EXTREME_Z"),
         }
 
         if key not in mapping:
@@ -562,16 +548,13 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"캔들타임  : {getattr(settings, 'TIMEFRAME', '3m')}\n"
         f"MaxTrades : {getattr(settings, 'MAX_TRADES', 3)}\n"
         f"Time Exit : {getattr(settings, 'TIME_EXIT_MINUTES', 0)}분\n\n"
-        f"── 국면 판별 (V17) ──\n"
-        f"ADX 백분위  : {getattr(settings, 'ADX_PCTL_WINDOW', 100)}기간 / "
-        f"{getattr(settings, 'ADX_PCTL_RANK', 0.8) * 100:.0f}%tile\n"
-        f"RSI(횡보)  : (롱: {getattr(settings, 'RSI_OS', 30)}, 숏: {getattr(settings, 'RSI_OB', 70)})\n"
-        f"RSI(추세)  : (롱: {getattr(settings, 'RSI_OS_TREND', 25)}, 숏: {getattr(settings, 'RSI_OB_TREND', 75)})\n\n"
+        f"── 진입 조건 (V18 스코어링) ──\n"
+        f"진입 커트라인: {getattr(settings, 'MIN_ENTRY_SCORE', 5)}점\n"
+        f"ADX 추세가점 : {getattr(settings, 'ADX_BOOST_PCTL', 70)}%tile\n"
+        f"백분위 윈도우: {getattr(settings, 'PCTL_WINDOW', 100)}기간\n\n"
         f"── 체결 & 사이징 ──\n"
         f"Kelly    : {'ON' if getattr(settings, 'KELLY_SIZING', False) else 'OFF'}\n"
-        f"Chasing  : {getattr(settings, 'CHASING_WAIT_SEC', 5.0)}초\n"
-        f"Z-Score  : 스파이크={getattr(settings, 'VOL_SPIKE_Z', 2.0)}σ / "
-        f"극단={getattr(settings, 'VOL_EXTREME_Z', 3.0)}σ\n\n"
+        f"Chasing  : {getattr(settings, 'CHASING_WAIT_SEC', 5.0)}초\n\n"
         f"── 청산 & 리스크 ──\n"
         f"SL 배수   : {getattr(settings, 'SL_MULT', 3.0)}\n"
         f"TP 배수   : {getattr(settings, 'TP_MULT', 6.0)} (1차 분할)\n"
@@ -583,12 +566,7 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"── MTF 필터 ──\n"
         f"MTF 모드  : {mtf}\n"
         f"HTF 1H   : {getattr(settings, 'HTF_TIMEFRAME_1H', '1h')}\n"
-        f"HTF 15M  : {getattr(settings, 'HTF_TIMEFRAME_15M', '15m')}\n"
-        f"MTF OFF배수: {getattr(settings, 'AUTO_MTF_LOWER_MULTIPLIER', 0.8)}\n"
-        f"MTF ON배수 : {getattr(settings, 'AUTO_MTF_UPPER_MULTIPLIER', 1.0)}\n\n"
-        f"── 폴백 (데이터 부족 시 사용) ──\n"
-        f"ADX 고정임계: {getattr(settings, 'ADX_THRESHOLD', 20.0)}\n"
-        f"ADX SMA배수: {getattr(settings, 'ADX_TREND_MULTIPLIER', 1.0)}\n\n"
+        f"HTF 15M  : {getattr(settings, 'HTF_TIMEFRAME_15M', '15m')}\n\n"
         "💡 변경은 /setparam [옵션] [값] 이용"
     )
     await update.message.reply_text(msg)

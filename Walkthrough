@@ -1,0 +1,139 @@
+# V17 매매 전략 Step별 플로우
+
+## 전체 구조
+
+```mermaid
+flowchart TD
+    A["캔들 마감"] --> B["STEP 1~2: 기본 필터"]
+    B --> C["STEP 3~4: 국면 판별"]
+    C --> D["STEP 5: 거래량 검증"]
+    D --> E["STEP 6: 가격 액션"]
+    E --> F["STEP 7~7.5: OFI + RSI"]
+    F --> G["STEP 8: 시그널 생성"]
+    G --> H["STEP 9: 포트폴리오 방어"]
+    H --> I["체결: 지정가 Chasing"]
+    I --> J["청산: TP/SL/Chandelier/Time"]
+```
+
+---
+
+## 진입 판단 (strategy.py → check_entry)
+
+### STEP 1: Session Filter
+
+> 24H Rolling VWAP 도입으로 **삭제됨** (00:00 리셋 대기 불필요)
+
+### STEP 2: 동적 변동성 필터
+
+| 조건                                | 파라미터             |
+| ----------------------------------- | -------------------- |
+| `ATR_14 > ATR_200 × ATR_RATIO_MULT` | `ATR_RATIO_MULT=1.2` |
+
+변동성이 장기 평균 대비 부족하면 **즉시 차단**. 잠잠한 시장에서 진입 방지.
+
+### STEP 3: HTF Bias 판별 (1H EMA)
+
+1H 캔들의 EMA 50/200 배열로 방향 분류:
+
+- **BULL**: EMA50 > EMA200 (상승 추세)
+- **BEAR**: EMA50 < EMA200 (하락 추세)
+- **NEUTRAL**: EMA 수렴 구간 (진입 차단)
+
+### STEP 4: MTF Regime 판별 (15M ADX/MACD)
+
+**국면 판별 (V17 — 3단계 폴백):**
+
+1. `ADX_PCTL_80` (백분위수) — 종목별 고유 기준 ✅ 최우선
+2. `ADX_SMA_50 × ADX_TREND_MULTIPLIER` — SMA 기반
+3. `ADX_THRESHOLD` — 고정 임계값 (폴백)
+
+| 국면      | 조건           | 전략                 |
+| --------- | -------------- | -------------------- |
+| **TREND** | ADX ≥ 백분위수 | 모멘텀 추종 (눌림목) |
+| **RANGE** | ADX < 백분위수 | 평균 회귀 (역추세)   |
+
+**모멘텀**: 15M MACD → BULLISH / BEARISH / NEUTRAL
+
+**Auto-MTF 스위치** (Hysteresis):
+| ADX 위치 | MTF 필터 |
+|---|---|
+| `< SMA₅₀ × 0.9` | OFF (스캘핑 모드) |
+| `> SMA₅₀ × 1.2` | ON (추세 추종) |
+| 사이 | 이전 상태 유지 |
+
+### STEP 5: 거래량 스파이크 (Log Z-Score)
+
+거래량을 로그 변환 후 Z-Score 산출:
+| 구분 | 조건 | 의미 |
+|---|---|---|
+| **스파이크** | `Z ≥ VOL_SPIKE_Z (2.0σ)` | 일반 돌파 인정 |
+| **극단** | `Z ≥ VOL_EXTREME_Z (3.0σ)` | 밴드 터치 없이도 진입 허용 |
+
+거래량 부족 시 **즉시 차단**.
+
+### STEP 6: 가격 액션 (국면별 분기)
+
+| 국면      | Long 리젝션                         | Short 리젝션                        |
+| --------- | ----------------------------------- | ----------------------------------- |
+| **TREND** | 저가 ≤ VWAP × 1.002 & 현재가 > VWAP | 고가 ≥ VWAP × 0.998 & 현재가 < VWAP |
+| **RANGE** | 저가 ≤ 하단밴드 & 현재가 > 하단밴드 | 고가 ≥ 상단밴드 & 현재가 < 상단밴드 |
+
+### STEP 7: OFI (주문흐름) 필터
+
+정규화 OFI(NOFI) 기반 역배열 압력 체크:
+
+- Long: `CVD ≠ SELL_PRESSURE` & `NOFI ≥ -0.5`
+- Short: `CVD ≠ BUY_PRESSURE` & `NOFI ≤ +0.5`
+
+### STEP 7.5: Dynamic Zone RSI (V17)
+
+| 국면      | 과매도 (Long) | 과매수 (Short) |
+| --------- | ------------- | -------------- |
+| **TREND** | RSI ≤ **25**  | RSI ≥ **75**   |
+| **RANGE** | RSI ≤ 30      | RSI ≥ 70       |
+
+### STEP 8: 최종 시그널 생성 (국면 × 방향 × 조건 교차)
+
+**RANGE (역추세 진입):**
+
+```
+Long = HTF_BULL + CVD_OK + RSI≤OS + (스파이크&리젝션 OR 극단&밴드터치)
+Short = HTF_BEAR + CVD_OK + RSI≥OB + (스파이크&리젝션 OR 극단&밴드터치)
+```
+
+**TREND (모멘텀 추종):**
+
+```
+Long = HTF_BULL + MACD_BULL + CVD_OK + RSI≤OS + (스파이크&눌림목 OR 극단&밴드터치)
+Short = HTF_BEAR + MACD_BEAR + CVD_OK + RSI≥OB + (스파이크&눌림목 OR 극단&밴드터치)
+```
+
+### STEP 9: 포트폴리오 방어
+
+1. **Pearson 상관계수 ≥ 0.8** → 동조화 자산 동시 진입 차단
+2. **동일 방향 포지션 ≥ MAX_CONCURRENT_SAME_DIR (2)** → 추가 진입 차단
+3. **총 포지션 ≥ MAX_TRADES (3)** → 전체 한도 초과 차단
+4. **동일 종목 손실 쿨다운** → `LOSS_COOLDOWN_MINUTES (15분)` 대기
+
+---
+
+## 체결 (execution.py)
+
+| 단계              | 동작                                       | 파라미터                          |
+| ----------------- | ------------------------------------------ | --------------------------------- |
+| **Chasing 진입**  | 최우선 호가 지정가 발주 → 미체결 시 재추적 | `CHASING_WAIT_SEC=5.0`            |
+| **포지션 사이징** | Half-Kelly (OFF 시 고정 RISK%)             | `KELLY_SIZING`, `RISK_PERCENTAGE` |
+| **TP 주문**       | 전체 수량의 50% 1차 익절                   | `PARTIAL_TP_RATIO=0.5`            |
+| **SL 주문**       | 전량 STOP_MARKET (안전망)                  | `SL_MULT=1.5`                     |
+
+---
+
+## 청산 (4중 방어)
+
+| 우선순위 | 메커니즘            | 조건                                                       |
+| -------- | ------------------- | ---------------------------------------------------------- |
+| 1        | **분할 TP**         | TP 도달 시 50% 익절, 잔량 Chandelier 추적                  |
+| 2        | **SL (거래소)**     | ATR × SL_MULT 돌파 시 전량 시장가 청산                     |
+| 3        | **Chandelier Exit** | 봇 30초 주기 감시, ATR 기반 추적 손절                      |
+| 4        | **Time Exit**       | `TIME_EXIT_MINUTES`분 경과 시 강제 청산                    |
+| +        | **본절 추적**       | 수익 ≥ `BE_TRIGGER`배 → SL을 진입가 + `BE_PROFIT`배로 이동 |

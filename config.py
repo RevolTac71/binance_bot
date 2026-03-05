@@ -61,7 +61,7 @@ class Config:
     TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
     # Strategy Global Parameters
-    STRATEGY_VERSION = os.getenv("STRATEGY_VERSION", "V17")  # 전략 버전 식별자
+    STRATEGY_VERSION = os.getenv("STRATEGY_VERSION", "V18")  # 전략 버전 식별자
     TIMEFRAME = os.getenv("TIMEFRAME", "3m")
     K_VALUE = float(os.getenv("K_VALUE", "2.0"))
     RISK_PERCENTAGE = float(os.getenv("RISK_PERCENTAGE", "0.005"))
@@ -143,6 +143,13 @@ class Config:
     # Dynamic Zone RSI (국면별 RSI 임계값 자동 조정)
     RSI_OS_TREND = int(os.getenv("RSI_OS_TREND", "25"))  # 추세장 과매도 임계
     RSI_OB_TREND = int(os.getenv("RSI_OB_TREND", "75"))  # 추세장 과매수 임계
+
+    # ── V18 스코어링 진입 엔진 파라미터 ────────────────────────────────
+    MIN_ENTRY_SCORE = int(os.getenv("MIN_ENTRY_SCORE", "5"))  # 진입 최소 합산 점수
+    PCTL_WINDOW = int(os.getenv("PCTL_WINDOW", "100"))  # 백분위수 산출 윈도우
+    ADX_BOOST_PCTL = float(
+        os.getenv("ADX_BOOST_PCTL", "70")
+    )  # 추세 부스트 임계 백분위수
 
     # ── V17 체결 & 사이징 파라미터 ────────────────────────────────────────
     # Half-Kelly 동적 사이징 (승률·손익비 기반 투입 비중 자동 조절)
