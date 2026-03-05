@@ -108,21 +108,44 @@ def calculate_entry_score(indicators: dict, adx_boost_pctl: float = 70.0) -> dic
     vol_z = indicators.get("vol_zscore", 0.0)
 
     # ━━━━━ LONG 스코어링 ━━━━━
+    t = settings.SCORING_THRESHOLDS
 
-    # MACD 히스토그램: 70 이상 +1, 85 이상 +2
-    l_macd = 2 if macd >= 85 else (1 if macd >= 70 else 0)
-    # CVD 델타 기울기: 70 이상 +1, 85 이상 +2
-    l_cvd = 2 if cvd >= 85 else (1 if cvd >= 70 else 0)
-    # 호가 불균형: 65 이상 +1, 80 이상 +2
-    l_imbal = 2 if imbal >= 80 else (1 if imbal >= 65 else 0)
-    # 정규화 OFI: 70 이상 +1, 85 이상 +2
-    l_nofi = 2 if nofi >= 85 else (1 if nofi >= 70 else 0)
-    # RSI (과매도): 30 이하 +1, 15 이하 +2
-    l_rsi = 2 if rsi <= 15 else (1 if rsi <= 30 else 0)
-    # 매수 비율 (역발상): 25 이하 +1, 10 이하 +2
-    l_buy = 2 if buy_r <= 10 else (1 if buy_r <= 25 else 0)
-    # 거래량 Z-Score: ≥1.5 +1, ≥2.5 +2
-    l_vol = 2 if vol_z >= 2.5 else (1 if vol_z >= 1.5 else 0)
+    # MACD 히스토그램
+    l_macd = (
+        2
+        if macd >= t["macd_pctl"]["+2"]
+        else (1 if macd >= t["macd_pctl"]["+1"] else 0)
+    )
+    # CVD 델타 기울기
+    l_cvd = (
+        2 if cvd >= t["cvd_pctl"]["+2"] else (1 if cvd >= t["cvd_pctl"]["+1"] else 0)
+    )
+    # 호가 불균형
+    l_imbal = (
+        2
+        if imbal >= t["imbalance"]["+2"]
+        else (1 if imbal >= t["imbalance"]["+1"] else 0)
+    )
+    # 정규화 OFI
+    l_nofi = (
+        2
+        if nofi >= t["nofi_pctl"]["+2"]
+        else (1 if nofi >= t["nofi_pctl"]["+1"] else 0)
+    )
+    # RSI (과매도 기준)
+    l_rsi = 2 if rsi <= t["rsi"]["+2"] else (1 if rsi <= t["rsi"]["+1"] else 0)
+    # 매수 비율 (역발상: 하위 백분위수)
+    l_buy = (
+        2
+        if buy_r <= t["buy_ratio"]["+2"]
+        else (1 if buy_r <= t["buy_ratio"]["+1"] else 0)
+    )
+    # 거래량 Z-Score
+    l_vol = (
+        2
+        if vol_z >= t["vol_zscore"]["+2"]
+        else (1 if vol_z >= t["vol_zscore"]["+1"] else 0)
+    )
     # 환경 부스트
     l_adx = 1 if adx_p >= adx_boost_pctl else 0
     l_fr = 1 if fr == 1 else 0
@@ -133,13 +156,44 @@ def calculate_entry_score(indicators: dict, adx_boost_pctl: float = 70.0) -> dic
 
     # ━━━━━ SHORT 스코어링 (대칭 반전) ━━━━━
 
-    s_macd = 2 if macd <= 15 else (1 if macd <= 30 else 0)
-    s_cvd = 2 if cvd <= 15 else (1 if cvd <= 30 else 0)
-    s_imbal = 2 if imbal <= 20 else (1 if imbal <= 35 else 0)
-    s_nofi = 2 if nofi <= 15 else (1 if nofi <= 30 else 0)
-    s_rsi = 2 if rsi >= 85 else (1 if rsi >= 70 else 0)
-    s_buy = 2 if buy_r >= 90 else (1 if buy_r >= 75 else 0)
-    s_vol = 2 if vol_z >= 2.5 else (1 if vol_z >= 1.5 else 0)  # 거래량은 방향 무관
+    s_macd = (
+        2
+        if macd <= (100 - t["macd_pctl"]["+2"])
+        else (1 if macd <= (100 - t["macd_pctl"]["+1"]) else 0)
+    )
+    s_cvd = (
+        2
+        if cvd <= (100 - t["cvd_pctl"]["+2"])
+        else (1 if cvd <= (100 - t["cvd_pctl"]["+1"]) else 0)
+    )
+    s_imbal = (
+        2
+        if imbal <= (100 - t["imbalance"]["+2"])
+        else (1 if imbal <= (100 - t["imbalance"]["+1"]) else 0)
+    )
+    s_nofi = (
+        2
+        if nofi <= (100 - t["nofi_pctl"]["+2"])
+        else (1 if nofi <= (100 - t["nofi_pctl"]["+1"]) else 0)
+    )
+    # RSI: 과매수 기준은 100 - 과매도 기준
+    s_rsi = (
+        2
+        if rsi >= (100 - t["rsi"]["+2"])
+        else (1 if rsi >= (100 - t["rsi"]["+1"]) else 0)
+    )
+    # 매수 비율: 과매수 기준 대칭 (역발상)
+    s_buy = (
+        2
+        if buy_r >= (100 - t["buy_ratio"]["+2"])
+        else (1 if buy_r >= (100 - t["buy_ratio"]["+1"]) else 0)
+    )
+    # 거래량은 방향 무관하게 절대적인 힘
+    s_vol = (
+        2
+        if vol_z >= t["vol_zscore"]["+2"]
+        else (1 if vol_z >= t["vol_zscore"]["+1"] else 0)
+    )
     s_adx = 1 if adx_p >= adx_boost_pctl else 0
     s_fr = 1 if fr == -1 else 0
 

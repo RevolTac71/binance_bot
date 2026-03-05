@@ -282,14 +282,11 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # 키 매핑 테이블
         mapping = {
-            "k": ("K_VALUE", float, "K_VALUE"),
-            "k_value": ("K_VALUE", float, "K_VALUE"),
             "risk": ("RISK_PERCENTAGE", float, "RISK_PERCENTAGE"),
             "leverage": ("LEVERAGE", int, "LEVERAGE"),
             "timeframe": ("TIMEFRAME", str, "TIMEFRAME"),
             "time_exit": ("TIME_EXIT_MINUTES", int, "TIME_EXIT_MINUTES"),
             "atr_ratio": ("ATR_RATIO_MULT", float, "ATR_RATIO_MULT"),
-            "adx": ("ADX_THRESHOLD", float, "ADX_THRESHOLD"),
             "chandelier": ("CHANDELIER_MULT", float, "CHANDELIER_MULT"),
             "chandel": ("CHANDELIER_MULT", float, "CHANDELIER_MULT"),
             "sl": ("SL_MULT", float, "SL_MULT"),
@@ -523,9 +520,8 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mode = "모의투자(DRY_RUN)" if settings.DRY_RUN else "실전매매(REAL)"
 
     msg = (
-        "⚙️ [V17 현재 설정 파라미터]\n"
+        "⚙️ [V18 현재 설정 파라미터]\n"
         f"모드      : {mode}\n"
-        f"K-Value   : {getattr(settings, 'K_VALUE', 2.0)}\n"
         f"레버리지  : {settings.LEVERAGE}x\n"
         f"리스크    : {settings.RISK_PERCENTAGE * 100:.1f}%\n"
         f"캔들타임  : {getattr(settings, 'TIMEFRAME', '3m')}\n"
@@ -534,7 +530,25 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"── 진입 조건 (V18 스코어링) ──\n"
         f"진입 커트라인: {getattr(settings, 'MIN_ENTRY_SCORE', 5)}점\n"
         f"ADX 추세가점 : {getattr(settings, 'ADX_BOOST_PCTL', 70)}%tile\n"
-        f"백분위 윈도우: {getattr(settings, 'PCTL_WINDOW', 100)}기간\n\n"
+        f"백분위 윈도우: {getattr(settings, 'PCTL_WINDOW', 100)}기간\n"
+    )
+
+    t = getattr(settings, "SCORING_THRESHOLDS", {})
+    if t:
+        msg += (
+            f"\n[V18 세부 지표 점수(+1/+2) 기준]\n"
+            f"- MACD 히스토 : ≥{t.get('macd_pctl', {}).get('+1', 70)} / ≥{t.get('macd_pctl', {}).get('+2', 85)}%\n"
+            f"- CVD 기울기  : ≥{t.get('cvd_pctl', {}).get('+1', 70)} / ≥{t.get('cvd_pctl', {}).get('+2', 85)}%\n"
+            f"- 호가 불균형 : ≥{t.get('imbalance', {}).get('+1', 65)} / ≥{t.get('imbalance', {}).get('+2', 80)}%\n"
+            f"- 정규화 OFI  : ≥{t.get('nofi_pctl', {}).get('+1', 70)} / ≥{t.get('nofi_pctl', {}).get('+2', 85)}%\n"
+            f"- RSI 과매도  : ≤{t.get('rsi', {}).get('+1', 30)} / ≤{t.get('rsi', {}).get('+2', 15)}\n"
+            f"- 역발상(Buy) : ≤{t.get('buy_ratio', {}).get('+1', 25)} / ≤{t.get('buy_ratio', {}).get('+2', 10)}%\n"
+            f"- 볼륨 Z-스코어: ≥{t.get('vol_zscore', {}).get('+1', 1.5)} / ≥{t.get('vol_zscore', {}).get('+2', 2.5)}σ\n\n"
+        )
+    else:
+        msg += "\n"
+
+    msg += (
         f"── 체결 & 사이징 ──\n"
         f"Kelly    : {'ON' if getattr(settings, 'KELLY_SIZING', False) else 'OFF'}\n"
         f"Chasing  : {getattr(settings, 'CHASING_WAIT_SEC', 5.0)}초\n\n"

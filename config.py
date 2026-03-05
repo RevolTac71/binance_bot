@@ -90,9 +90,7 @@ class Config:
     HTF_TIMEFRAME_15M = os.getenv(
         "HTF_TIMEFRAME_15M", "15m"
     )  # 15분봉 (추세 강도·모멘텀)
-    # ADX 기준값: 이 이상이면 추세장(모멘텀 추종), 미만이면 횡보장(역추세/평균회귀)
-    ADX_THRESHOLD = float(os.getenv("ADX_THRESHOLD", "20.0"))
-
+    # ADX 기준값: 이 이상이면 추세장(모멘텀 추종), 미만이면 횡보장(역추세/평균회귀) (V17 레거시, V18에서 백분위수로 대체됨)
     # ── V16 샹들리에 청산(Chandelier Exit / Trailing Stop) 파라미터 ────────
     # 진입 후 최고점(Long) 또는 최저점(Short)에서 ATR × 배수 만큼 후퇴 시 손절
     CHANDELIER_MULT = float(os.getenv("CHANDELIER_MULT", "2.0"))
@@ -115,6 +113,21 @@ class Config:
     ADX_BOOST_PCTL = float(
         os.getenv("ADX_BOOST_PCTL", "70")
     )  # 추세 부스트 임계 백분위수
+
+    # [V18] 세부 지표 스코어링 기준 (전역 파라미터화)
+    # 각 지표에 대해 +1점, +2점을 부여하는 임계값 기준 (dict)
+    SCORING_THRESHOLDS = {
+        "macd_pctl": {"+1": 70, "+2": 85},  # 상위 백분위수 이상
+        "cvd_pctl": {"+1": 70, "+2": 85},  # 상위 백분위수 이상
+        "imbalance": {"+1": 65, "+2": 80},  # 상위 백분위수 이상
+        "nofi_pctl": {"+1": 70, "+2": 85},  # 상위 백분위수 이상
+        "rsi": {
+            "+1": 30,
+            "+2": 15,
+        },  # 기본값: 과매도 기준 (Long). Short은 (100-기준) 대칭
+        "buy_ratio": {"+1": 25, "+2": 10},  # 하위 백분위수 이하 (역발상)
+        "vol_zscore": {"+1": 1.5, "+2": 2.5},  # Z-score 이상
+    }
 
     # ── V17 체결 & 사이징 파라미터 ────────────────────────────────────────
     # Half-Kelly 동적 사이징 (승률·손익비 기반 투입 비중 자동 조절)
