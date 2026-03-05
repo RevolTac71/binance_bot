@@ -802,6 +802,7 @@ class ExecutionEngine:
             if not self.active_positions:
                 return
 
+        for symbol in list(self.active_positions.keys()):
             if settings.DRY_RUN:
                 # [V18] 모의투자 시에는 거래소 실제 포지션이 없으므로 감사를 생략합니다.
                 # 단, symbols_to_remove에 의해 제거되지 않은 포지션은 계속 메모리에 유지됩니다.
