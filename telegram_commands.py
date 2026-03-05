@@ -42,41 +42,40 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
     msg = (
-        "📖 [V15.2 자동매매 봇 전체 명령어]\n\n"
+        "📖 [V18 자동매매 봇 전체 명령어]\n\n"
         "── 봇 제어 ──\n"
         "/status — 봇 상태·포지션·잔고 요약\n"
-        "/pause — 신규 진입 일시정지 (기존 포지션 감시 유지)\n"
+        "/pause — 신규 진입 일시정지\n"
         "/resume — 일시정지 해제\n"
-        "/params — 현재 설정된 봇의 모든 파라미터(설정값) 조회\n"
+        "/params — 현재 설정된 봇의 모든 파라미터 조회\n"
         "/panic — 비상! 전량 시장가 청산 후 정지\n"
         "/restart — 봇 프로세스 강제 재부팅\n\n"
         "── 파라미터 변경: /setparam [키] [값] ──\n\n"
-        "📈 진입 조건 (V18 스코어링)\n"
-        "min_score   진입 최소 점수 (int, 기본 5)\n"
-        "adx_boost   추세 가점용 ADX 백분위수 (float, 기본 70)\n\n"
-        "📊 국면 판별 (백분위수 윈도우)\n"
-        "adx_pctl_window 백분위수 산출 기간 (int, 기본 100)\n\n"
+        "📈 진입 스코어링 (V18)\n"
+        "min_score   최소 진입 점수 (int, 기본 5)\n"
+        "adx_boost   추세 가점용 ADX 백분위 (float, 70)\n"
+        "adx_window  백분위수 윈도우 (int, 100)\n"
+        "rsi_1 / rsi_2  RSI 1/2점 임계값 (예: 30 15)\n"
+        "macd_1 / macd_2  MACD 1/2점 임계값 (예: 70 85)\n\n"
         "💰 체결 & 사이징\n"
-        "risk        1회 증거금 비율 (float, 예: 0.1)\n"
+        "risk        증거금 비율 (float, 0.01)\n"
         "leverage    레버리지 배수 (int)\n"
         "kelly       Kelly 사이징 (on/off)\n"
-        "chasing_wait 체결 대기 초 (float, 기본 5.0)\n\n"
+        "chasing     지정가 대기 초 (float, 5.0)\n\n"
         "🛡️ 청산 & 리스크\n"
-        "sl          SL 배율 ×ATR (float, 기본 3.0)\n"
-        "tp          TP 배율 ×ATR (float, 기본 6.0)\n"
-        "partial_tp  분할 익절 비율 (float, 기본 0.5)\n"
-        "be_trigger  본절 발동 배수 (float, 0.5~3.0)\n"
-        "be_profit   본절 보존 배수 (float, 0.0~3.0)\n"
-        "cooldown    재진입 대기 분 (int, 기본 15)\n\n"
+        "sl / tp     SL/TP 배수 (ATR 대비)\n"
+        "partial_tp  분할 익절 비율 (0.5)\n"
+        "be_trigger  본절 발동 배수 (1.5)\n"
+        "cooldown    재진입 대기 분 (15)\n"
+        "max_trades  최대 동시 진입 (3)\n"
+        "max_dir     동일 방향 제한 (2)\n\n"
         "⚙️ 기타\n"
-        "timeframe   캔들봉 (변경 후 /restart!)\n"
-        "max_trades  동시 진입 한도 (int, 기본 3)\n"
-        "time_exit   최대 보유 분 (0=비활성)\n"
-        "mode        dry 또는 real\n\n"
+        "mode        dry 또는 real\n"
+        "time_exit   최대 보유 분 (90)\n\n"
         "🔧 종목 제어\n"
-        "/ignore [코인] — 블래리스트 추가\n"
-        "/allow  [코인] — 블래리스트 제거\n"
-        "/close  [코인] — 시장가 즉시 청산\n"
+        "/ignore [코인] — 블랙리스트 추가\n"
+        "/allow  [코인] — 블랙리스트 제거\n"
+        "/close  [코인] — 시장가 강제 청산\n"
     )
     await update.message.reply_text(msg)
 
@@ -280,34 +279,48 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_val = args[1]
 
     try:
-        # 키 매핑 테이블
         mapping = {
             "risk": ("RISK_PERCENTAGE", float, "RISK_PERCENTAGE"),
             "leverage": ("LEVERAGE", int, "LEVERAGE"),
             "timeframe": ("TIMEFRAME", str, "TIMEFRAME"),
             "time_exit": ("TIME_EXIT_MINUTES", int, "TIME_EXIT_MINUTES"),
             "atr_ratio": ("ATR_RATIO_MULT", float, "ATR_RATIO_MULT"),
+            "atr_long": ("ATR_LONG_LEN", int, "ATR_LONG_LEN"),
             "chandelier": ("CHANDELIER_MULT", float, "CHANDELIER_MULT"),
-            "chandel": ("CHANDELIER_MULT", float, "CHANDELIER_MULT"),
+            "chan_atr": ("CHANDELIER_ATR_LEN", int, "CHANDELIER_ATR_LEN"),
             "sl": ("SL_MULT", float, "SL_MULT"),
-            "sl_mult": ("SL_MULT", float, "SL_MULT"),
             "tp": ("TP_MULT", float, "TP_MULT"),
-            "tp_mult": ("TP_MULT", float, "TP_MULT"),
             "cooldown": ("LOSS_COOLDOWN_MINUTES", int, "LOSS_COOLDOWN_MINUTES"),
-            "max": ("MAX_TRADES", int, "MAX_TRADES"),
             "max_trades": ("MAX_TRADES", int, "MAX_TRADES"),
-            "htf_1h": ("HTF_TIMEFRAME_1H", str, "HTF_TIMEFRAME_1H"),
-            "htf_15m": ("HTF_TIMEFRAME_15M", str, "HTF_TIMEFRAME_15M"),
+            "max": ("MAX_TRADES", int, "MAX_TRADES"),
+            "max_dir": ("MAX_CONCURRENT_SAME_DIR", int, "MAX_CONCURRENT_SAME_DIR"),
             "be_trigger": ("BREAKEVEN_TRIGGER_MULT", float, "BREAKEVEN_TRIGGER_MULT"),
             "be_profit": ("BREAKEVEN_PROFIT_MULT", float, "BREAKEVEN_PROFIT_MULT"),
-            "mode": (None, None, None),  # dry 또는 real
-            # V18 신규 파라미터
+            "mode": (None, None, None),
+            # V18
             "min_score": ("MIN_ENTRY_SCORE", int, "MIN_ENTRY_SCORE"),
             "adx_boost": ("ADX_BOOST_PCTL", float, "ADX_BOOST_PCTL"),
-            "adx_pctl_window": ("ADX_PCTL_WINDOW", int, "ADX_PCTL_WINDOW"),
+            "adx_window": ("PCTL_WINDOW", int, "PCTL_WINDOW"),
             "partial_tp": ("PARTIAL_TP_RATIO", float, "PARTIAL_TP_RATIO"),
-            "chasing_wait": ("CHASING_WAIT_SEC", float, "CHASING_WAIT_SEC"),
-            "kelly": (None, None, None),  # Custom logic
+            "chasing": ("CHASING_WAIT_SEC", float, "CHASING_WAIT_SEC"),
+            "kelly": (None, None, None),
+            "kelly_min": ("KELLY_MIN_TRADES", int, "KELLY_MIN_TRADES"),
+            "kelly_max": ("KELLY_MAX_FRACTION", float, "KELLY_MAX_FRACTION"),
+            # Scoring Thresholds (Custom 키)
+            "macd_1": ("macd_pctl", float, "+1"),
+            "macd_2": ("macd_pctl", float, "+2"),
+            "cvd_1": ("cvd_pctl", float, "+1"),
+            "cvd_2": ("cvd_pctl", float, "+2"),
+            "imbal_1": ("imbalance", float, "+1"),
+            "imbal_2": ("imbalance", float, "+2"),
+            "nofi_1": ("nofi_pctl", float, "+1"),
+            "nofi_2": ("nofi_pctl", float, "+2"),
+            "rsi_1": ("rsi", float, "+1"),
+            "rsi_2": ("rsi", float, "+2"),
+            "buy_1": ("buy_ratio", float, "+1"),
+            "buy_2": ("buy_ratio", float, "+2"),
+            "vol_1": ("vol_zscore", float, "+1"),
+            "vol_2": ("vol_zscore", float, "+2"),
         }
 
         if key not in mapping:
@@ -318,48 +331,13 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         attr_name, cast_fn, env_key = mapping[key]
 
-        # mode 및 mtf_filter 키는 특별 처리
+        # mode 특별 처리
         if key == "mode":
             is_dry = raw_val.lower() in ("dry", "dry_run", "true", "1")
             settings.DRY_RUN = is_dry
             update_env_variable("DRY_RUN", str(is_dry).capitalize())
             label = "모의투자(DRY_RUN)" if is_dry else "실전매매(REAL)"
             await update.message.reply_text(f"✅ 매매 모드 → {label} 설정 완료")
-            return
-
-        elif key in ("mtf_filter", "mtf", "mtf_mode"):
-            val_upper = raw_val.upper()
-            if val_upper in ("AUTO", "ON", "OFF"):
-                settings.MTF_MODE = val_upper
-                update_env_variable("MTF_MODE", val_upper)
-
-                # 하위 호환성 및 명확한 상태 설정
-                if val_upper == "ON":
-                    settings.MTF_FILTER = True
-                    update_env_variable("MTF_FILTER", "True")
-                    label = "ON (필터 무조건 켜짐 - 보수적)"
-                elif val_upper == "OFF":
-                    settings.MTF_FILTER = False
-                    update_env_variable("MTF_FILTER", "False")
-                    label = "OFF (필터 무조건 꺼짐 - 스캘핑)"
-                else:
-                    label = "AUTO (ADX 완충 지대 자동 전환)"
-
-                await update.message.reply_text(f"✅ MTF 필터 모드 → {label} 설정 완료")
-            else:
-                is_on = raw_val.lower() in ("true", "1", "yes")
-                if is_on:
-                    settings.MTF_MODE = "ON"
-                    settings.MTF_FILTER = True
-                    update_env_variable("MTF_MODE", "ON")
-                    update_env_variable("MTF_FILTER", "True")
-                    await update.message.reply_text("✅ MTF 필터 모드 → ON 설정 완료")
-                else:
-                    settings.MTF_MODE = "OFF"
-                    settings.MTF_FILTER = False
-                    update_env_variable("MTF_MODE", "OFF")
-                    update_env_variable("MTF_FILTER", "False")
-                    await update.message.reply_text("✅ MTF 필터 모드 → OFF 설정 완료")
             return
 
         # V17: Kelly 사이징 on/off 특별 처리
@@ -371,6 +349,22 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "활성화 (Half-Kelly 동적 사이징)" if is_on else "비활성화 (고정 비율)"
             )
             await update.message.reply_text(f"✅ Kelly 사이징 → {label} 설정 완료")
+            return
+
+        # 스코어링 임계값 딕셔너리 업데이트 처리
+        if "_" in key and mapping[key][0] in settings.SCORING_THRESHOLDS:
+            attr_name, cast_fn, sub_key = mapping[key]
+            new_val = cast_fn(raw_val)
+
+            # settings.SCORING_THRESHOLDS 직접 업데이트
+            settings.SCORING_THRESHOLDS[attr_name][sub_key] = new_val
+
+            # .env 파일에도 반영 (중첩 딕셔너리형태이므로 직렬화 고려하거나 주석 처리)
+            # 여기서는 메모리 반영 위주로 처리
+
+            await update.message.reply_text(
+                f"✅ [스코어 기준] {attr_name}.{sub_key} → {new_val} 설정 완료"
+            )
             return
 
         # 일반 키 처리 (변경 전 값을 먼저 읽어둠)
@@ -524,13 +518,12 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"모드      : {mode}\n"
         f"레버리지  : {settings.LEVERAGE}x\n"
         f"리스크    : {settings.RISK_PERCENTAGE * 100:.1f}%\n"
-        f"캔들타임  : {getattr(settings, 'TIMEFRAME', '3m')}\n"
-        f"MaxTrades : {getattr(settings, 'MAX_TRADES', 3)}\n"
-        f"Time Exit : {getattr(settings, 'TIME_EXIT_MINUTES', 0)}분\n\n"
+        f"MaxTrades : {getattr(settings, 'MAX_TRADES', 3)} (동일방향: {getattr(settings, 'MAX_CONCURRENT_SAME_DIR', 2)})\n"
+        f"캔들/보유 : {getattr(settings, 'TIMEFRAME', '3m')} / {getattr(settings, 'TIME_EXIT_MINUTES', 0)}분\n\n"
         f"── 진입 조건 (V18 스코어링) ──\n"
-        f"진입 커트라인: {getattr(settings, 'MIN_ENTRY_SCORE', 5)}점\n"
-        f"ADX 추세가점 : {getattr(settings, 'ADX_BOOST_PCTL', 70)}%tile\n"
-        f"백분위 윈도우: {getattr(settings, 'PCTL_WINDOW', 100)}기간\n"
+        f"컷트라인  : {getattr(settings, 'MIN_ENTRY_SCORE', 5)}점\n"
+        f"ADX 부스트: {getattr(settings, 'ADX_BOOST_PCTL', 70)}%tile (윈도우: {getattr(settings, 'PCTL_WINDOW', 100)})\n"
+        f"ATR 필터  : {getattr(settings, 'ATR_RATIO_MULT', 1.2)}x (롱길이: {getattr(settings, 'ATR_LONG_LEN', 200)})\n"
     )
 
     t = getattr(settings, "SCORING_THRESHOLDS", {})
@@ -545,20 +538,15 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"- 역발상(Buy) : ≤{t.get('buy_ratio', {}).get('+1', 25)} / ≤{t.get('buy_ratio', {}).get('+2', 10)}%\n"
             f"- 볼륨 Z-스코어: ≥{t.get('vol_zscore', {}).get('+1', 1.5)} / ≥{t.get('vol_zscore', {}).get('+2', 2.5)}σ\n\n"
         )
-    else:
-        msg += "\n"
 
     msg += (
         f"── 체결 & 사이징 ──\n"
-        f"Kelly    : {'ON' if getattr(settings, 'KELLY_SIZING', False) else 'OFF'}\n"
+        f"Kelly    : {'ON' if getattr(settings, 'KELLY_SIZING', False) else 'OFF'} (Min:{getattr(settings, 'KELLY_MIN_TRADES', 20)}, Max:{getattr(settings, 'KELLY_MAX_FRACTION', 0.05)})\n"
         f"Chasing  : {getattr(settings, 'CHASING_WAIT_SEC', 5.0)}초\n\n"
         f"── 청산 & 리스크 ──\n"
-        f"SL 배수   : {getattr(settings, 'SL_MULT', 3.0)}\n"
-        f"TP 배수   : {getattr(settings, 'TP_MULT', 6.0)} (1차 분할)\n"
+        f"SL / TP   : {getattr(settings, 'SL_MULT', 1.5)}x / {getattr(settings, 'TP_MULT', 5.0)}x\n"
         f"분할익절  : {getattr(settings, 'PARTIAL_TP_RATIO', 0.5) * 100:.0f}%\n"
-        f"ATR Ratio : {getattr(settings, 'ATR_RATIO_MULT', 1.2)}\n"
-        f"본절발동  : {getattr(settings, 'BREAKEVEN_TRIGGER_MULT', 1.5)}x\n"
-        f"본절보존  : {getattr(settings, 'BREAKEVEN_PROFIT_MULT', 0.2)}x\n"
+        f"본절발동  : {getattr(settings, 'BREAKEVEN_TRIGGER_MULT', 1.5)}x (보존: {getattr(settings, 'BREAKEVEN_PROFIT_MULT', 0.2)}x)\n"
         f"재진입대기: {getattr(settings, 'LOSS_COOLDOWN_MINUTES', 15)}분\n\n"
         "💡 변경은 /setparam [옵션] [값] 이용"
     )
