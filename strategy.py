@@ -471,6 +471,9 @@ class StrategyEngine:
                     f"<= ATR Long {atr_long:.4f} x {atr_ratio_mult})"
                 ),
             }
+        # ── STEP 2.5: MTF 추세 강도 / 모멘텀 판별 복원 ─────────────────────
+        mtf = self.get_mtf_regime(df_15m)
+        regime = mtf.get("regime")
 
         # ══════════════════════════════════════════════════════════════
         # V18 스코어링 진입 엔진 (STEP 3~8 직렬 AND 게이트 전면 교체)

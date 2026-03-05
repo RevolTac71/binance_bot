@@ -918,18 +918,21 @@ async def state_machine_loop(execution: ExecutionEngine):
             await execution.check_state_mismatch()
 
             # [V16] execution과 portfolio 상태 동기화
-            # execution.active_positions에 없는 심볼이 portfolio에 남아 있으면 제거
-            for sym in list(portfolio.positions.keys()):
-                if sym not in execution.active_positions:
-                    logger.info(
-                        f"[State Sync] {sym}이 execution에서 청산됨 → portfolio에서 제거."
-                    )
-                    portfolio.close_position(sym)
+            # DRY_RUN(모의투자) 모드일 때는 가상 포지션이 강제로 지워지는 것을 방지하기 위해 동기화 생략
+            if not getattr(settings, "DRY_RUN", False):
+                # execution.active_positions에 없는 심볼이 portfolio에 남아 있으면 제거
+                for sym in list(portfolio.positions.keys()):
+                    if sym not in execution.active_positions:
+                        logger.info(
+                            f"[State Sync] {sym}이 execution에서 청산됨 → portfolio에서 제거."
+                        )
+                        portfolio.close_position(sym)
 
             await asyncio.sleep(3)
         except Exception as e:
             logger.error(f"[State Machine Error]: {e}")
             await asyncio.sleep(5)
+
 
 
 async def main():

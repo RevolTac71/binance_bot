@@ -804,23 +804,11 @@ class ExecutionEngine:
 
         for symbol in list(self.active_positions.keys()):
             if settings.DRY_RUN:
-                logger.info(f"🧪 [DRY RUN] {symbol} 포지션 가상 청산 및 DB 기록 완료")
-                async with AsyncSessionLocal() as session:
-                    new_trade = Trade(
-                        timestamp=(datetime.utcnow() + timedelta(hours=9)),
-                        action="CLOSED",
-                        symbol=symbol,
-                        price=0.0,
-                        quantity=0.0,
-                        reason="[DRY_RUN] 가상 매도 청산",
-                        realized_pnl=0.0,
-                        dry_run=settings.DRY_RUN,
-                        params=self._snapshot_params(),
-                    )
-                    session.add(new_trade)
-                    await session.commit()
-                symbols_to_remove.append(symbol)
+                # [수정됨] 1초 만에 포지션이 증발하는 즉시 청산 로직 비활성화
+                # 모의투자 시에는 실제 거래소에 포지션이 없으므로 검사를 생략하고, 
+                # Time Exit(90분) 데몬이 강제 청산할 때까지 포지션을 유지합니다.
                 continue
+
 
             current_contracts = position_map.get(symbol, 0.0)
             if current_contracts == 0.0:
