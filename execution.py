@@ -1044,10 +1044,18 @@ class ExecutionEngine:
                 realized_pnl = gross_pnl - fees
 
                 logger.info(
-                    f"🧪 [DRY RUN] {symbol} 가상 PNL 정산 완료: 진입가={entry_price}, 청산가={close_price}, PNL={realized_pnl:.4f}"
+                    f"🧪 [DRY RUN] {symbol} 가상 PNL 정산 완료: 진입가={entry_price}, 청산가={close_price}, "
+                    f"수량={amount}, Signal={signal}, Gross Pnl={gross_pnl:.4f}, Fees={fees:.4f}, Net PNL={realized_pnl:.4f}"
+                )
+            else:
+                logger.warning(
+                    f"🧪 [DRY RUN] PNL 정산 실패: pos_info data={pos_info}, close_price={close_price}"
                 )
 
             async with AsyncSessionLocal() as session:
+                logger.info(
+                    f"🧪 [DRY RUN] Trade Insert 준비: realized_pnl={realized_pnl:.4f}, close_price={close_price:.4f}"
+                )
                 now_kst = datetime.utcnow() + timedelta(hours=9)
                 new_trade = Trade(
                     timestamp=now_kst,
@@ -1082,6 +1090,9 @@ class ExecutionEngine:
                         trade_log.realized_pnl = realized_pnl
                         trade_log.exit_reason = f"[DRY_RUN] {reason}"
 
+                        logger.info(
+                            f"🧪 [DRY RUN] TradeLog 디버그 전 - roi_pct 갱신 전, exc_price: {trade_log.execution_price}"
+                        )
                         if trade_log.execution_price and trade_log.execution_price > 0:
                             if trade_log.direction == "LONG":
                                 roi = (
@@ -1092,6 +1103,17 @@ class ExecutionEngine:
                                     trade_log.execution_price - close_price
                                 ) / trade_log.execution_price
                             trade_log.roi_pct = roi * 100
+                            logger.info(
+                                f"🧪 [DRY RUN] TradeLog 디버그 후 - calculated roi_pct: {trade_log.roi_pct}"
+                            )
+                        else:
+                            logger.warning(
+                                f"🧪 [DRY RUN] TradeLog에 execution_price가 없어 ROI를 계산할 수 없습니다. (값: {trade_log.execution_price})"
+                            )
+                    else:
+                        logger.warning(
+                            f"🧪 [DRY RUN] symbol {symbol}에 대해 아직 청산되지 않은 TradeLog 레코드를 찾을 수 없습니다."
+                        )
                 except Exception as ml_err:
                     logger.error(
                         f"[{symbol}] DRY_RUN TradeLog 업데이트 중 예외: {ml_err}"

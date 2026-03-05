@@ -28,14 +28,6 @@ class Trade(Base):
     market_data = Column(JSONB, nullable=True)
 
 
-class BalanceHistory(Base):
-    __tablename__ = "balance_history"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp = Column(DateTime)
-    balance = Column(Float)  # 달러 등 환산치 (또는 USDT 잔량)
-
-
 # ==========================================
 # [V16.2 ML Data Pipeline Models]
 # ==========================================
@@ -128,24 +120,6 @@ class TradeLog(Base):
     ret_30m = Column(Float, nullable=True)  # 진입 30분 뒤 % 수익률
 
 
-class OrderEvent(Base):
-    """
-    지정가 Chasing 래퍼나 Post-Only 주문 시 발생하는 미체결, 거절, 취소 이력을 트래킹합니다.
-    (API 속도 문제 파악이나 호가추적 효율 분석 용도)
-    """
-
-    __tablename__ = "order_events"
-
-    event_id = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp = Column(DateTime, index=True)
-    symbol = Column(String(20), index=True)
-    order_type = Column(String(20))  # 'LIMIT_MAKER', 'MARKET', 'STOP_MARKET', etc.
-    event_type = Column(String(50))  # 'CREATE', 'CANCEL', 'EXPIRED', 'REJECTED' 등
-    price = Column(Float, nullable=True)
-    amount = Column(Float, nullable=True)
-    attempt_count = Column(Integer, default=1)  # 몇 번째 Chasing 시도인지
-
-
 class MarketData_1m(Base):
     """
     [V16.6 HFT] 인메모리 파이프라인 전용 1분 단위 압축 스냅샷
@@ -198,9 +172,7 @@ async def check_db_connection():
     try:
         async with AsyncSessionLocal() as session:
             await session.execute(text("SELECT 1 FROM trades LIMIT 1"))
-            logger.info(
-                "Supabase 연결 점검 및 테이블(trades, balance_history) 준비 완료."
-            )
+            logger.info("Supabase 연결 점검 및 테이블(trades, trade_logs) 준비 완료.")
             return True
     except Exception as e:
         logger.error(f"DB 초기 연결 혹은 테이블 접근 실패. 상세: {e}")

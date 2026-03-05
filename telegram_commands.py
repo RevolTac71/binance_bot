@@ -31,7 +31,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/restart — 봇 재부팅\n\n"
         "⚙️ 파라미터 변경 (재시작 불필요)\n"
         "/setparam [키] [값] — 파라미터 한 번에 변경\n"
-        "예: /setparam k 2.5\n"
+        "예: /setparam risk 0.02\n"
         "예: /setparam sl 3.0\n"
         "자세한 파라미터 목록은 /help 참조"
     )
@@ -268,7 +268,7 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(args) < 2:
         await update.message.reply_text(
             "💡 사용법: /setparam [키] [값]\n"
-            "예) /setparam k 2.5\n"
+            "예) /setparam risk 0.02\n"
             "예) /setparam sl 3.0\n"
             "예) /setparam cooldown 15\n"
             "\n전체 파라미터 목록은 /help 참조"
