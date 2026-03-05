@@ -3,7 +3,7 @@ import json
 import time
 from datetime import datetime, timezone, timedelta
 from config import settings, logger
-from database import Trade, TradeLog, OrderEvent, AsyncSessionLocal
+from database import Trade, TradeLog, AsyncSessionLocal
 from sqlalchemy.future import select
 from data_pipeline import DataPipeline
 from notification import notifier
@@ -316,19 +316,7 @@ class ExecutionEngine:
                         )
                         order_id = entry_order.get("id")
 
-                        # [OrderEvent] 주문 생성 기록
-                        async with AsyncSessionLocal() as session:
-                            oe = OrderEvent(
-                                timestamp=datetime.utcnow() + timedelta(hours=9),
-                                symbol=symbol,
-                                order_type="LIMIT_MAKER",
-                                event_type="CREATE",
-                                price=float(price_str),
-                                amount=float(amount_str),
-                                attempt_count=attempt + 1,
-                            )
-                            session.add(oe)
-                            await session.commit()
+                        pass
 
                         # 3. V17: Config 기반 Chasing 대기 시간
                         chasing_wait = getattr(settings, "CHASING_WAIT_SEC", 5.0)
@@ -357,20 +345,7 @@ class ExecutionEngine:
                             if status == "open":
                                 try:
                                     await self.exchange.cancel_order(order_id, symbol)
-                                    # [OrderEvent] Canceled 기록
-                                    async with AsyncSessionLocal() as session:
-                                        oe = OrderEvent(
-                                            timestamp=datetime.utcnow()
-                                            + timedelta(hours=9),
-                                            symbol=symbol,
-                                            order_type="LIMIT_MAKER",
-                                            event_type="CANCEL_POST_ONLY_EXPIRED",
-                                            price=float(price_str),
-                                            amount=float(amount_str),
-                                            attempt_count=attempt + 1,
-                                        )
-                                        session.add(oe)
-                                        await session.commit()
+                                    pass
                                 except Exception as e:
                                     logger.warning(
                                         f"[{symbol}] 주문 취소 중 예외 발생 (이미 체결됨?): {e}"
@@ -403,19 +378,7 @@ class ExecutionEngine:
                         logger.warning(
                             f"[{symbol}] Chasing 루프 내 에러(재시도됨): {e}"
                         )
-                        # [OrderEvent] Rejected/Error 기록
-                        async with AsyncSessionLocal() as session:
-                            oe = OrderEvent(
-                                timestamp=datetime.utcnow() + timedelta(hours=9),
-                                symbol=symbol,
-                                order_type="LIMIT_MAKER",
-                                event_type="REJECTED_OR_ERROR",
-                                price=target_price,
-                                amount=remaining_amount,
-                                attempt_count=attempt + 1,
-                            )
-                            session.add(oe)
-                            await session.commit()
+                        pass
                         await asyncio.sleep(2)  # 밴 방지
 
                 if filled_amount > 0:
