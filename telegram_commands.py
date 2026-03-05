@@ -72,8 +72,6 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "timeframe   캔들봉 (변경 후 /restart!)\n"
         "max_trades  동시 진입 한도 (int, 기본 3)\n"
         "time_exit   최대 보유 분 (0=비활성)\n"
-        "mtf_filter  MTF 필터 (on/off/auto)\n"
-        "atr_ratio   ATR 비율 필터 (float, 기본 1.2)\n"
         "mode        dry 또는 real\n\n"
         "🔧 종목 제어\n"
         "/ignore [코인] — 블래리스트 추가\n"
@@ -303,22 +301,8 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "max_trades": ("MAX_TRADES", int, "MAX_TRADES"),
             "htf_1h": ("HTF_TIMEFRAME_1H", str, "HTF_TIMEFRAME_1H"),
             "htf_15m": ("HTF_TIMEFRAME_15M", str, "HTF_TIMEFRAME_15M"),
-            "mtf_lower_mult": (
-                "AUTO_MTF_LOWER_MULTIPLIER",
-                float,
-                "AUTO_MTF_LOWER_MULTIPLIER",
-            ),
-            "mtf_upper_mult": (
-                "AUTO_MTF_UPPER_MULTIPLIER",
-                float,
-                "AUTO_MTF_UPPER_MULTIPLIER",
-            ),
-            "rsi_period": ("RSI_PERIOD", int, "RSI_PERIOD"),
             "be_trigger": ("BREAKEVEN_TRIGGER_MULT", float, "BREAKEVEN_TRIGGER_MULT"),
             "be_profit": ("BREAKEVEN_PROFIT_MULT", float, "BREAKEVEN_PROFIT_MULT"),
-            "mtf_filter": (None, None, None),  # Custom logic
-            "mtf": (None, None, None),  # Custom logic alias
-            "mtf_mode": (None, None, None),  # Custom logic alias
             "mode": (None, None, None),  # dry 또는 real
             # V18 신규 파라미터
             "min_score": ("MIN_ENTRY_SCORE", int, "MIN_ENTRY_SCORE"),
@@ -397,7 +381,7 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_val = cast_fn(raw_val)
 
         # 변동성 추세 배수에 대한 하드 리미트 안정성 유효성 검사 (0.5 ~ 3.0)
-        if key in ("adx_trend_mult", "mtf_lower_mult", "mtf_upper_mult", "be_trigger"):
+        if key in ("be_trigger",):
             if new_val < 0.5 or new_val > 3.0:
                 await update.message.reply_text(
                     f"❌ [거부됨] 해당 설정값({new_val})은 비정상적인 범위입니다.\n"
@@ -537,7 +521,6 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     mode = "모의투자(DRY_RUN)" if settings.DRY_RUN else "실전매매(REAL)"
-    mtf = getattr(settings, "MTF_MODE", "AUTO")
 
     msg = (
         "⚙️ [V17 현재 설정 파라미터]\n"
@@ -563,10 +546,6 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"본절발동  : {getattr(settings, 'BREAKEVEN_TRIGGER_MULT', 1.5)}x\n"
         f"본절보존  : {getattr(settings, 'BREAKEVEN_PROFIT_MULT', 0.2)}x\n"
         f"재진입대기: {getattr(settings, 'LOSS_COOLDOWN_MINUTES', 15)}분\n\n"
-        f"── MTF 필터 ──\n"
-        f"MTF 모드  : {mtf}\n"
-        f"HTF 1H   : {getattr(settings, 'HTF_TIMEFRAME_1H', '1h')}\n"
-        f"HTF 15M  : {getattr(settings, 'HTF_TIMEFRAME_15M', '15m')}\n\n"
         "💡 변경은 /setparam [옵션] [값] 이용"
     )
     await update.message.reply_text(msg)
