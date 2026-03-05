@@ -14,6 +14,7 @@ V18 변경:
 import numpy as np
 import pandas as pd
 from scipy.stats import percentileofscore
+from config import settings
 
 
 def compute_live_percentiles(df: pd.DataFrame, window: int = 100) -> dict:
