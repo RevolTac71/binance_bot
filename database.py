@@ -59,7 +59,6 @@ class MarketSnapshot(Base):
     adx = Column(Float, nullable=True)
     atr_14 = Column(Float, nullable=True)
     atr_200 = Column(Float, nullable=True)
-    bb_width = Column(Float, nullable=True)
 
     # 2. 다중 시간 프레임 (MTF)
     ema_1h_dist = Column(Float, nullable=True)  # (현재가 - 1h_EMA) / 1h_EMA
@@ -77,6 +76,12 @@ class MarketSnapshot(Base):
     # 5. V17 확장 피처
     log_vol_zscore = Column(Float, nullable=True)  # 로그 변환 거래량 Z-Score
     correlation_max = Column(Float, nullable=True)  # 동조화 최대 상관계수
+
+    # 6. V18 스코어링 피처
+    nofi_1m = Column(Float, nullable=True)
+    buy_ratio = Column(Float, nullable=True)
+    long_score = Column(Integer, nullable=True)
+    short_score = Column(Integer, nullable=True)
 
 
 class TradeLog(Base):

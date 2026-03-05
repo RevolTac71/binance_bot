@@ -588,4 +588,8 @@ class StrategyEngine:
             "vwap_mid": float(vwap_mid),
             "reason": reason,
             "market_data": market_data_obj,
+            "long_score": long_score,
+            "short_score": short_score,
+            "nofi_1m": float(df["NOFI"].iloc[-1]),
+            "buy_ratio": float(df["buy_ratio"].iloc[-1]),
         }

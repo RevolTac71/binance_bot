@@ -389,11 +389,9 @@ async def process_closed_kline(
             "cvd_delta_slope": float(cvd_slope),
             "bid_ask_imbalance": float(twap_imbalance),
             "funding_rate_match": fr_match,
-            # V17 확장 피처
             "log_vol_zscore": float(df_ind.iloc[-1].get("Log_Vol_ZScore", 0.0)),
             "correlation_max": float(max_corr),
         }
-        snapshot_queue.append(snapshot)
 
         # [V16.1 CVD] 실시간 누적 거래량 델타 추세 연산
         current_cvd = cvd_data.get(symbol, 0.0)
@@ -410,7 +408,6 @@ async def process_closed_kline(
             elif hist[-1] < hist[-2]:
                 cvd_trend = "SELL_PRESSURE"
 
-        # 2. V16 전략 엔진 의사결정 (HTF + CVD + Portfolio 통합 필터)
         decision = strategy.check_entry(
             symbol=symbol,
             df=df_ind,
@@ -421,6 +418,14 @@ async def process_closed_kline(
             bid_ask_imbalance=twap_imbalance,
             all_htf_15m=htf_df_15m,
         )
+
+        # 3. [V18] 스코어 및 신규 피처를 MarketSnapshot에 기록 (DB 적재용)
+        snapshot["nofi_1m"] = decision.get("nofi_1m", 0.0)
+        snapshot["buy_ratio"] = decision.get("buy_ratio", 0.5)
+        snapshot["long_score"] = decision.get("long_score")
+        snapshot["short_score"] = decision.get("short_score")
+
+        snapshot_queue.append(snapshot)
 
         if decision["signal"]:
             balance_info = await pipeline.exchange.fetch_balance()
