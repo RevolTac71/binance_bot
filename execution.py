@@ -621,7 +621,8 @@ class ExecutionEngine:
 
             if settings.DRY_RUN:
                 logger.info(f"🧪 [DRY RUN] {symbol} TP/SL 가상 주문 완료 및 DB 기록됨")
-                self.active_positions[symbol] = True
+                # DRY_RUN 에서는 PNL 계산 및 가상 청산을 위해 포지션 상세 정보를 인메모리에 저장합니다.
+                self.active_positions[symbol] = entry_info
                 return True
 
             # 1. Take Profit (LIMIT 방식) — V17: 분할 익절 (partial_ratio만큼만)
@@ -804,8 +805,44 @@ class ExecutionEngine:
 
         for symbol in list(self.active_positions.keys()):
             if settings.DRY_RUN:
-                # [V18] 모의투자 시에는 거래소 실제 포지션이 없으므로 감사를 생략합니다.
-                # 단, symbols_to_remove에 의해 제거되지 않은 포지션은 계속 메모리에 유지됩니다.
+                # [V18] 모의투자 시에는 거래소 실제 포지션이 없으므로 자체적인 가격 추적으로 가상 TP/SL 도달을 감시합니다.
+                try:
+                    ticker = await self.exchange.fetch_ticker(symbol)
+                    current_price = float(ticker.get("last", 0.0))
+                    pos_info = self.active_positions.get(symbol)
+
+                    if current_price > 0 and isinstance(pos_info, dict):
+                        signal_type = pos_info.get("signal")
+                        tp_price = pos_info.get("tp_price", 0.0)
+                        sl_price = pos_info.get("sl_price", 0.0)
+
+                        triggered = False
+                        reason = ""
+
+                        if signal_type == "LONG":
+                            if current_price >= tp_price:
+                                triggered = True
+                                reason = "Take Profit 도달"
+                            elif current_price <= sl_price:
+                                triggered = True
+                                reason = "Stop Loss 도달"
+                        elif signal_type == "SHORT":
+                            if current_price <= tp_price:
+                                triggered = True
+                                reason = "Take Profit 도달"
+                            elif current_price >= sl_price:
+                                triggered = True
+                                reason = "Stop Loss 도달"
+
+                        if triggered:
+                            logger.info(
+                                f"🧪 [DRY_RUN] {symbol} 가상 {reason} 감지! 현재가: {current_price}"
+                            )
+                            await self.close_position_virtually(
+                                symbol, reason=reason, close_price=current_price
+                            )
+                except Exception as e:
+                    logger.error(f"[{symbol}] DRY_RUN 가상 TP/SL 감시 중 에러: {e}")
                 continue
 
             current_contracts = position_map.get(symbol, 0.0)
@@ -960,10 +997,12 @@ class ExecutionEngine:
         for sym in symbols_to_remove:
             del self.active_positions[sym]
 
-    async def close_position_virtually(self, symbol: str, reason: str = "가상 청산"):
+    async def close_position_virtually(
+        self, symbol: str, reason: str = "가상 청산", close_price: float = 0.0
+    ):
         """
         [V18] DRY_RUN 모드 전용: 실제 거래소 주문 없이 봇 내부 상태만 종료하고 DB에 기록합니다.
-        무한 루프 방지를 위해 Chandelier Exit 등에서 호출됩니다.
+        무한 루프 방지를 위해 Chandelier Exit, Time Exit, 가상 TP/SL 감시 등에서 호출됩니다.
         """
         if symbol not in self.active_positions:
             return
@@ -971,20 +1010,101 @@ class ExecutionEngine:
         logger.info(f"🧪 [DRY RUN] {symbol} 가상 청산 실행. 사유: {reason}")
 
         try:
+            pos_info = self.active_positions[symbol]
+            realized_pnl = 0.0
+            close_qty = 0.0
+
+            # 가상 종가가 주어지지 않았을 경우 현재가 조회
+            if close_price <= 0.0:
+                try:
+                    ticker = await self.exchange.fetch_ticker(symbol)
+                    close_price = float(ticker.get("last", 0.0))
+                except Exception as e:
+                    logger.error(f"[{symbol}] 가상 청산 중 종가 조회 실패: {e}")
+
+            # PNL 및 수익률 계산 (pos_info 딕셔너리가 존재하는 경우)
+            if isinstance(pos_info, dict) and close_price > 0.0:
+                entry_price = pos_info.get("limit_price", 0.0)
+                amount = pos_info.get("amount", 0.0)
+                signal = pos_info.get("signal", "LONG")
+                close_qty = amount
+
+                maker_fee = 0.0002
+                taker_fee = 0.0005
+                # 가상 청산이므로 보수적으로 Taker fee 2회(진입/청산) 부과 가정
+                fees = (entry_price * amount * taker_fee) + (
+                    close_price * amount * taker_fee
+                )
+
+                if signal == "LONG":
+                    gross_pnl = (close_price - entry_price) * amount
+                else:
+                    gross_pnl = (entry_price - close_price) * amount
+
+                realized_pnl = gross_pnl - fees
+
+                logger.info(
+                    f"🧪 [DRY RUN] {symbol} 가상 PNL 정산 완료: 진입가={entry_price}, 청산가={close_price}, PNL={realized_pnl:.4f}"
+                )
+
             async with AsyncSessionLocal() as session:
+                now_kst = datetime.utcnow() + timedelta(hours=9)
                 new_trade = Trade(
-                    timestamp=(datetime.utcnow() + timedelta(hours=9)),
+                    timestamp=now_kst,
                     action="CLOSED",
                     symbol=symbol,
-                    price=0.0,
-                    quantity=0.0,
+                    price=close_price,
+                    quantity=close_qty,
                     reason=f"[DRY_RUN] {reason}",
-                    realized_pnl=0.0,
+                    realized_pnl=realized_pnl,
                     dry_run=True,
                     params=self._snapshot_params(),
                 )
                 session.add(new_trade)
+
+                # ML Pipeline 전용 TradeLog 업데이트
+                try:
+                    stmt = (
+                        select(TradeLog)
+                        .where(
+                            TradeLog.symbol == symbol,
+                            TradeLog.exit_time.is_(None),
+                        )
+                        .order_by(TradeLog.entry_time.desc())
+                        .limit(1)
+                    )
+                    result = await session.execute(stmt)
+                    trade_log = result.scalars().first()
+
+                    if trade_log:
+                        trade_log.exit_time = now_kst
+                        trade_log.exit_price = close_price
+                        trade_log.realized_pnl = realized_pnl
+                        trade_log.exit_reason = f"[DRY_RUN] {reason}"
+
+                        if trade_log.execution_price and trade_log.execution_price > 0:
+                            if trade_log.direction == "LONG":
+                                roi = (
+                                    close_price - trade_log.execution_price
+                                ) / trade_log.execution_price
+                            else:
+                                roi = (
+                                    trade_log.execution_price - close_price
+                                ) / trade_log.execution_price
+                            trade_log.roi_pct = roi * 100
+                except Exception as ml_err:
+                    logger.error(
+                        f"[{symbol}] DRY_RUN TradeLog 업데이트 중 예외: {ml_err}"
+                    )
+
                 await session.commit()
+
+            await notifier.send_message(
+                f"🧪 [DRY RUN] 포지션 가상 청산 완료\n[{symbol}]\n"
+                f"종료가: {close_price:.4f}\n"
+                f"실현손익(PnL): {realized_pnl:.4f} USDT\n"
+                f"사유: {reason}"
+            )
 
             if symbol in self.active_positions:
                 del self.active_positions[symbol]
@@ -1071,29 +1191,39 @@ class ExecutionEngine:
                         amount=amount,
                         params={"reduceOnly": True},
                     )
-                else:
-                    logger.info(f"🧪 [DRY RUN] {symbol} Time Exit 가상 시장가 탈출.")
 
-                # DB 기록
-                async with AsyncSessionLocal() as session:
-                    new_trade = Trade(
-                        timestamp=(datetime.utcnow() + timedelta(hours=9)),
-                        action="TIME_EXIT",
-                        symbol=symbol,
-                        price=0.0,
-                        quantity=amount,
-                        reason=f"TIME_EXIT ({wait_minutes}분 모멘텀 이탈) 탈출",
-                        realized_pnl=0.0,  # 정확한 PNL은 거래소 싱크 통해 보정됨
-                        dry_run=settings.DRY_RUN,
+                    # DB 기록 (실제 거래 시)
+                    async with AsyncSessionLocal() as session:
+                        new_trade = Trade(
+                            timestamp=(datetime.utcnow() + timedelta(hours=9)),
+                            action="TIME_EXIT",
+                            symbol=symbol,
+                            price=0.0,
+                            quantity=amount,
+                            reason=f"TIME_EXIT ({wait_minutes}분 모멘텀 이탈) 탈출",
+                            realized_pnl=0.0,  # 정확한 PNL은 거래소 싱크 통해 보정됨
+                            dry_run=False,
+                            params=self._snapshot_params(),
+                        )
+                        session.add(new_trade)
+                        await session.commit()
+
+                    # 알림 발송
+                    await notifier.send_message(
+                        f"🚨 <b>TIME EXIT 발동</b> 🚨\n[{symbol}] {wait_minutes}분 경과로 포지션 스크래치(강제 시장가 청산) 시도."
                     )
-                    session.add(new_trade)
-                    await session.commit()
 
-                # 알림 발송
-                await notifier.send_message(
-                    f"🚨 <b>TIME EXIT 발동</b> 🚨\n[{symbol}] {wait_minutes}분 경과로 포지션 스크래치(강제 시장가 청산) 완료."
-                )
-                del self.active_positions[symbol]
+                    if symbol in self.active_positions:
+                        del self.active_positions[symbol]
+
+                else:
+                    # [V18 DRY_RUN] 가상 청산 메서드로 위임하여 PNL 계산 및 통합 DB 반영
+                    logger.info(
+                        f"🧪 [DRY RUN] {symbol} Time Exit 가상 시장가 탈출을 시도합니다."
+                    )
+                    await self.close_position_virtually(
+                        symbol, reason=f"Time Exit ({wait_minutes}분 모멘텀 이탈)"
+                    )
 
             except Exception as e:
                 logger.error(f"[{symbol}] Time Exit 탈출 로직 중 에러: {e}")
