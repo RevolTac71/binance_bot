@@ -802,13 +802,10 @@ class ExecutionEngine:
             if not self.active_positions:
                 return
 
-        for symbol in list(self.active_positions.keys()):
             if settings.DRY_RUN:
-                # [수정됨] 1초 만에 포지션이 증발하는 즉시 청산 로직 비활성화
-                # 모의투자 시에는 실제 거래소에 포지션이 없으므로 검사를 생략하고, 
-                # Time Exit(90분) 데몬이 강제 청산할 때까지 포지션을 유지합니다.
+                # [V18] 모의투자 시에는 거래소 실제 포지션이 없으므로 감사를 생략합니다.
+                # 단, symbols_to_remove에 의해 제거되지 않은 포지션은 계속 메모리에 유지됩니다.
                 continue
-
 
             current_contracts = position_map.get(symbol, 0.0)
             if current_contracts == 0.0:
@@ -961,6 +958,38 @@ class ExecutionEngine:
         # 처리 완료된 포지션은 메모리 감시열에서 제거
         for sym in symbols_to_remove:
             del self.active_positions[sym]
+
+    async def close_position_virtually(self, symbol: str, reason: str = "가상 청산"):
+        """
+        [V18] DRY_RUN 모드 전용: 실제 거래소 주문 없이 봇 내부 상태만 종료하고 DB에 기록합니다.
+        무한 루프 방지를 위해 Chandelier Exit 등에서 호출됩니다.
+        """
+        if symbol not in self.active_positions:
+            return
+
+        logger.info(f"🧪 [DRY RUN] {symbol} 가상 청산 실행. 사유: {reason}")
+
+        try:
+            async with AsyncSessionLocal() as session:
+                new_trade = Trade(
+                    timestamp=(datetime.utcnow() + timedelta(hours=9)),
+                    action="CLOSED",
+                    symbol=symbol,
+                    price=0.0,
+                    quantity=0.0,
+                    reason=f"[DRY_RUN] {reason}",
+                    realized_pnl=0.0,
+                    dry_run=True,
+                    params=self._snapshot_params(),
+                )
+                session.add(new_trade)
+                await session.commit()
+
+            if symbol in self.active_positions:
+                del self.active_positions[symbol]
+
+        except Exception as e:
+            logger.error(f"[{symbol}] 가상 청산 처리 중 에러: {e}")
 
     async def check_state_mismatch(self):
         """
