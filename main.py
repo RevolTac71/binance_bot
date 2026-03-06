@@ -408,6 +408,26 @@ async def process_closed_kline(
             elif hist[-1] < hist[-2]:
                 cvd_trend = "SELL_PRESSURE"
 
+        # [V18] HFT 파이프라인에서 최신 미시구조 피처(OI, Tick Count 등) 조회
+        # main.py 전역에 hft_pipeline 인스턴스가 있다고 가정 (main()에서 초기화됨)
+        hft_feats = {}
+        if "hft_pipeline" in globals():
+            hft_pipe = globals()["hft_pipeline"]
+            # hft_pipeline.py에 정의된 fetch_derivatives_data_cached 등을 활용하여 현재 심볼의 최신 피처 추출
+            # 여기서는 hft_pipeline의 내부 버퍼나 캐시를 직접 참조하도록 구성
+            raw_sym = symbol.lower().replace("/", "").replace(":usdt", "")
+            oi, funding = hft_pipe.fetch_derivatives_data_cached(raw_sym)
+
+            # 최근 1분 스냅샷 기반 추가 피처 (Log Vol Z-Score 등) - hft_pipeline에서 계산된 최신값 호출
+            # hft_pipeline.py의 log_volume_history 등을 활용
+            hft_feats = {
+                "open_interest": oi,
+                "funding_rate": funding,
+                "tick_count": len(
+                    hft_pipe.trade_buffer.get(raw_sym, [])
+                ),  # 현재 쌓여있는 틱 갯수 활용
+            }
+
         decision = strategy.check_entry(
             symbol=symbol,
             df=df_ind,
@@ -417,6 +437,7 @@ async def process_closed_kline(
             cvd_trend=cvd_trend,
             bid_ask_imbalance=twap_imbalance,
             all_htf_15m=htf_df_15m,
+            hft_features=hft_feats,
         )
 
         # 3. [V18] 스코어 및 신규 피처를 MarketSnapshot에 기록 (DB 적재용)
@@ -442,9 +463,13 @@ async def process_closed_kline(
             reason = decision["reason"]
             atr_val = decision.get("atr_val", market_price * 0.005)
 
-            # 3. 투입 사이즈 산출 (V17: Kelly 사이징 async 호출)
+            # 3. 투입 사이즈 산출 (V18: 진입 유형별 차등 SL/TP 반영)
             sizing = await risk.calculate_position_size(
-                symbol, capital, market_price, atr_val
+                symbol,
+                capital,
+                market_price,
+                atr_val,
+                entry_type=decision.get("entry_type", "TREND_MACD"),
             )
 
             if sizing["size"] <= 0:

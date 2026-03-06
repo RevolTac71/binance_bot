@@ -28,7 +28,7 @@ def compute_live_percentiles(df: pd.DataFrame, window: int = 100) -> dict:
     df : pd.DataFrame
         최소 window개 이상의 행을 포함하는 DataFrame.
         필요 컬럼: MACD_H, cvd_delta_slope, bid_ask_imbalance,
-                    NOFI, RSI, buy_ratio, ADX_14, vol_zscore
+                    NOFI, RSI, buy_ratio, ADX_14, vol_zscore, open_interest, tick_count
     window : int
         백분위수 산출에 사용할 과거 기간 (기본 100)
 
@@ -50,6 +50,8 @@ def compute_live_percentiles(df: pd.DataFrame, window: int = 100) -> dict:
             "buy_ratio_pctl": 50.0,
             "adx_pctl": 50.0,
             "vol_zscore": 0.0,
+            "oi_pctl": 50.0,
+            "tick_pctl": 50.0,
         }
 
     # 최근 window개 슬라이스
@@ -78,7 +80,9 @@ def compute_live_percentiles(df: pd.DataFrame, window: int = 100) -> dict:
         ),  # RSI는 원시값 사용
         "buy_ratio_pctl": pctl("buy_ratio"),
         "adx_pctl": pctl("ADX_14"),
-        "vol_zscore": float(current.get("Log_Vol_ZScore", 0.0)),  # Z-Score도 원시값
+        "vol_zscore": float(current.get("Log_Vol_ZScore", 0.0)),
+        "oi_pctl": pctl("open_interest"),
+        "tick_pctl": pctl("tick_count"),
     }
 
 
@@ -107,15 +111,21 @@ def calculate_entry_score(indicators: dict, adx_boost_pctl: float = 70.0) -> dic
     adx_p = indicators.get("adx_pctl", 50)
     fr = indicators.get("funding_rate_match", 0)
     vol_z = indicators.get("vol_zscore", 0.0)
+    oi_p = indicators.get("oi_pctl", 50)
+    tick_p = indicators.get("tick_pctl", 50)
 
     # ━━━━━ LONG 스코어링 ━━━━━
     t = settings.SCORING_THRESHOLDS
 
-    # MACD 히스토그램
+    # MACD 히스토그램 (v18: 15m 추천 가중치 강화)
     l_macd = (
-        2
-        if macd >= t["macd_pctl"]["+2"]
-        else (1 if macd >= t["macd_pctl"]["+1"] else 0)
+        4
+        if macd >= t["macd_pctl"].get("+4", 90)
+        else (
+            2
+            if macd >= t["macd_pctl"]["+2"]
+            else (1 if macd >= t["macd_pctl"]["+1"] else 0)
+        )
     )
     # CVD 델타 기울기
     l_cvd = (
@@ -147,20 +157,40 @@ def calculate_entry_score(indicators: dict, adx_boost_pctl: float = 70.0) -> dic
         if vol_z >= t["vol_zscore"]["+2"]
         else (1 if vol_z >= t["vol_zscore"]["+1"] else 0)
     )
-    # 환경 부스트
+    # 환경 부스트 및 신규 피처
     l_adx = 1 if adx_p >= adx_boost_pctl else 0
-    l_fr = 1 if fr == 1 else 0
+    l_fr = 2 if fr == -1 else 0  # 펀딩비 역방향 (롱 진입 시 마이너스 펀비 선호 - 반전)
+    l_oi = 2 if oi_p >= t["oi_pctl"]["+2"] else (1 if oi_p >= t["oi_pctl"]["+1"] else 0)
+    l_tick = (
+        2
+        if tick_p >= t["tick_pctl"]["+2"]
+        else (1 if tick_p >= t["tick_pctl"]["+1"] else 0)
+    )
 
     long_score = (
-        l_macd + l_cvd + l_imbal + l_nofi + l_rsi + l_buy + l_vol + l_adx + l_fr
+        l_macd
+        + l_cvd
+        + l_imbal
+        + l_nofi
+        + l_rsi
+        + l_buy
+        + l_vol
+        + l_adx
+        + l_fr
+        + l_oi
+        + l_tick
     )
 
     # ━━━━━ SHORT 스코어링 (대칭 반전) ━━━━━
 
     s_macd = (
-        2
-        if macd <= (100 - t["macd_pctl"]["+2"])
-        else (1 if macd <= (100 - t["macd_pctl"]["+1"]) else 0)
+        4
+        if macd <= (100 - t["macd_pctl"].get("+4", 90))
+        else (
+            2
+            if macd <= (100 - t["macd_pctl"]["+2"])
+            else (1 if macd <= (100 - t["macd_pctl"]["+1"]) else 0)
+        )
     )
     s_cvd = (
         2
@@ -196,22 +226,38 @@ def calculate_entry_score(indicators: dict, adx_boost_pctl: float = 70.0) -> dic
         else (1 if vol_z >= t["vol_zscore"]["+1"] else 0)
     )
     s_adx = 1 if adx_p >= adx_boost_pctl else 0
-    s_fr = 1 if fr == -1 else 0
+    s_fr = 2 if fr == 1 else 0  # 펀딩비 역방향 (숏 진입 시 플러스 펀비 선호 - 반전)
+    s_oi = 2 if oi_p >= t["oi_pctl"]["+2"] else (1 if oi_p >= t["oi_pctl"]["+1"] else 0)
+    s_tick = (
+        2
+        if tick_p >= t["tick_pctl"]["+2"]
+        else (1 if tick_p >= t["tick_pctl"]["+1"] else 0)
+    )
 
     short_score = (
-        s_macd + s_cvd + s_imbal + s_nofi + s_rsi + s_buy + s_vol + s_adx + s_fr
+        s_macd
+        + s_cvd
+        + s_imbal
+        + s_nofi
+        + s_rsi
+        + s_buy
+        + s_vol
+        + s_adx
+        + s_fr
+        + s_oi
+        + s_tick
     )
 
     # 점수 상세 내역 (로그용)
     if long_score > short_score:
         detail = (
             f"L[MACD={l_macd} CVD={l_cvd} Imbal={l_imbal} OFI={l_nofi} "
-            f"RSI={l_rsi} Buy={l_buy} Vol={l_vol} ADX={l_adx} FR={l_fr}]={long_score}"
+            f"RSI={l_rsi} Buy={l_buy} Vol={l_vol} ADX={l_adx} FR={l_fr} OI={l_oi} Tick={l_tick}]={long_score}"
         )
     else:
         detail = (
             f"S[MACD={s_macd} CVD={s_cvd} Imbal={s_imbal} OFI={s_nofi} "
-            f"RSI={s_rsi} Buy={s_buy} Vol={s_vol} ADX={s_adx} FR={s_fr}]={short_score}"
+            f"RSI={s_rsi} Buy={s_buy} Vol={s_vol} ADX={s_adx} FR={s_fr} OI={s_oi} Tick={s_tick}]={short_score}"
         )
 
     return {
@@ -221,6 +267,13 @@ def calculate_entry_score(indicators: dict, adx_boost_pctl: float = 70.0) -> dic
         if long_score > short_score
         else (-1 if short_score > long_score else 0),
         "detail": detail,
+        # V18: 필수 조건 체크를 위한 개별 점수 노출
+        "l_cvd": l_cvd,
+        "l_nofi": l_nofi,
+        "s_cvd": s_cvd,
+        "s_nofi": s_nofi,
+        "l_macd": l_macd,
+        "s_macd": s_macd,
     }
 
 

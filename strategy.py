@@ -405,6 +405,7 @@ class StrategyEngine:
         cvd_trend: Optional[str] = None,
         bid_ask_imbalance: float = 0.5,
         all_htf_15m: Optional[dict] = None,
+        hft_features: Optional[dict] = None,
     ) -> dict:
         """
         [V16] 다중 시간 프레임 기반 진입 신호를 판단합니다.
@@ -416,11 +417,9 @@ class StrategyEngine:
             df_1h      : 1시간봉 데이터프레임 (EMA50, EMA200 컬럼 포함)
             df_15m     : 15분봉 데이터프레임 (ADX_14, MACD, MACD_S 컬럼 포함)
             cvd_trend  : CVD 오더플로우 방향 (Placeholder)
-                         "BUY_PRESSURE"  → 공격적 시장가 매수 우세
-                         "SELL_PRESSURE" → 공격적 시장가 매도 우세
-                         None            → 미수집 (현재 기본값)
-
-        Returns:
+            bid_ask_imbalance: 오더북 불균형
+            all_htf_15m: 전체 심볼의 15분봉 데이터 (상관관계 산출용)
+            hft_features: hft_pipeline에서 수집한 OI, Tick Count 등 정보
             dict:
                 "signal"      : "LONG" | "SHORT" | None
                 "market_price": float
@@ -512,6 +511,16 @@ class StrategyEngine:
         if "NOFI" not in df.columns:
             df["NOFI"] = 0.0
 
+        # [V18] HFT 피처 주입
+        if hft_features:
+            df["open_interest"] = hft_features.get("open_interest", 0.0)
+            df["tick_count"] = hft_features.get("tick_count", 0)
+            if "log_volume_zscore" in hft_features:
+                df["Log_Vol_ZScore"] = hft_features["log_volume_zscore"]
+        else:
+            df["open_interest"] = 0.0
+            df["tick_count"] = 0
+
         # 백분위수 산출
         percentiles = compute_live_percentiles(df, window=pctl_window)
 
@@ -539,9 +548,37 @@ class StrategyEngine:
         reason = ""
 
         if raw_signal == 1 and long_score >= min_score:
+            # [V18.1] 하드코딩 필수 조건: SCALP_CVD 진입 시 CVD 또는 OFI 점수 필수 포함
+            l_macd = score_result.get("l_macd", 0)
+            is_scalp = l_macd < 2
+            if is_scalp:
+                has_hft_signal = (
+                    score_result.get("l_cvd", 0) >= 1
+                    or score_result.get("l_nofi", 0) >= 1
+                )
+                if not has_hft_signal:
+                    return {
+                        "signal": None,
+                        "reason": f"V18 SCALP 거부 — CVD/OFI 점수 없음 ({score_detail})",
+                    }
+
             signal_type = "LONG"
             reason = f"[V18 SCORE LONG] {score_detail} (≥{min_score})"
         elif raw_signal == -1 and short_score >= min_score:
+            # [V18.1] 하드코딩 필수 조건: SCALP_CVD 진입 시 CVD 또는 OFI 점수 필수 포함
+            s_macd = score_result.get("s_macd", 0)
+            is_scalp = s_macd < 2
+            if is_scalp:
+                has_hft_signal = (
+                    score_result.get("s_cvd", 0) >= 1
+                    or score_result.get("s_nofi", 0) >= 1
+                )
+                if not has_hft_signal:
+                    return {
+                        "signal": None,
+                        "reason": f"V18 SCALP 거부 — CVD/OFI 점수 없음 ({score_detail})",
+                    }
+
             signal_type = "SHORT"
             reason = f"[V18 SCORE SHORT] {score_detail} (≥{min_score})"
 
@@ -584,6 +621,10 @@ class StrategyEngine:
                 twap_imbalance=float(bid_ask_imbalance),
             ).model_dump(exclude_none=True)
 
+        # [V18] 진입 원인 판별 (SL/TP 차등 적용용)
+        # MACD 점수가 높으면 추세 추종형, 그 외(CVD/OFI 등)가 높으면 스캘핑(반전)형으로 분류
+        entry_type = "TREND_MACD" if l_macd >= 2 or s_macd >= 2 else "SCALP_CVD"
+
         return {
             "signal": signal_type,
             "market_price": market_price,
@@ -595,4 +636,5 @@ class StrategyEngine:
             "short_score": short_score,
             "nofi_1m": float(df["NOFI"].iloc[-1]),
             "buy_ratio": float(df["buy_ratio"].iloc[-1]),
+            "entry_type": entry_type,
         }

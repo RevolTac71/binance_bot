@@ -108,25 +108,30 @@ class Config:
     BREAKEVEN_PROFIT_MULT = float(os.getenv("BREAKEVEN_PROFIT_MULT", "0.2"))
 
     # ── V18 스코어링 진입 엔진 파라미터 ────────────────────────────────
-    MIN_ENTRY_SCORE = int(os.getenv("MIN_ENTRY_SCORE", "5"))  # 진입 최소 합산 점수
+    MIN_ENTRY_SCORE = int(
+        os.getenv("MIN_ENTRY_SCORE", "7")
+    )  # v18 추천: 7점 이상으로 보수화
     PCTL_WINDOW = int(os.getenv("PCTL_WINDOW", "100"))  # 백분위수 산출 윈도우
     ADX_BOOST_PCTL = float(
         os.getenv("ADX_BOOST_PCTL", "70")
-    )  # 추세 부스트 임계 백분위수
+    )  # 추세 부스트 임계 백분위수 (ADX > 35~40 수준)
 
     # [V18] 세부 지표 스코어링 기준 (전역 파라미터화)
     # 각 지표에 대해 +1점, +2점을 부여하는 임계값 기준 (dict)
     SCORING_THRESHOLDS = {
-        "macd_pctl": {"+1": 70, "+2": 85},  # 상위 백분위수 이상
-        "cvd_pctl": {"+1": 70, "+2": 85},  # 상위 백분위수 이상
-        "imbalance": {"+1": 65, "+2": 80},  # 상위 백분위수 이상
-        "nofi_pctl": {"+1": 70, "+2": 85},  # 상위 백분위수 이상
-        "rsi": {
-            "+1": 30,
-            "+2": 15,
-        },  # 기본값: 과매도 기준 (Long). Short은 (100-기준) 대칭
-        "buy_ratio": {"+1": 25, "+2": 10},  # 하위 백분위수 이하 (역발상)
-        "vol_zscore": {"+1": 1.5, "+2": 2.5},  # Z-score 이상
+        "macd_pctl": {
+            "+1": 70,
+            "+2": 80,
+            "+4": 90,
+        },  # v18: 15m MACD 가중치 강화 (상위 10% 시 4점)
+        "cvd_pctl": {"+1": 70, "+2": 85},
+        "imbalance": {"+1": 65, "+2": 80},
+        "nofi_pctl": {"+1": 70, "+2": 85},
+        "rsi": {"+1": 30, "+2": 15},
+        "buy_ratio": {"+1": 25, "+2": 10},
+        "vol_zscore": {"+1": 1.5, "+2": 2.5},
+        "oi_pctl": {"+1": 70, "+2": 85},  # 신규: 미결제약정 변화 (반전)
+        "tick_pctl": {"+1": 70, "+2": 85},  # 신규: 체결 활성도 (추세)
     }
 
     # ── V17 체결 & 사이징 파라미터 ────────────────────────────────────────

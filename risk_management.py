@@ -81,25 +81,31 @@ class RiskManager:
         return result
 
     async def calculate_position_size(
-        self, symbol: str, capital: float, entry_price: float, atr_val: float
+        self,
+        symbol: str,
+        capital: float,
+        entry_price: float,
+        atr_val: float,
+        entry_type: str = "TREND_MACD",
     ) -> dict:
         """
-        V17 하이브리드 사이징: Kelly 활성 시 동적 비중, 비활성 시 고정 비율.
-        TP/SL 거리는 시세 변동폭(ATR)을 반영합니다.
-
-        Returns:
-            dict: {
-                "size": float,
-                "invest_usdt": float,
-                "tp_dist": float,
-                "sl_dist": float
-            }
+        V18 하이브리드 사이징: 진입 유형에 따른 차등 SL/TP 적용.
+        - TREND_MACD: SL 3.0x / TP 5.0x (v18 추천)
+        - SCALP_CVD: SL 1.0x / TP 5.0x (v18 추천)
         """
         if capital <= 0 or entry_price <= 0 or atr_val <= 0:
             return {"size": 0.0, "invest_usdt": 0.0, "tp_dist": 0.0, "sl_dist": 0.0}
 
-        # V17: Kelly 사이징이 활성화되었고 캐시가 비었다면 DB에서 산출
-        risk_pct = self.risk_pct  # 폴백 기본값
+        # 1. 진입 유형별 SL/TP 배율 설정 (v18 전략 반영)
+        if entry_type == "TREND_MACD":
+            sl_mult = 3.0
+            tp_mult = 5.0
+        else:  # SCALP_CVD
+            sl_mult = 1.0
+            tp_mult = 5.0
+
+        # Kelly 사이징 활성 시 비중 조절 (기존 로직 유지하되 v18 배율 우선)
+        risk_pct = self.risk_pct
 
         if getattr(settings, "KELLY_SIZING", False):
             min_trades = getattr(settings, "KELLY_MIN_TRADES", 20)
