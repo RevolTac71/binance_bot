@@ -7,7 +7,6 @@ from database import Trade, TradeLog, AsyncSessionLocal
 from sqlalchemy.future import select
 from data_pipeline import DataPipeline
 from notification import notifier
-from parameter_tracker import parameter_tracker
 
 
 class ExecutionEngine:
