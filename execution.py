@@ -653,12 +653,6 @@ class ExecutionEngine:
 
                 await session.commit()
 
-            if settings.DRY_RUN:
-                logger.info(f"🧪 [DRY RUN] {symbol} TP/SL 가상 주문 완료 및 DB 기록됨")
-                # DRY_RUN 에서는 PNL 계산 및 가상 청산을 위해 포지션 상세 정보를 인메모리에 저장합니다.
-                self.active_positions[symbol] = entry_info
-                return True
-
             # 1. Take Profit (LIMIT 방식) — V17: 분할 익절 (partial_ratio만큼만)
             # TP 수량 정밀도 보정
             try:
@@ -667,101 +661,110 @@ class ExecutionEngine:
             except Exception:
                 tp_amount_final = tp_amount
 
-            if tp_amount_final > 0:
-                try:
-                    await self.exchange.create_order(
-                        symbol=symbol,
-                        type="limit",
-                        side=exit_side,
-                        amount=tp_amount_final,
-                        price=tp_price,
-                        params={"reduceOnly": True},
-                    )
-                except Exception as tp_err:
-                    logger.warning(
-                        f"[{symbol}] 지정가(Limit) TP 생성 거절됨. 시장가 우회(TAKE_PROFIT_MARKET)로 재시도합니다. 사유: {tp_err}"
-                    )
+            if not settings.DRY_RUN:
+                if tp_amount_final > 0:
                     try:
                         await self.exchange.create_order(
                             symbol=symbol,
-                            type="take_profit_market",
+                            type="limit",
                             side=exit_side,
                             amount=tp_amount_final,
-                            params={"stopPrice": tp_price, "reduceOnly": True},
+                            price=tp_price,
+                            params={"reduceOnly": True},
                         )
-                    except Exception as tp_algo_err:
-                        err_msg = str(tp_algo_err)
-                        if "-4120" in err_msg or "Algo Order API" in err_msg:
-                            formatted_amount_tp = self.exchange.amount_to_precision(
-                                symbol, tp_amount_final
+                    except Exception as tp_err:
+                        logger.warning(
+                            f"[{symbol}] 지정가(Limit) TP 생성 거절됨. 시장가 우회(TAKE_PROFIT_MARKET)로 재시도합니다. 사유: {tp_err}"
+                        )
+                        try:
+                            await self.exchange.create_order(
+                                symbol=symbol,
+                                type="take_profit_market",
+                                side=exit_side,
+                                amount=tp_amount_final,
+                                params={"stopPrice": tp_price, "reduceOnly": True},
                             )
-                            formatted_price_tp = self.exchange.price_to_precision(
-                                symbol, tp_price
-                            )
-                            raw_sym = self.exchange.market(symbol)["id"]
-                            req_tp = {
-                                "symbol": raw_sym,
-                                "side": exit_side.upper(),
-                                "type": "TAKE_PROFIT_MARKET",
-                                "quantity": formatted_amount_tp,
-                                "stopPrice": formatted_price_tp,
-                                "reduceOnly": "true",
-                                "algoType": "CONDITIONAL",
-                            }
-                            await self.exchange.request(
-                                path="algoOrder",
-                                api="fapiPrivate",
-                                method="POST",
-                                params=req_tp,
-                            )
-                        else:
-                            raise tp_algo_err
+                        except Exception as tp_algo_err:
+                            err_msg = str(tp_algo_err)
+                            if "-4120" in err_msg or "Algo Order API" in err_msg:
+                                formatted_amount_tp = self.exchange.amount_to_precision(
+                                    symbol, tp_amount_final
+                                )
+                                formatted_price_tp = self.exchange.price_to_precision(
+                                    symbol, tp_price
+                                )
+                                raw_sym = self.exchange.market(symbol)["id"]
+                                req_tp = {
+                                    "symbol": raw_sym,
+                                    "side": exit_side.upper(),
+                                    "type": "TAKE_PROFIT_MARKET",
+                                    "quantity": formatted_amount_tp,
+                                    "stopPrice": formatted_price_tp,
+                                    "reduceOnly": "true",
+                                    "algoType": "CONDITIONAL",
+                                }
+                                await self.exchange.request(
+                                    path="algoOrder",
+                                    api="fapiPrivate",
+                                    method="POST",
+                                    params=req_tp,
+                                )
+                            else:
+                                raise tp_algo_err
 
-            # 2. Stop Loss (STOP_MARKET 방식, reduceOnly) — V17: SL은 전량 유지 (안전망)
-            try:
-                await self.exchange.create_order(
-                    symbol=symbol,
-                    type="stop_market",
-                    side=exit_side,
-                    amount=total_amount,
-                    params={"stopPrice": sl_price, "reduceOnly": True},
-                )
-            except Exception as e:
-                err_msg = str(e)
-                if "-4120" in err_msg or "Algo Order API endpoints" in err_msg:
-                    logger.warning(
-                        f"[{symbol}] 일반 Stop Market 거절됨(-4120). 신규 AlgoOrder 전용 엔드포인트로 SL(손절) 전송을 재시도합니다."
+                # 2. Stop Loss (STOP_MARKET 방식, reduceOnly) — V17: SL은 전량 유지 (안전망)
+                try:
+                    await self.exchange.create_order(
+                        symbol=symbol,
+                        type="stop_market",
+                        side=exit_side,
+                        amount=total_amount,
+                        params={"stopPrice": sl_price, "reduceOnly": True},
                     )
+                except Exception as e:
+                    err_msg = str(e)
+                    if "-4120" in err_msg or "Algo Order API endpoints" in err_msg:
+                        logger.warning(
+                            f"[{symbol}] 일반 Stop Market 거절됨(-4120). 신규 AlgoOrder 전용 엔드포인트로 SL(손절) 전송을 재시도합니다."
+                        )
 
-                    # 수량과 호가단위를 거래소 규격에 맞는 문자열 형태로 포맷팅
-                    formatted_amount = self.exchange.amount_to_precision(
-                        symbol, total_amount
-                    )
-                    formatted_price = self.exchange.price_to_precision(symbol, sl_price)
-                    raw_symbol = self.exchange.market(symbol)["id"]
+                        formatted_amount = self.exchange.amount_to_precision(
+                            symbol, total_amount
+                        )
+                        formatted_price = self.exchange.price_to_precision(
+                            symbol, sl_price
+                        )
+                        raw_symbol = self.exchange.market(symbol)["id"]
 
-                    req = {
-                        "symbol": raw_symbol,
-                        "side": exit_side.upper(),
-                        "type": "STOP_MARKET",
-                        "quantity": formatted_amount,
-                        "triggerPrice": formatted_price,
-                        "reduceOnly": "true",
-                        "algoType": "CONDITIONAL",
-                    }
-                    await self.exchange.request(
-                        path="algoOrder",
-                        api="fapiPrivate",
-                        method="POST",
-                        params=req,
-                        headers={},
-                    )
-                else:
-                    # 다른 일반적인 에러일 시 상단 try문으로 에러 넘김
-                    raise e
+                        req = {
+                            "symbol": raw_symbol,
+                            "side": exit_side.upper(),
+                            "type": "STOP_MARKET",
+                            "quantity": formatted_amount,
+                            "triggerPrice": formatted_price,
+                            "reduceOnly": "true",
+                            "algoType": "CONDITIONAL",
+                        }
+                        await self.exchange.request(
+                            path="algoOrder",
+                            api="fapiPrivate",
+                            method="POST",
+                            params=req,
+                            headers={},
+                        )
+                    else:
+                        raise e
+            else:
+                logger.info(f"🧪 [DRY RUN] {symbol} TP/SL 가상 주문 완료 및 DB 기록됨")
+
+            # 텔레그램 알림 전송 (REAL/DRY 공통)
+            dr_tag = "🧪 [DRY RUN] " if settings.DRY_RUN else "✅ "
+            reason = entry_info.get("reason", "자동 진입")
 
             await notifier.send_message(
-                f"✅ 포지션 진입 완료\n[{symbol}] {signal_type}\n"
+                f"{dr_tag}포지션 진입 완료\n"
+                f"[{symbol}] {signal_type}\n"
+                f"사유: {reason}\n"
                 f"체결가: {entry_price:.4f}\n"
                 f"TP 지정가: {tp_price} (수량: {tp_amount_final}, {partial_ratio * 100:.0f}%)\n"
                 f"SL 시장가: {sl_price} (전량)\n"
@@ -769,7 +772,12 @@ class ExecutionEngine:
                 f"Real R:R: 1 : {abs(real_tp_pct / real_sl_pct) if real_sl_pct != 0 else 0:.2f}"
             )
 
-            self.active_positions[symbol] = True
+            # 포지션 상태 갱신
+            if settings.DRY_RUN:
+                self.active_positions[symbol] = entry_info
+            else:
+                self.active_positions[symbol] = True
+
             return True
 
         except Exception as e:
