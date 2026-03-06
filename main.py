@@ -958,7 +958,9 @@ async def main():
         param_id = await parameter_tracker.save_parameters_to_db("ALL")
         if param_id:
             logger.info(f"[MAIN] 봇 시작 파라미터 DB 저장 완료 | ID: {param_id}")
-            await notifier.send_message(f"📊 [파라미터] 봇 시작 파라미터 저장 완료 (ID: {param_id})")
+            await notifier.send_message(
+                f"📊 [파라미터] 봇 시작 파라미터 저장 완료 (ID: {param_id})"
+            )
     except Exception as e:
         logger.error(f"[MAIN] 시작 파라미터 저장 실패: {e}")
 
