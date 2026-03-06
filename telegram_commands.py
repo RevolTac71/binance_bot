@@ -52,11 +52,11 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/restart — 봇 프로세스 강제 재부팅\n\n"
         "── 파라미터 변경: /setparam [키] [값] ──\n\n"
         "📈 진입 스코어링 (V18)\n"
-        "min_score   최소 진입 점수 (int, 기본 5)\n"
+        f"min_score   최소 진입 점수 (int, 현재 {settings.MIN_ENTRY_SCORE})\n"
         "adx_boost   추세 가점용 ADX 백분위 (float, 70)\n"
         "adx_window  백분위수 윈도우 (int, 100)\n"
         "rsi_1 / rsi_2  RSI 1/2점 임계값 (예: 30 15)\n"
-        "macd_1 / macd_2  MACD 1/2점 임계값 (예: 70 85)\n\n"
+        "macd_1 / macd_2 / macd_4 MACD 1/2/4점 임계값\n\n"
         "💰 체결 & 사이징\n"
         "risk        증거금 비율 (float, 0.01)\n"
         "leverage    레버리지 배수 (int)\n"
@@ -309,6 +309,7 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Scoring Thresholds (Custom 키)
             "macd_1": ("macd_pctl", float, "+1"),
             "macd_2": ("macd_pctl", float, "+2"),
+            "macd_4": ("macd_pctl", float, "+4"),
             "cvd_1": ("cvd_pctl", float, "+1"),
             "cvd_2": ("cvd_pctl", float, "+2"),
             "imbal_1": ("imbalance", float, "+1"),
@@ -321,6 +322,10 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "buy_2": ("buy_ratio", float, "+2"),
             "vol_1": ("vol_zscore", float, "+1"),
             "vol_2": ("vol_zscore", float, "+2"),
+            "oi_1": ("oi_pctl", float, "+1"),
+            "oi_2": ("oi_pctl", float, "+2"),
+            "tick_1": ("tick_pctl", float, "+1"),
+            "tick_2": ("tick_pctl", float, "+2"),
         }
 
         if key not in mapping:
@@ -521,22 +526,24 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"MaxTrades : {getattr(settings, 'MAX_TRADES', 3)} (동일방향: {getattr(settings, 'MAX_CONCURRENT_SAME_DIR', 2)})\n"
         f"캔들/보유 : {getattr(settings, 'TIMEFRAME', '3m')} / {getattr(settings, 'TIME_EXIT_MINUTES', 0)}분\n\n"
         f"── 진입 조건 (V18 스코어링) ──\n"
-        f"컷트라인  : {getattr(settings, 'MIN_ENTRY_SCORE', 5)}점\n"
-        f"ADX 부스트: {getattr(settings, 'ADX_BOOST_PCTL', 70)}%tile (윈도우: {getattr(settings, 'PCTL_WINDOW', 100)})\n"
-        f"ATR 필터  : {getattr(settings, 'ATR_RATIO_MULT', 1.2)}x (롱길이: {getattr(settings, 'ATR_LONG_LEN', 200)})\n"
+        f"컷트라인  : {settings.MIN_ENTRY_SCORE}점\n"
+        f"ADX 부스트: {settings.ADX_BOOST_PCTL}%tile (윈도우: {settings.PCTL_WINDOW})\n"
+        f"ATR 필터  : {settings.ATR_RATIO_MULT}x (롱길이: {settings.ATR_LONG_LEN})\n"
     )
 
     t = getattr(settings, "SCORING_THRESHOLDS", {})
     if t:
         msg += (
-            f"\n[V18 세부 지표 점수(+1/+2) 기준]\n"
-            f"- MACD 히스토 : ≥{t.get('macd_pctl', {}).get('+1', 70)} / ≥{t.get('macd_pctl', {}).get('+2', 85)}%\n"
-            f"- CVD 기울기  : ≥{t.get('cvd_pctl', {}).get('+1', 70)} / ≥{t.get('cvd_pctl', {}).get('+2', 85)}%\n"
-            f"- 호가 불균형 : ≥{t.get('imbalance', {}).get('+1', 65)} / ≥{t.get('imbalance', {}).get('+2', 80)}%\n"
-            f"- 정규화 OFI  : ≥{t.get('nofi_pctl', {}).get('+1', 70)} / ≥{t.get('nofi_pctl', {}).get('+2', 85)}%\n"
-            f"- RSI 과매도  : ≤{t.get('rsi', {}).get('+1', 30)} / ≤{t.get('rsi', {}).get('+2', 15)}\n"
-            f"- 역발상(Buy) : ≤{t.get('buy_ratio', {}).get('+1', 25)} / ≤{t.get('buy_ratio', {}).get('+2', 10)}%\n"
-            f"- 볼륨 Z-스코어: ≥{t.get('vol_zscore', {}).get('+1', 1.5)} / ≥{t.get('vol_zscore', {}).get('+2', 2.5)}σ\n\n"
+            f"\n[V18 세부 지표 점수(+1/+2/+4) 기준]\n"
+            f"- MACD 히스토 : {t.get('macd_pctl', {}).get('+1')}/{t.get('macd_pctl', {}).get('+2')}/{t.get('macd_pctl', {}).get('+4')}%\n"
+            f"- CVD 기울기  : {t.get('cvd_pctl', {}).get('+1')}/{t.get('cvd_pctl', {}).get('+2')}%\n"
+            f"- 호가 불균형 : {t.get('imbalance', {}).get('+1')}/{t.get('imbalance', {}).get('+2')}%\n"
+            f"- 정규화 OFI  : {t.get('nofi_pctl', {}).get('+1')}/{t.get('nofi_pctl', {}).get('+2')}%\n"
+            f"- RSI 과매도  : {t.get('rsi', {}).get('+1')}/{t.get('rsi', {}).get('+2')}\n"
+            f"- 미결제약정  : {t.get('oi_pctl', {}).get('+1')}/{t.get('oi_pctl', {}).get('+2')}%\n"
+            f"- 체결 횟수   : {t.get('tick_pctl', {}).get('+1')}/{t.get('tick_pctl', {}).get('+2')}%\n"
+            f"- 역발상(Buy) : {t.get('buy_ratio', {}).get('+1')}/{t.get('buy_ratio', {}).get('+2')}%\n"
+            f"- 볼륨 Z-스코어: {t.get('vol_zscore', {}).get('+1')}/{t.get('vol_zscore', {}).get('+2')}σ\n\n"
         )
 
     msg += (
