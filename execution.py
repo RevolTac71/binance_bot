@@ -7,6 +7,7 @@ from database import Trade, TradeLog, AsyncSessionLocal
 from sqlalchemy.future import select
 from data_pipeline import DataPipeline
 from notification import notifier
+from parameter_tracker import parameter_tracker
 
 
 class ExecutionEngine:
@@ -45,10 +46,45 @@ class ExecutionEngine:
         """
         return json.dumps(
             {
+                # 기본 전략 파라미터
                 "strategy_version": getattr(settings, "STRATEGY_VERSION", "UNKNOWN"),
+                "timeframe": getattr(settings, "TIMEFRAME", "3m"),
+                "risk_percentage": getattr(settings, "RISK_PERCENTAGE", None),
+                "leverage": getattr(settings, "LEVERAGE", None),
+                
+                # ATR 및 변동성 파라미터
+                "atr_ratio_mult": getattr(settings, "ATR_RATIO_MULT", None),
+                "atr_long_len": getattr(settings, "ATR_LONG_LEN", None),
+                
+                # 손익 관리 파라미터
+                "sl_mult": getattr(settings, "SL_MULT", None),
+                "tp_mult": getattr(settings, "TP_MULT", None),
+                "chandelier_mult": getattr(settings, "CHANDELIER_MULT", None),
+                "chandelier_atr_len": getattr(settings, "CHANDELIER_ATR_LEN", None),
+                "breakeven_trigger_mult": getattr(settings, "BREAKEVEN_TRIGGER_MULT", None),
+                "breakeven_profit_mult": getattr(settings, "BREAKEVEN_PROFIT_MULT", None),
+                
+                # V18 스코어링 엔진 파라미터
                 "min_entry_score": getattr(settings, "MIN_ENTRY_SCORE", None),
                 "pctl_window": getattr(settings, "PCTL_WINDOW", None),
                 "adx_boost_pctl": getattr(settings, "ADX_BOOST_PCTL", None),
+                "scoring_thresholds": getattr(settings, "SCORING_THRESHOLDS", {}),
+                
+                # 포트폴리오 관리 파라미터
+                "max_concurrent_same_dir": getattr(settings, "MAX_CONCURRENT_SAME_DIR", None),
+                "max_trades": getattr(settings, "MAX_TRADES", None),
+                "loss_cooldown_minutes": getattr(settings, "LOSS_COOLDOWN_MINUTES", None),
+                
+                # 체결 관리 파라미터
+                "kelly_sizing": getattr(settings, "KELLY_SIZING", False),
+                "kelly_min_trades": getattr(settings, "KELLY_MIN_TRADES", None),
+                "kelly_max_fraction": getattr(settings, "KELLY_MAX_FRACTION", None),
+                "chasing_wait_sec": getattr(settings, "CHASING_WAIT_SEC", None),
+                "partial_tp_ratio": getattr(settings, "PARTIAL_TP_RATIO", None),
+                
+                # MTF 필터 파라미터
+                "htf_timeframe_1h": getattr(settings, "HTF_TIMEFRAME_1H", None),
+                "htf_timeframe_15m": getattr(settings, "HTF_TIMEFRAME_15M", None),
             },
             ensure_ascii=False,
         )
@@ -79,16 +115,47 @@ class ExecutionEngine:
                     logger.info(
                         f"✅ [복구 완료] 진행 중인 기존 포지션 감지: {symbol} (계약 수: {contracts})"
                     )
+        except Exception as e:
+            logger.error(f"거래소 동기화 중(sync_state_from_exchange) 예외 발생: {e}")
 
-            # 2. 고립된 진입 대기 주문(Pending Entries) 정리
-            # 안전을 위해 봇 재시작 시 포지션이 없는 종목의 미체결 주문은 모두 취소합니다.
-
-            logger.info(
-                "내 계좌의 전체 대기 주문을 스캔하여 고립된 찌꺼기 주문을 정리합니다..."
-            )
-            canceled_count = 0
-
+        # [V18.1] DRY_RUN 가상 포지션 복구 로직 (동기화 블록 외부 또는 내부에서 별도 실행)
+        if settings.DRY_RUN:
             try:
+                async with AsyncSessionLocal() as session:
+                    # 청산되지 않은(exit_time이 NULL) 가상 포지션 조회
+                    stmt = select(TradeLog).where(
+                        TradeLog.dry_run == True, TradeLog.exit_time == None
+                    )
+                    result = await session.execute(stmt)
+                    recovered_logs = result.scalars().all()
+
+                    for log in recovered_logs:
+                        # active_positions 에 복원 (place_chasing_entry_order의 entry_info 형식과 호환)
+                        self.active_positions[log.symbol] = {
+                            "signal": log.direction,
+                            "amount": log.qty,
+                            "limit_price": log.execution_price,
+                            "tp_price": log.tp_price,
+                            "sl_price": log.sl_price,
+                            "reason": log.entry_reason,
+                            "market_data": None,  # 복구된 데이터는 market_data 스냅샷이 없음 (필요 시 JSONB로 저장 가능)
+                        }
+                        logger.info(
+                            f"✅ [DRY RUN 복구] 기존 가상 포지션 감지 및 복구: {log.symbol} ({log.direction}, 수량: {log.qty})"
+                        )
+            except Exception as e:
+                logger.error(f"DRY RUN 포지션 복구 중 에러: {e}")
+
+        if not settings.DRY_RUN:
+            try:
+                # 2. 고립된 진입 대기 주문(Pending Entries) 정리
+                # 안전을 위해 봇 재시작 시 포지션이 없는 종목의 미체결 주문은 모두 취소합니다.
+
+                logger.info(
+                    "내 계좌의 전체 대기 주문을 스캔하여 고립된 찌꺼기 주문을 정리합니다..."
+                )
+                canceled_count = 0
+
                 # CCXT의 warnOnFetchOpenOrdersWithoutSymbol 옵션을 껐기 때문에 Rate Limit 경고 없이
                 # 현재 내 계좌의 모든 Open Order를 한 번의 호출로 매우 빠르게 가져옵니다.
                 open_orders = await self.exchange.fetch_open_orders()
@@ -121,12 +188,9 @@ class ExecutionEngine:
                     logger.info(
                         f"🧹 [정리 완료] 찌꺼기 진입 주문 강제 취소 (포지션 유무 무관): {symbol} (Order ID: {order_id})"
                     )
-            except Exception as e:
-                logger.error(f"내 계좌 전체 대기 주문(일반) 조회 중 에러: {e}")
 
-            # 2.2 고립된 Algo 주문 (STOP_MARKET 등) 정리 로직 추가
-            # 바이낸스 퓨처스 업데이트로 일반 OpenOrders 통신망과 Algo 통신망이 분리됨.
-            try:
+                # 2.2 고립된 Algo 주문 (STOP_MARKET 등) 정리 로직 추가
+                # 바이낸스 퓨처스 업데이트로 일반 OpenOrders 통신망과 Algo 통신망이 분리됨.
                 algo_orders = await self.exchange.request(
                     path="openAlgoOrders",
                     api="fapiPrivate",
@@ -174,14 +238,13 @@ class ExecutionEngine:
                     logger.info(
                         f"🧹 [Algo 정리 완료] 고립된 조건부(SL 등) 찌꺼기 알고 주문 취소: {raw_binance_symbol} (Algo ID: {algo_id})"
                     )
-            except Exception as e:
-                logger.error(f"내 계좌 전체 대기 주문(Algo) 조회 중 에러: {e}")
 
-            logger.info(
-                f"🔄 동기화 완료: 복구된 포지션 {active_count}개, 정리된 찌꺼기 대기 주문 {canceled_count}개."
-            )
-        except Exception as e:
-            logger.error(f"거래소 동기화 중(sync_state_from_exchange) 예외 발생: {e}")
+                logger.info(
+                    f"🔄 동기화 완료: 복구된 포지션 {active_count}개, 정리된 찌꺼기 대기 주문 {canceled_count}개."
+                )
+
+            except Exception as e:
+                logger.error(f"거래소 동기화 중(sync_state_from_exchange) 예외 발생: {e}")
 
     async def setup_margin_and_leverage(self, symbol: str):
         """
@@ -576,9 +639,22 @@ class ExecutionEngine:
                     slippage=0.0,
                     entry_reason=entry_info.get("reason", "자동 진입"),
                     execution_time_ms=entry_info.get("execution_time_ms", 0),
+                    # [V18.1] 영속화 필드 저장
+                    dry_run=settings.DRY_RUN,
+                    tp_price=tp_price,
+                    sl_price=sl_price,
                     # exit 관련은 NULL 유지
                 )
                 session.add(new_tradelog)
+                session.add(new_trade)
+
+                # [V19] 파라미터 트래커에 현재 파라미터 저장
+                try:
+                    param_id = await parameter_tracker.save_parameters_to_db(symbol)
+                    if param_id:
+                        logger.info(f"[{symbol}] 전략 파라미터 DB 저장 완료 | ID: {param_id}")
+                except Exception as param_err:
+                    logger.error(f"[{symbol}] 파라미터 저장 실패: {param_err}")
 
                 await session.commit()
 

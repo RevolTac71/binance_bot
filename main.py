@@ -8,6 +8,7 @@ import numpy as np
 from sklearn.preprocessing import RobustScaler
 import traceback
 from config import logger, settings
+from parameter_tracker import parameter_tracker
 from database import check_db_connection, Trade, MarketSnapshot, AsyncSessionLocal
 from data_pipeline import DataPipeline
 from strategy import StrategyEngine, PortfolioState
@@ -951,6 +952,15 @@ async def main():
     strategy = StrategyEngine()
     risk = RiskManager(pipeline)
     execution = ExecutionEngine(pipeline)
+
+    # [V19] 봇 시작 시 현재 파라미터를 DB에 저장
+    try:
+        param_id = await parameter_tracker.save_parameters_to_db("ALL")
+        if param_id:
+            logger.info(f"[MAIN] 봇 시작 파라미터 DB 저장 완료 | ID: {param_id}")
+            await notifier.send_message(f"📊 [파라미터] 봇 시작 파라미터 저장 완료 (ID: {param_id})")
+    except Exception as e:
+        logger.error(f"[MAIN] 시작 파라미터 저장 실패: {e}")
 
     try:
         await execution.sync_state_from_exchange()
