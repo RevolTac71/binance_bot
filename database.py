@@ -146,38 +146,6 @@ class MarketData_1m(Base):
     features = Column(JSONB, nullable=True)
 
 
-class StrategyParameters(Base):
-    """
-    [V19] 실시간 전략 파라미터 추적 테이블
-    오라클 서버에서 24시간 돌아가면서 파라미터 최적화를 위해 데이터를 적재합니다.
-    각 거래 시점의 전체 파라미터 셋을 저장하여 ML 모델링 및 백테스트에 활용합니다.
-    """
-
-    __tablename__ = "strategy_parameters"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp = Column(DateTime, index=True, default=datetime.utcnow)
-    symbol = Column(String(20), index=True)
-    
-    # 전체 전략 파라미터 JSON (실행 시점의 모든 설정 스냅샷)
-    parameters = Column(JSONB, nullable=False)
-    
-    # 파라미터 버전 및 메타데이터
-    strategy_version = Column(String(20), nullable=False)
-    parameter_hash = Column(String(64), nullable=False)  # 파라미터 셋 해시값
-    
-    # 성과 지표 (실시간 업데이트)
-    trade_count = Column(Integer, default=0)
-    win_rate = Column(Float, default=0.0)
-    avg_return = Column(Float, default=0.0)
-    sharpe_ratio = Column(Float, default=0.0)
-    
-    # 활성화 여부
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
 from sqlalchemy.pool import NullPool
 import uuid
 

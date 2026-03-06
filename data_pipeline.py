@@ -6,7 +6,6 @@ import numpy as np
 import pandas_ta as ta
 from ccxt.base.errors import RateLimitExceeded, RequestTimeout, NetworkError
 from config import settings, logger
-from parameter_tracker import parameter_tracker
 
 
 # -- Exponential Backoff Decorator --
@@ -75,10 +74,6 @@ class DataPipeline:
             logger.info(
                 "🧪 [TESTNET MODE] 바이낸스 선물 테스트넷 환경으로 CCXT 객체 연결이 세팅되었습니다."
             )
-
-        # [V19] 파라미터 트래커 초기화
-        self.parameter_tracker = parameter_tracker
-        logger.info("[DataPipeline] 파라미터 트래커 연동 완료")
 
     async def close(self):
         """거래소 세션을 안전하게 종료합니다."""

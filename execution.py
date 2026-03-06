@@ -51,37 +51,39 @@ class ExecutionEngine:
                 "timeframe": getattr(settings, "TIMEFRAME", "3m"),
                 "risk_percentage": getattr(settings, "RISK_PERCENTAGE", None),
                 "leverage": getattr(settings, "LEVERAGE", None),
-                
                 # ATR 및 변동성 파라미터
                 "atr_ratio_mult": getattr(settings, "ATR_RATIO_MULT", None),
                 "atr_long_len": getattr(settings, "ATR_LONG_LEN", None),
-                
                 # 손익 관리 파라미터
                 "sl_mult": getattr(settings, "SL_MULT", None),
                 "tp_mult": getattr(settings, "TP_MULT", None),
                 "chandelier_mult": getattr(settings, "CHANDELIER_MULT", None),
                 "chandelier_atr_len": getattr(settings, "CHANDELIER_ATR_LEN", None),
-                "breakeven_trigger_mult": getattr(settings, "BREAKEVEN_TRIGGER_MULT", None),
-                "breakeven_profit_mult": getattr(settings, "BREAKEVEN_PROFIT_MULT", None),
-                
+                "breakeven_trigger_mult": getattr(
+                    settings, "BREAKEVEN_TRIGGER_MULT", None
+                ),
+                "breakeven_profit_mult": getattr(
+                    settings, "BREAKEVEN_PROFIT_MULT", None
+                ),
                 # V18 스코어링 엔진 파라미터
                 "min_entry_score": getattr(settings, "MIN_ENTRY_SCORE", None),
                 "pctl_window": getattr(settings, "PCTL_WINDOW", None),
                 "adx_boost_pctl": getattr(settings, "ADX_BOOST_PCTL", None),
                 "scoring_thresholds": getattr(settings, "SCORING_THRESHOLDS", {}),
-                
                 # 포트폴리오 관리 파라미터
-                "max_concurrent_same_dir": getattr(settings, "MAX_CONCURRENT_SAME_DIR", None),
+                "max_concurrent_same_dir": getattr(
+                    settings, "MAX_CONCURRENT_SAME_DIR", None
+                ),
                 "max_trades": getattr(settings, "MAX_TRADES", None),
-                "loss_cooldown_minutes": getattr(settings, "LOSS_COOLDOWN_MINUTES", None),
-                
+                "loss_cooldown_minutes": getattr(
+                    settings, "LOSS_COOLDOWN_MINUTES", None
+                ),
                 # 체결 관리 파라미터
                 "kelly_sizing": getattr(settings, "KELLY_SIZING", False),
                 "kelly_min_trades": getattr(settings, "KELLY_MIN_TRADES", None),
                 "kelly_max_fraction": getattr(settings, "KELLY_MAX_FRACTION", None),
                 "chasing_wait_sec": getattr(settings, "CHASING_WAIT_SEC", None),
                 "partial_tp_ratio": getattr(settings, "PARTIAL_TP_RATIO", None),
-                
                 # MTF 필터 파라미터
                 "htf_timeframe_1h": getattr(settings, "HTF_TIMEFRAME_1H", None),
                 "htf_timeframe_15m": getattr(settings, "HTF_TIMEFRAME_15M", None),
@@ -244,7 +246,9 @@ class ExecutionEngine:
                 )
 
             except Exception as e:
-                logger.error(f"거래소 동기화 중(sync_state_from_exchange) 예외 발생: {e}")
+                logger.error(
+                    f"거래소 동기화 중(sync_state_from_exchange) 예외 발생: {e}"
+                )
 
     async def setup_margin_and_leverage(self, symbol: str):
         """
@@ -647,14 +651,6 @@ class ExecutionEngine:
                 )
                 session.add(new_tradelog)
                 session.add(new_trade)
-
-                # [V19] 파라미터 트래커에 현재 파라미터 저장
-                try:
-                    param_id = await parameter_tracker.save_parameters_to_db(symbol)
-                    if param_id:
-                        logger.info(f"[{symbol}] 전략 파라미터 DB 저장 완료 | ID: {param_id}")
-                except Exception as param_err:
-                    logger.error(f"[{symbol}] 파라미터 저장 실패: {param_err}")
 
                 await session.commit()
 
