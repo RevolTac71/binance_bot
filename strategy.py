@@ -541,6 +541,8 @@ class StrategyEngine:
         short_score = score_result["short_score"]
         raw_signal = score_result["signal"]
         score_detail = score_result["detail"]
+        l_macd = score_result.get("l_macd", 0)
+        s_macd = score_result.get("s_macd", 0)
 
         # 3. 최소 점수 임계값 필터
         min_score = getattr(settings, "MIN_ENTRY_SCORE", 5)
@@ -548,8 +550,6 @@ class StrategyEngine:
         reason = ""
 
         if raw_signal == 1 and long_score >= min_score:
-            # [V18.1] 하드코딩 필수 조건: SCALP_CVD 진입 시 CVD 또는 OFI 점수 필수 포함
-            l_macd = score_result.get("l_macd", 0)
             is_scalp = l_macd < 2
             if is_scalp:
                 has_hft_signal = (
@@ -565,8 +565,6 @@ class StrategyEngine:
             signal_type = "LONG"
             reason = f"[V18 SCORE LONG] {score_detail} (≥{min_score})"
         elif raw_signal == -1 and short_score >= min_score:
-            # [V18.1] 하드코딩 필수 조건: SCALP_CVD 진입 시 CVD 또는 OFI 점수 필수 포함
-            s_macd = score_result.get("s_macd", 0)
             is_scalp = s_macd < 2
             if is_scalp:
                 has_hft_signal = (
