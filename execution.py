@@ -847,7 +847,6 @@ class ExecutionEngine:
 
         for symbol in list(self.active_positions.keys()):
             if settings.DRY_RUN:
-                # [V18] 모의투자 시에는 거래소 실제 포지션이 없으므로 자체적인 가격 추적으로 가상 TP/SL 도달을 감시합니다.
                 try:
                     ticker = await self.exchange.fetch_ticker(symbol)
                     current_price = float(ticker.get("last", 0.0))
@@ -857,21 +856,37 @@ class ExecutionEngine:
                         signal_type = pos_info.get("signal")
                         tp_price = pos_info.get("tp_price", 0.0)
                         sl_price = pos_info.get("sl_price", 0.0)
+                        is_partial_tp_done = pos_info.get("is_partial_tp_done", False)
 
                         triggered = False
                         reason = ""
 
+                        # 1. TP 감시 (분할 익절 고려)
                         if signal_type == "LONG":
-                            if current_price >= tp_price:
-                                triggered = True
-                                reason = "Take Profit 도달"
+                            if not is_partial_tp_done and current_price >= tp_price:
+                                # 1차 TP 도달
+                                reason = "1차 Take Profit 도달 (50% 가상 익절)"
+                                await self.close_position_virtually(
+                                    symbol,
+                                    reason=reason,
+                                    close_price=current_price,
+                                    partial=True,
+                                )
+                                continue
                             elif current_price <= sl_price:
                                 triggered = True
                                 reason = "Stop Loss 도달"
                         elif signal_type == "SHORT":
-                            if current_price <= tp_price:
-                                triggered = True
-                                reason = "Take Profit 도달"
+                            if not is_partial_tp_done and current_price <= tp_price:
+                                # 1차 TP 도달
+                                reason = "1차 Take Profit 도달 (50% 가상 익절)"
+                                await self.close_position_virtually(
+                                    symbol,
+                                    reason=reason,
+                                    close_price=current_price,
+                                    partial=True,
+                                )
+                                continue
                             elif current_price >= sl_price:
                                 triggered = True
                                 reason = "Stop Loss 도달"
@@ -888,6 +903,55 @@ class ExecutionEngine:
                 continue
 
             current_contracts = position_map.get(symbol, 0.0)
+
+            # [V18] 부분 익절 감지 및 수익 누적 (REAL 모드 전용)
+            if not settings.DRY_RUN and isinstance(self.active_positions[symbol], dict):
+                prev_qty = self.active_positions[symbol].get("amount", 0.0)
+                if (
+                    current_contracts > 0 and current_contracts < prev_qty * 0.9
+                ):  # 10% 이상 줄었을 때 (수수료/오차 방어)
+                    logger.info(
+                        f"⚖️ [{symbol}] 포지션 수량 감소 감지 ({prev_qty} -> {current_contracts}). 수익 정산을 시작합니다."
+                    )
+                    try:
+                        trades = await self.exchange.fetch_my_trades(symbol, limit=10)
+                        partial_pnl = 0.0
+                        # 최근 5초 이내의 실현 손익 합산
+                        now_ts = self.exchange.milliseconds()
+                        for t in reversed(trades):
+                            if now_ts - t["timestamp"] < 10000:  # 최근 10초 이내 체결
+                                partial_pnl += float(
+                                    t.get("info", {}).get("realizedPnl", 0.0)
+                                )
+
+                        if partial_pnl != 0:
+                            async with AsyncSessionLocal() as session:
+                                stmt = (
+                                    select(TradeLog)
+                                    .where(
+                                        TradeLog.symbol == symbol,
+                                        TradeLog.exit_time.is_(None),
+                                    )
+                                    .order_by(TradeLog.entry_time.desc())
+                                    .limit(1)
+                                )
+                                res = await session.execute(stmt)
+                                trade_log = res.scalars().first()
+                                if trade_log:
+                                    trade_log.realized_pnl = (
+                                        trade_log.realized_pnl or 0.0
+                                    ) + partial_pnl
+                                    await session.commit()
+                                    logger.info(
+                                        f"💰 [{symbol}] 부분 익절 수익 누적 완료: +{partial_pnl:.4f} USDT (누적: {trade_log.realized_pnl:.4f})"
+                                    )
+                                    # 메모리상 수량 업데이트
+                                    self.active_positions[symbol]["amount"] = (
+                                        current_contracts
+                                    )
+                    except Exception as p_err:
+                        logger.error(f"[{symbol}] 부분 익절 수익 누정 중 에러: {p_err}")
+
             if current_contracts == 0.0:
                 try:
                     # 포지션이 청산됨 -> 반대쪽 찌꺼기 잔여 주문(TP or SL 중 발동 안된 쪽) 일괄 취소
@@ -985,25 +1049,27 @@ class ExecutionEngine:
                                 if trade_log:
                                     trade_log.exit_time = now_kst
                                     trade_log.exit_price = close_price
-                                    trade_log.realized_pnl = realized_pnl
+                                    # [V18] 마지막 청산 수익만 덮어쓰지 않고 기존 누적값(부분익절)에 합산
+                                    trade_log.realized_pnl = (
+                                        trade_log.realized_pnl or 0.0
+                                    ) + realized_pnl
                                     trade_log.exit_reason = (
                                         "자동 청산 감지 (TP/SL/탈출)"
                                     )
 
-                                    # 수익률 펀더멘탈 기록 (레버리지 제외 순수 가격 % 변화)
+                                    # 수익률 펀더멘탈 기록 (분할 익절 포함 전체 누적 수익률 계산)
                                     if (
                                         trade_log.execution_price
                                         and trade_log.execution_price > 0
+                                        and trade_log.qty
+                                        and trade_log.qty > 0
                                     ):
-                                        if trade_log.direction == "LONG":
-                                            roi = (
-                                                close_price - trade_log.execution_price
-                                            ) / trade_log.execution_price
-                                        else:
-                                            roi = (
-                                                trade_log.execution_price - close_price
-                                            ) / trade_log.execution_price
-                                        trade_log.roi_pct = roi * 100
+                                        total_notional = (
+                                            trade_log.execution_price * trade_log.qty
+                                        )
+                                        trade_log.roi_pct = (
+                                            trade_log.realized_pnl / total_notional
+                                        ) * 100
                             except Exception as ml_err:
                                 logger.error(
                                     f"[{symbol}] TradeLog 업데이트 중 예외: {ml_err}"
@@ -1040,7 +1106,11 @@ class ExecutionEngine:
             del self.active_positions[sym]
 
     async def close_position_virtually(
-        self, symbol: str, reason: str = "가상 청산", close_price: float = 0.0
+        self,
+        symbol: str,
+        reason: str = "가상 청산",
+        close_price: float = 0.0,
+        partial: bool = False,
     ):
         """
         [V18] DRY_RUN 모드 전용: 실제 거래소 주문 없이 봇 내부 상태만 종료하고 DB에 기록합니다.
@@ -1083,11 +1153,16 @@ class ExecutionEngine:
                 else:
                     gross_pnl = (entry_price - close_price) * amount
 
+                # 분할 익절인 경우 수량의 절반만 계산
+                if partial:
+                    gross_pnl *= settings.PARTIAL_TP_RATIO
+                    fees *= settings.PARTIAL_TP_RATIO
+
                 realized_pnl = gross_pnl - fees
 
                 logger.info(
-                    f"🧪 [DRY RUN] {symbol} 가상 PNL 정산 완료: 진입가={entry_price}, 청산가={close_price}, "
-                    f"수량={amount}, Signal={signal}, Gross Pnl={gross_pnl:.4f}, Fees={fees:.4f}, Net PNL={realized_pnl:.4f}"
+                    f"🧪 [DRY RUN] {symbol} {'부분' if partial else '전체'} 가상 PNL 정산 완료: 진입가={entry_price}, 청산가={close_price}, "
+                    f"수량={amount * (settings.PARTIAL_TP_RATIO if partial else 1.0)}, Signal={signal}, Net PNL={realized_pnl:.4f}"
                 )
             else:
                 logger.warning(
@@ -1129,24 +1204,25 @@ class ExecutionEngine:
                     if trade_log:
                         trade_log.exit_time = now_kst
                         trade_log.exit_price = close_price
-                        trade_log.realized_pnl = realized_pnl
+                        # [V18] 누적 수익 처리
+                        trade_log.realized_pnl = (
+                            trade_log.realized_pnl or 0.0
+                        ) + realized_pnl
                         trade_log.exit_reason = f"[DRY_RUN] {reason}"
+                        if not partial:
+                            trade_log.exit_time = now_kst
 
                         logger.info(
                             f"🧪 [DRY RUN] TradeLog 디버그 전 - roi_pct 갱신 전, exc_price: {trade_log.execution_price}"
                         )
                         if trade_log.execution_price and trade_log.execution_price > 0:
-                            if trade_log.direction == "LONG":
-                                roi = (
-                                    close_price - trade_log.execution_price
-                                ) / trade_log.execution_price
-                            else:
-                                roi = (
-                                    trade_log.execution_price - close_price
-                                ) / trade_log.execution_price
-                            trade_log.roi_pct = roi * 100
+                            # 전체 ROI 계산을 위해 '수익금 / (진입가 * 총수량)' 공식 사용
+                            total_notional = trade_log.execution_price * trade_log.qty
+                            trade_log.roi_pct = (
+                                trade_log.realized_pnl / total_notional
+                            ) * 100
                             logger.info(
-                                f"🧪 [DRY RUN] TradeLog 디버그 후 - calculated roi_pct: {trade_log.roi_pct}"
+                                f"🧪 [DRY RUN] TradeLog 디버그 후 - 누적 PNL: {trade_log.realized_pnl}, calculated roi_pct: {trade_log.roi_pct}"
                             )
                         else:
                             logger.warning(
@@ -1164,14 +1240,25 @@ class ExecutionEngine:
                 await session.commit()
 
             await notifier.send_message(
-                f"🧪 [DRY RUN] 포지션 가상 청산 완료\n[{symbol}]\n"
+                f"🧪 [DRY RUN] 포지션 가상 {'부분 ' if partial else ''}청산 완료\n[{symbol}]\n"
                 f"종료가: {close_price:.4f}\n"
-                f"실현손익(PnL): {realized_pnl:.4f} USDT\n"
+                f"금회 수익: {realized_pnl:.4f} USDT\n"
                 f"사유: {reason}"
             )
 
-            if symbol in self.active_positions:
-                del self.active_positions[symbol]
+            if not partial:
+                if symbol in self.active_positions:
+                    del self.active_positions[symbol]
+            else:
+                # 1차 익절 완료 시 수량 절반으로 줄이고 플래그 세팅
+                if symbol in self.active_positions:
+                    self.active_positions[symbol]["amount"] *= (
+                        1 - settings.PARTIAL_TP_RATIO
+                    )
+                    self.active_positions[symbol]["is_partial_tp_done"] = True
+                    logger.info(
+                        f"🧪 [DRY RUN] {symbol} 1차 익절 완료. 잔량 {self.active_positions[symbol]['amount']} 추적 계속."
+                    )
 
         except Exception as e:
             logger.error(f"[{symbol}] 가상 청산 처리 중 에러: {e}")

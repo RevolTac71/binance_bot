@@ -75,7 +75,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "max_dir     동일 방향 제한 (2)\n\n"
         "⚙️ 기타\n"
         "mode        dry 또는 real\n"
-        "time_exit   최대 보유 분 (90)\n\n"
+        "time_exit   최대 보유 분 (90)\n"
+        "htf_1h / htf_15m  HTF 분석 타임프레임 (예: 1h 15m)\n\n"
         "🔧 종목 제어\n"
         "/ignore [코인] — 블랙리스트 추가\n"
         "/allow  [코인] — 블랙리스트 제거\n"
@@ -288,6 +289,8 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "leverage": ("LEVERAGE", int, "LEVERAGE"),
             "timeframe": ("TIMEFRAME", str, "TIMEFRAME"),
             "time_exit": ("TIME_EXIT_MINUTES", int, "TIME_EXIT_MINUTES"),
+            "htf_1h": ("HTF_TIMEFRAME_1H", str, "HTF_TIMEFRAME_1H"),
+            "htf_15m": ("HTF_TIMEFRAME_15M", str, "HTF_TIMEFRAME_15M"),
             "atr_ratio": ("ATR_RATIO_MULT", float, "ATR_RATIO_MULT"),
             "atr_long": ("ATR_LONG_LEN", int, "ATR_LONG_LEN"),
             "chandelier": ("CHANDELIER_MULT", float, "CHANDELIER_MULT"),
@@ -425,8 +428,8 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update_env_variable(env_key, str(new_val))
 
         restart_notice = ""
-        if key in ("timeframe", "htf_1h", "htf_15m"):
-            restart_notice = f"\n⚠️ {key} 변경 시 /restart 필요!"
+        if key in ("timeframe", "htf_1h", "htf_15m", "mode"):
+            restart_notice = f"\n⚠️ {key} 변경 시 /restart 권장!"
 
         await update.message.reply_text(
             f"✅ [{key.upper()}] 변경 완료\n"

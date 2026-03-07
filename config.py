@@ -8,9 +8,9 @@ import urllib.parse
 import threading
 import requests
 
-# Load environment variables
+# Load environment variables (override=True를 통해 .env 파일의 수정사항이 항상 우선 적용되도록 함)
 dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
-load_dotenv(dotenv_path)
+load_dotenv(dotenv_path, override=True)
 
 
 def update_env_variable(key: str, value: str):
@@ -23,9 +23,21 @@ def update_env_variable(key: str, value: str):
         if not os.path.exists(dotenv_path):
             with open(dotenv_path, "a", encoding="utf-8") as f:
                 pass
-        set_key(dotenv_path, key, str(value))
+
+        # set_key를 사용하여 .env 파일 업데이트
+        success = set_key(dotenv_path, key, str(value))
+
+        if success:
+            logger.info(
+                f"💾 [Persistence] 환경변수 '{key}' 가 {value}로 영구 저장되었습니다."
+            )
+        else:
+            logger.warning(
+                f"⚠️ [Persistence] '{key}' 저장 중 경고가 발생했을 수 있습니다 (파일 경로: {dotenv_path})"
+            )
+
     except Exception as e:
-        logger.error(f".env 파일 갱신 실패 ({key}): {e}")
+        logger.error(f"❌ [Persistence] .env 파일 갱신 실패 ({key}): {e}")
 
 
 # KST Timezone 설정
