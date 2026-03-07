@@ -755,24 +755,38 @@ async def chandelier_monitoring_loop(
                     logger.error(f"[Chandelier Exit] {symbol} 청산 중 에러: {e}")
 
 
-# [V16.3] 동적 심볼 갱신을 위한 웹소켓 재연결 플래그
+# [V18] 동적 심볼 갱신을 위한 웹소켓 재연결 플래그 및 즉시 새로고침 이벤트
 ws_reconnect_flag = False
+refresh_event = asyncio.Event()
 
 
 async def target_refresh_loop(pipeline: DataPipeline, execution: ExecutionEngine):
     """
     12시간(오프셋 기준)마다 Top Volume 15종목을 갱신하고 WebSocket을 재연결합니다.
+    사용자의 수동 요청(refresh_event)이 있을 경우 즉시 수행합니다.
     """
-    global ws_reconnect_flag, df_map, htf_df_1h, htf_df_15m, cvd_data, imbalance_history
+    global \
+        ws_reconnect_flag, \
+        refresh_event, \
+        df_map, \
+        htf_df_1h, \
+        htf_df_15m, \
+        cvd_data, \
+        imbalance_history
 
     while True:
         wait_sec = calc_next_refresh_seconds()
         logger.info(
-            f"⏳ [Target Refresh] 다음 심볼 갱신까지 {wait_sec / 3600:.1f} 시간 대기합니다."
+            f"⏳ [Target Refresh] 다음 정기 심볼 갱신까지 {wait_sec / 3600:.1f} 시간 대기합니다. (수동 요청 대기 중)"
         )
-        await asyncio.sleep(wait_sec)
 
-        logger.info("🔄 [Target Refresh] 동적 심볼 갱신 타이머 작동!")
+        try:
+            # 정기 스케줄까지 대기하되, 수동 이벤트 발생 시 즉시 깨어남
+            await asyncio.wait_for(refresh_event.wait(), timeout=wait_sec)
+            logger.info("⚡ [Target Refresh] 수동 즉시 새로고침 요청 감지!")
+            refresh_event.clear()
+        except asyncio.TimeoutError:
+            logger.info("🔄 [Target Refresh] 정기 심볼 갱신 타이머 작동!")
 
         # 1. 새 종목 리스트 추출
         base_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
@@ -986,7 +1000,7 @@ async def main():
     try:
         await execution.sync_state_from_exchange()
 
-        app = setup_telegram_bot(execution)
+        app = setup_telegram_bot(execution, refresh_event)
         if app:
             await app.initialize()
             await app.start()

@@ -65,6 +65,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/resume — 일시 중단된 진입을 다시 시작\n"
             "/panic  — 모든 포지션 시장가 정리 후 봇 정지\n"
             "/restart — 봇 프로세스 강제 재시작 (업데이트 적용 등)\n"
+            "/refresh — 즉시 상위 거래량 종목 새로고침 수행\n"
             "/ignore [코인] — 해당 종목 진입 타겟에서 제외\n"
             "/allow  [코인] — 블랙리스트에서 종목 제거\n"
             "/close  [코인] — 해당 종목만 시장가 즉시 청산"
@@ -632,7 +633,21 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
-def setup_telegram_bot(execution_engine):
+async def refresh_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_admin(update):
+        return
+
+    refresh_event = context.bot_data.get("refresh_event")
+    if refresh_event:
+        refresh_event.set()
+        await update.message.reply_text(
+            "🔄 즉시 종목 새로고침 신호를 보냈습니다. 곧 반영됩니다."
+        )
+    else:
+        await update.message.reply_text("❌ 새로고침 이벤트를 찾을 수 없습니다.")
+
+
+def setup_telegram_bot(execution_engine, refresh_event=None):
     """
     python-telegram-bot Application 인스턴스를 빌드하고 핸들러를 붙여 반환합니다.
     """
@@ -647,6 +662,7 @@ def setup_telegram_bot(execution_engine):
 
     application = ApplicationBuilder().token(token).build()
     application.bot_data["execution"] = execution_engine
+    application.bot_data["refresh_event"] = refresh_event
 
     application.add_handler(CommandHandler("start", start_cmd))
     application.add_handler(CommandHandler("help", help_cmd))
@@ -660,6 +676,7 @@ def setup_telegram_bot(execution_engine):
     application.add_handler(CommandHandler("ignore", ignore_cmd))
     application.add_handler(CommandHandler("allow", allow_cmd))
     application.add_handler(CommandHandler("close", close_cmd))
+    application.add_handler(CommandHandler("refresh", refresh_cmd))
 
     logger.info("텔레그램 Interactive 커맨더(Poller) 세팅이 완료되었습니다.")
     return application
