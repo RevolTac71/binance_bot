@@ -307,6 +307,13 @@ class ExecutionEngine:
             )
             return False
 
+        # [V18.2] 중복 진입 방어 강화: 이미 Chasing 시도 중이라면 중복 요청 거부
+        if symbol in self.pending_entries:
+            logger.info(
+                f"[{symbol}] 이미 Chasing 진입 시도 중(Pending)입니다. 중복 요청을 무시합니다."
+            )
+            return False
+
         # 포지션이 이미 존재하면 추가 진입 억제
         if symbol in self.active_positions:
             logger.info(f"[{symbol}] 이미 활성 포지션이 존재합니다. 진입 생략.")
@@ -799,6 +806,7 @@ class ExecutionEngine:
                 {
                     "tp_order_id": str(tp_order_id) if tp_order_id else None,
                     "sl_order_id": str(sl_order_id) if sl_order_id else None,
+                    "is_partial_tp_done": False,
                 }
             )
             self.active_positions[symbol] = entry_info
@@ -946,10 +954,10 @@ class ExecutionEngine:
                     try:
                         trades = await self.exchange.fetch_my_trades(symbol, limit=10)
                         partial_pnl = 0.0
-                        # 최근 5초 이내의 실현 손익 합산
+                        # 최근 60초 이내의 실현 손익 합산 (네트워크/체결 지연 방어)
                         now_ts = self.exchange.milliseconds()
                         for t in reversed(trades):
-                            if now_ts - t["timestamp"] < 10000:  # 최근 10초 이내 체결
+                            if now_ts - t["timestamp"] < 60000:  # 최근 60초 이내 체결
                                 partial_pnl += float(
                                     t.get("info", {}).get("realizedPnl", 0.0)
                                 )
@@ -971,16 +979,98 @@ class ExecutionEngine:
                                     trade_log.realized_pnl = (
                                         trade_log.realized_pnl or 0.0
                                     ) + partial_pnl
-                                    await session.commit()
-                                    logger.info(
-                                        f"💰 [{symbol}] 부분 익절 수익 누적 완료: +{partial_pnl:.4f} USDT (누적: {trade_log.realized_pnl:.4f})"
-                                    )
-                                    # 메모리상 수량 업데이트
+                                    # 메모리상 수량 업데이트 및 분할 익절 플래그 세팅 (모의투자와 알고리즘 통일)
                                     self.active_positions[symbol]["amount"] = (
                                         current_contracts
                                     )
+                                    self.active_positions[symbol][
+                                        "is_partial_tp_done"
+                                    ] = True
+
+                                    # [V18.2] Trade 테이블에 분할 익절 내역 기록 추가 (모의투자와 동기화)
+                                    new_trade = Trade(
+                                        timestamp=(
+                                            datetime.utcnow() + timedelta(hours=9)
+                                        ),
+                                        action="PARTIAL_CLOSED",
+                                        symbol=symbol,
+                                        price=self.active_positions[symbol].get(
+                                            "tp_price", 0.0
+                                        ),
+                                        quantity=prev_qty - current_contracts,
+                                        reason="분할 익절(Partial TP) 체결 감지",
+                                        realized_pnl=partial_pnl,
+                                        dry_run=False,
+                                    )
+                                    session.add(new_trade)
+                                    await session.commit()
+
+                                    logger.info(
+                                        f"💰 [{symbol}] 부분 익절 수익 누적 및 Trade 기록 완료: +{partial_pnl:.4f} USDT (누적: {trade_log.realized_pnl:.4f})"
+                                    )
                     except Exception as p_err:
                         logger.error(f"[{symbol}] 부분 익절 수익 누정 중 에러: {p_err}")
+
+            # [V18.2] REAL 모드 Fail-safe 가격 감시 (모의투자와 알고리즘 통일)
+            # 거래소 TP/SL 주문이 없거나 취소된 경우를 대비한 봇 수준의 이중 안전장치
+            if not settings.DRY_RUN and isinstance(self.active_positions[symbol], dict):
+                try:
+                    ticker = await self.exchange.fetch_ticker(symbol)
+                    current_price = float(ticker.get("last", 0.0))
+                    pos_info = self.active_positions[symbol]
+                    tp_price = pos_info.get("tp_price", 0.0)
+                    sl_price = pos_info.get("sl_price", 0.0)
+                    is_partial_tp_done = pos_info.get("is_partial_tp_done", False)
+
+                    # 1. Fail-safe TP (분할 익절)
+                    if pos_info.get("signal") == "LONG":
+                        if (
+                            not is_partial_tp_done
+                            and tp_price > 0
+                            and current_price >= tp_price
+                        ):
+                            logger.warning(
+                                f"🚨 [{symbol}] REAL Fail-safe TP 감지! 시장가 분할 청산을 시도합니다."
+                            )
+                            await self.close_position_market(
+                                symbol,
+                                amount=pos_info["amount"] * settings.PARTIAL_TP_RATIO,
+                                reason="Fail-safe Partial TP",
+                            )
+                        elif sl_price > 0 and current_price <= sl_price:
+                            logger.warning(
+                                f"🚨 [{symbol}] REAL Fail-safe SL 감지! 시장가 전량 청산을 시도합니다."
+                            )
+                            await self.close_position_market(
+                                symbol,
+                                amount=pos_info["amount"],
+                                reason="Fail-safe Full SL",
+                            )
+                    elif pos_info.get("signal") == "SHORT":
+                        if (
+                            not is_partial_tp_done
+                            and tp_price > 0
+                            and current_price <= tp_price
+                        ):
+                            logger.warning(
+                                f"🚨 [{symbol}] REAL Fail-safe TP 감지! 시장가 분할 청산을 시도합니다."
+                            )
+                            await self.close_position_market(
+                                symbol,
+                                amount=pos_info["amount"] * settings.PARTIAL_TP_RATIO,
+                                reason="Fail-safe Partial TP",
+                            )
+                        elif sl_price > 0 and current_price >= sl_price:
+                            logger.warning(
+                                f"🚨 [{symbol}] REAL Fail-safe SL 감지! 시장가 전량 청산을 시도합니다."
+                            )
+                            await self.close_position_market(
+                                symbol,
+                                amount=pos_info["amount"],
+                                reason="Fail-safe Full SL",
+                            )
+                except Exception as fs_err:
+                    logger.error(f"[{symbol}] REAL Fail-safe 감시 중 에러: {fs_err}")
 
             if current_contracts == 0.0:
                 try:
@@ -1159,6 +1249,99 @@ class ExecutionEngine:
         # 처리 완료된 포지션은 메모리 감시열에서 제거
         for sym in symbols_to_remove:
             del self.active_positions[sym]
+
+    async def close_position_market(
+        self, symbol: str, amount: float = 0.0, reason: str = "시장가 청산"
+    ):
+        """
+        [V18.2] 통합 시장가 청산 메서드 (REAL / DRY_RUN 공통)
+        전량 또는 부분 전량을 시장가로 즉시 매도합니다.
+        """
+        if symbol not in self.active_positions:
+            logger.warning(f"[{symbol}] 이미 종료된 포지션이라 청산을 생략합니다.")
+            return
+
+        if settings.DRY_RUN:
+            # DRY_RUN은 기존 가상 청산 메서드로 위임
+            is_partial = False
+            if amount > 0:
+                pos_info = self.active_positions.get(symbol)
+                if isinstance(pos_info, dict):
+                    full_qty = pos_info.get("amount", 0.0)
+                    if amount < full_qty * 0.9:  # 대략적으로 부분인지 판별
+                        is_partial = True
+
+            await self.close_position_virtually(
+                symbol, reason=reason, partial=is_partial
+            )
+            return
+
+        # --- REAL 모드 실제 주문 ---
+        try:
+            pos_info = self.active_positions.get(symbol)
+            if not isinstance(pos_info, dict):
+                logger.error(
+                    f"[{symbol}] 포지션 정보가 딕셔너리가 아닙니다. 청산 불가."
+                )
+                return
+
+            side = pos_info.get("signal", "LONG")
+            exit_side = "sell" if side == "LONG" else "buy"
+
+            # 1. 잔여 주문 취소
+            try:
+                await self.exchange.cancel_all_orders(symbol)
+            except Exception as e:
+                logger.warning(f"[{symbol}] 청산 전 주문 취소 실패(무시): {e}")
+
+            # 2. 수량 확정 (전달된 amount가 없으면 전체 수량)
+            final_amount = amount
+            if final_amount <= 0:
+                positions = await self.exchange.fetch_positions([symbol])
+                for p in positions:
+                    if p["symbol"] == symbol and float(p.get("contracts", 0)) > 0:
+                        final_amount = float(p["contracts"])
+                        break
+
+            if final_amount <= 0:
+                logger.warning(f"[{symbol}] 청산할 수량이 0입니다. 종료.")
+                return
+
+            # 3. 시장가 주문 (Reduce-Only)
+            await self.exchange.create_order(
+                symbol=symbol,
+                type="market",
+                side=exit_side,
+                amount=final_amount,
+                params={"reduceOnly": True},
+            )
+
+            logger.info(
+                f"🚀 [{symbol}] {reason} 시장가 주문 완료. (수량: {final_amount})"
+            )
+
+            # 4. DB 기록 (부분 청산인 경우 Trade 테이블만, 전량인 경우 루프에서 처리)
+            # (여기서는 주문만 날리고, 실제 메모리 정리는 check_active_positions_state 폴링에 맡김)
+            async with AsyncSessionLocal() as session:
+                new_trade = Trade(
+                    timestamp=(datetime.utcnow() + timedelta(hours=9)),
+                    action="CLOSED" if amount <= 0 else "PARTIAL_CLOSED",
+                    symbol=symbol,
+                    price=0.0,  # 나중에 싱크됨
+                    quantity=final_amount,
+                    reason=reason,
+                    realized_pnl=0.0,
+                    dry_run=False,
+                )
+                session.add(new_trade)
+                await session.commit()
+
+            await notifier.send_message(
+                f"🔴 <b>시장가 청산 발동</b>\n[{symbol}] {reason}\n수량: {final_amount}\n체결 감지 루프에서 최종 정산 대기 중."
+            )
+
+        except Exception as e:
+            logger.error(f"[{symbol}] 시장가 청산 중 치명적 에러: {e}")
 
     async def close_position_virtually(
         self,
@@ -1365,71 +1548,12 @@ class ExecutionEngine:
             exit_side = "sell" if entry_side == "buy" else "buy"
 
             try:
-                # 1. 찌꺼기 펜딩 주문(조건부 SL 포함) 일괄 취소
-                await self.exchange.cancel_all_orders(symbol)
-
-                raw_sym = self.exchange.market(symbol)["id"]
-                algo_orders = await self.exchange.request(
-                    path="openAlgoOrders",
-                    api="fapiPrivate",
-                    method="GET",
-                    params={"symbol": raw_sym},
+                # [V18.2] 통합 시장가 청산 메서드 호출 (주문 취소 및 REAL/DRY 분기 처리 포함)
+                await self.close_position_market(
+                    symbol,
+                    amount=amount,
+                    reason=f"Time Exit ({wait_minutes}분 모멘텀 이탈)",
                 )
-                algo_items = (
-                    algo_orders.get("orders", algo_orders)
-                    if isinstance(algo_orders, dict)
-                    else algo_orders
-                )
-                for algo in algo_items:
-                    await self.exchange.request(
-                        path="algoOrder",
-                        api="fapiPrivate",
-                        method="DELETE",
-                        params={"symbol": raw_sym, "algoId": algo.get("algoId")},
-                    )
-
-                # 2. 시장가 시장 던지기
-                if not settings.DRY_RUN:
-                    await self.exchange.create_order(
-                        symbol=symbol,
-                        type="market",
-                        side=exit_side,
-                        amount=amount,
-                        params={"reduceOnly": True},
-                    )
-
-                    # DB 기록 (실제 거래 시)
-                    async with AsyncSessionLocal() as session:
-                        new_trade = Trade(
-                            timestamp=(datetime.utcnow() + timedelta(hours=9)),
-                            action="TIME_EXIT",
-                            symbol=symbol,
-                            price=0.0,
-                            quantity=amount,
-                            reason=f"TIME_EXIT ({wait_minutes}분 모멘텀 이탈) 탈출",
-                            realized_pnl=0.0,  # 정확한 PNL은 거래소 싱크 통해 보정됨
-                            dry_run=False,
-                            params=self._snapshot_params(),
-                        )
-                        session.add(new_trade)
-                        await session.commit()
-
-                    # 알림 발송
-                    await notifier.send_message(
-                        f"🚨 <b>TIME EXIT 발동</b> 🚨\n[{symbol}] {wait_minutes}분 경과로 포지션 스크래치(강제 시장가 청산) 시도."
-                    )
-
-                    if symbol in self.active_positions:
-                        del self.active_positions[symbol]
-
-                else:
-                    # [V18 DRY_RUN] 가상 청산 메서드로 위임하여 PNL 계산 및 통합 DB 반영
-                    logger.info(
-                        f"🧪 [DRY RUN] {symbol} Time Exit 가상 시장가 탈출을 시도합니다."
-                    )
-                    await self.close_position_virtually(
-                        symbol, reason=f"Time Exit ({wait_minutes}분 모멘텀 이탈)"
-                    )
 
             except Exception as e:
                 logger.error(f"[{symbol}] Time Exit 탈출 로직 중 에러: {e}")

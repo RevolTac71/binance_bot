@@ -255,9 +255,8 @@ async def process_closed_kline(
     if symbol not in df_map:
         return
 
-    # 이미 활성 포지션 처리 중이거나 대기 중이면 생략
-    if symbol in execution.active_positions or symbol in execution.pending_entries:
-        return
+    # [V18.2] 데이터 업데이트는 포지션 유무와 상관없이 지속 (지표 연속성 확보)
+    # 진입 체크만 하단에서 필터링합니다.
 
     try:
         new_ts = int(kline["t"])
@@ -433,6 +432,10 @@ async def process_closed_kline(
                     hft_pipe.trade_buffer.get(raw_sym, [])
                 ),  # 현재 쌓여있는 틱 갯수 활용
             }
+
+        # 3. [V18.1] 신규 진입 필터 (데이터 업데이트 이후 수행)
+        if symbol in execution.active_positions or symbol in execution.pending_entries:
+            return
 
         decision = strategy.check_entry(
             symbol=symbol,
@@ -665,11 +668,16 @@ async def chandelier_monitoring_loop(
 
             # 실시간 현재가
             curr_price = float(ticker["last"])
-            # 백업용으로 등록 시의 ATR 사용 (실시간 ATR 계산 우회)
-            curr_atr = pos.get("atr", curr_price * 0.005)
+            # [V18.2] 실시간 ATR 추출 (df_map에서 최신값 가져오기)
+            # 3분봉 데이터프레임에서 최신 ATR_14 컬럼 확보
+            df_curr = df_map.get(symbol)
+            if df_curr is not None and "ATR_14" in df_curr.columns:
+                curr_atr = float(df_curr["ATR_14"].iloc[-1])
+            else:
+                # 백업용으로 등록 시의 ATR 사용
+                curr_atr = pos.get("atr", curr_price * 0.005)
 
             # 샹들리에 손절선 갱신 + 돌파 여부 확인
-            # 실시간 체크이므로 고가/저가/현재가를 모두 curr_price로 동일하게 취급하여 갱신합니다.
             ce_result = strategy.check_chandelier_exit(
                 symbol=symbol,
                 portfolio=portfolio,
@@ -696,53 +704,9 @@ async def chandelier_monitoring_loop(
                             f"사이드={close_side}, 손절선={stop_price:.4f}"
                         )
 
-                        if not settings.DRY_RUN:
-                            # 1. 잔여 TP/SL 주문 일괄 취소
-                            try:
-                                await execution.exchange.cancel_all_orders(symbol)
-                            except Exception as cancel_err:
-                                logger.warning(
-                                    f"[Chandelier Exit] {symbol} 잔여 주문 취소 실패(무시): {cancel_err}"
-                                )
-
-                            # 2. reduce-only 시장가 청산 주문 발송
-                            pos_info = execution.active_positions.get(symbol, {})
-                            # 수량은 execution 내부에서 관리되지 않으므로
-                            # 거래소에서 직접 조회하여 처리
-                            positions = await execution.exchange.fetch_positions(
-                                [symbol]
-                            )
-                            close_amount = 0.0
-                            for p in positions:
-                                if (
-                                    p["symbol"] == symbol
-                                    and float(p.get("contracts", 0)) > 0
-                                ):
-                                    close_amount = float(p["contracts"])
-                                    break
-
-                            if close_amount > 0:
-                                await execution.exchange.create_order(
-                                    symbol=symbol,
-                                    type="market",
-                                    side=close_side,
-                                    amount=close_amount,
-                                    params={"reduceOnly": True},
-                                )
-                            else:
-                                logger.warning(
-                                    f"[Chandelier Exit] {symbol} 청산 수량 조회 실패. 스킵."
-                                )
-                        else:
-                            # 🧪 [DRY RUN] 가상 청산 및 내부 상태 정리 (무한 루프 방지)
-                            await execution.close_position_virtually(
-                                symbol, reason="Chandelier Exit"
-                            )
-
-                        await notifier.send_message(
-                            f"🔴 <b>Chandelier Exit 발동</b>\n"
-                            f"[{symbol}] 현재가={curr_price:.4f} | 손절선={ce_result['chandelier_stop']:.4f}\n"
-                            f"트레일링 스탑 돌파로 시장가 청산 완료."
+                        # [V18.2] 통합 청산 메서드 호출 (REAL/DRY 및 주문취소/DB기록 일괄 처리)
+                        await execution.close_position_market(
+                            symbol, reason="Chandelier Exit"
                         )
 
                         # 포지션 트래킹 삭제 로직 제거 (V16.5)
