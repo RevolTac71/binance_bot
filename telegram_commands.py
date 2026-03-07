@@ -41,48 +41,88 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
-    msg = (
-        "📖 [V18 자동매매 봇 전체 명령어]\n\n"
-        "── 봇 제어 ──\n"
-        "/status — 봇 상태·포지션·잔고 요약\n"
-        "/pause — 신규 진입 일시정지\n"
-        "/resume — 일시정지 해제\n"
-        "/params — 현재 설정된 봇의 모든 파라미터 조회\n"
-        "/panic — 비상! 전량 시장가 청산 후 정지\n"
-        "/restart — 봇 프로세스 강제 재부팅\n\n"
-        "── 파라미터 변경: /setparam [키] [값] ──\n\n"
-        "📈 진입 스코어링 (V18)\n"
-        f"min_score   최소 진입 점수 (int, 현재 {settings.MIN_ENTRY_SCORE})\n"
-        "adx_boost   추세 가점용 ADX 백분위 (float, 70)\n"
-        "adx_window  백분위수 윈도우 (int, 100)\n"
-        "rsi_1 / rsi_2  RSI 1/2점 임계값 (예: 30 15)\n"
-        "macd_1 / macd_2 / macd_4 MACD 1/2/4점 임계값\n"
-        "cvd_1 / cvd_2  CVD 임계값 (예: 70 85)\n"
-        "vol_1 / vol_2  볼륨 Z-Score (예: 1.5 2.5)\n"
-        "oi_1 / oi_2    OI 변화율 백분위 (예: 70 85)\n"
-        "tick_1 / tick_2 체결 활성도 백분위 (예: 70 85)\n\n"
-        "💰 체결 & 사이징\n"
-        "risk        증거금 비율 (float, 0.01)\n"
-        "leverage    레버리지 배수 (int)\n"
-        "kelly       Kelly 사이징 (on/off)\n"
-        "chasing     지정가 대기 초 (float, 5.0)\n\n"
-        "🛡️ 청산 & 리스크\n"
-        "sl / tp     SL/TP 배수 (ATR 대비)\n"
-        "partial_tp  분할 익절 비율 (0.5)\n"
-        "be_trigger  본절 발동 배수 (1.5)\n"
-        "cooldown    재진입 대기 분 (15)\n"
-        "max_trades  최대 동시 진입 (3)\n"
-        "max_dir     동일 방향 제한 (2)\n\n"
-        "⚙️ 기타\n"
-        "mode        dry 또는 real\n"
-        "time_exit   최대 보유 분 (90)\n"
-        "htf_1h / htf_15m  HTF 분석 타임프레임 (예: 1h 15m)\n\n"
-        "🔧 종목 제어\n"
-        "/ignore [코인] — 블랙리스트 추가\n"
-        "/allow  [코인] — 블랙리스트 제거\n"
-        "/close  [코인] — 시장가 강제 청산\n"
-    )
-    await update.message.reply_text(msg)
+
+    args = context.args
+    category = args[0].lower() if args else None
+
+    if not category:
+        msg = (
+            "📖 [V18 텔레그램 도움말 센터]\n"
+            "원하시는 카테고리를 선택해 상세 정보를 확인하세요.\n\n"
+            "── 기본 명령어 ──\n"
+            "👉 `/help cmd` : 봇 제어 및 상태 확인 명령어\n"
+            "👉 `/help score` : V18 스코어링 및 임계값 설정\n"
+            "👉 `/help risk` : 손절/익절 및 리스크 관리 설정\n"
+            "👉 `/help trade` : 체결, 사이징, 레버리지 설정\n\n"
+            "💡 팁: `/setparam [키] [값]` 으로 즉시 수정 가능합니다."
+        )
+    elif category == "cmd":
+        msg = (
+            "🤖 [봇 제어 명령어 목록]\n\n"
+            "/status — 현재 상태, 포지션, 잔고 요약\n"
+            "/params — 현재 봇에 설정된 모든 파라미터 값 조회\n"
+            "/pause  — 새로운 진입을 일시 중단\n"
+            "/resume — 일시 중단된 진입을 다시 시작\n"
+            "/panic  — 모든 포지션 시장가 정리 후 봇 정지\n"
+            "/restart — 봇 프로세스 강제 재시작 (업데이트 적용 등)\n"
+            "/ignore [코인] — 해당 종목 진입 타겟에서 제외\n"
+            "/allow  [코인] — 블랙리스트에서 종목 제거\n"
+            "/close  [코인] — 해당 종목만 시장가 즉시 청산"
+        )
+    elif category == "score":
+        msg = (
+            "📈 [V18 진입 스코어링 파라미터]\n"
+            "진입 결정을 위한 주요 지표의 임계값입니다.\n\n"
+            "── 통합 설정 ──\n"
+            "min_score   최소 진입 점수 (현재 7)\n"
+            "adx_boost   추세 가점용 ADX 백분위 (70)\n"
+            "adx_window  백분위 계산용 윈도우 (100)\n\n"
+            "── 상세 임계값 (1점 / 2점 / 4점 순) ──\n"
+            "macd_1/2/4  MACD 히스토그램 백분위\n"
+            "rsi_1/2     RSI 과매수/과매도 기준\n"
+            "cvd_1/2     CVD 기울기 백분위 기준\n"
+            "vol_1/2     거래량 Z-Score (float, 1.5 2.5)\n"
+            "oi_1/2      OI(미결제약정) 변화율 백분위\n"
+            "tick_1/2    Tick 활성도(수량) 백분위\n"
+            "imbal_1/2   오더북 불균형(Imbalance) 기준\n"
+            "nofi_1/2     OFI(Order Flow Imbalance) 기준\n"
+            "buy_1/2     시장가 매수 비중 임계값"
+        )
+    elif category == "trade":
+        msg = (
+            "💰 [체결 및 사이징 설정]\n"
+            "베팅 비중과 체결 방식에 관한 설정입니다.\n\n"
+            "risk        베팅 비중 (계좌 대비 %, 0.01 = 1%)\n"
+            "leverage    레버리지 배수 (int)\n"
+            "mode        dry(모의) 또는 real(실전)\n"
+            "kelly       켈리 사이징 사용 (on/off)\n"
+            "kelly_min   켈리 계산용 최소 거래수 (20)\n"
+            "kelly_max   켈리 최대 베팅 상한 (0.05)\n"
+            "chasing     지정가 체결 대기 시간 (초)\n"
+            "timeframe   메인 분석 봉 (예: 3m)\n"
+            "htf_1h      장기 분석 봉 (예: 1h)\n"
+            "htf_15m     중기 분석 봉 (예: 15m)"
+        )
+    elif category == "risk":
+        msg = (
+            "🛡️ [청산 및 리스크 관리]\n"
+            "손실 제한 및 수익 확정 관련 설정입니다.\n\n"
+            "sl          Stop Loss 배수 (ATR 대비)\n"
+            "tp          Take Profit 배수 (ATR 대비)\n"
+            "partial_tp  분할 익절 수량 비율 (0.5)\n"
+            "chandelier  추적 손절(Chandelier) 배수\n"
+            "chan_atr    Chandelier 계산 ATR 기간 (22)\n"
+            "be_trigger  본절가(BE) 전환 트리거 배수\n"
+            "be_profit   BE 전환 시 보존할 수익 배수\n"
+            "cooldown    진입 실패 후 대기 분 (15)\n"
+            "max_trades  최대 동시 포지션 개수 (3)\n"
+            "max_dir     동일 방향 최대 개수 (2)\n"
+            "time_exit   자동 시간 청산 기준 (분)"
+        )
+    else:
+        msg = "❌ 알 수 없는 카테고리입니다. `/help`를 입력해 목록을 확인하세요."
+
+    await update.message.reply_text(msg, parse_mode="Markdown")
 
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
