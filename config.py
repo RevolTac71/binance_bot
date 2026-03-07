@@ -118,20 +118,45 @@ class Config:
 
     # [V18] 세부 지표 스코어링 기준 (전역 파라미터화)
     # 각 지표에 대해 +1점, +2점을 부여하는 임계값 기준 (dict)
+    # [V18] 세부 지표 스코어링 기준 (전역 파라미터화 및 영속화)
     SCORING_THRESHOLDS = {
         "macd_pctl": {
-            "+1": 70,
-            "+2": 80,
-            "+4": 90,
-        },  # v18: 15m MACD 가중치 강화 (상위 10% 시 4점)
-        "cvd_pctl": {"+1": 70, "+2": 85},
-        "imbalance": {"+1": 65, "+2": 80},
-        "nofi_pctl": {"+1": 70, "+2": 85},
-        "rsi": {"+1": 30, "+2": 15},
-        "buy_ratio": {"+1": 25, "+2": 10},
-        "vol_zscore": {"+1": 1.5, "+2": 2.5},
-        "oi_pctl": {"+1": 70, "+2": 85},  # 신규: 미결제약정 변화 (반전)
-        "tick_pctl": {"+1": 70, "+2": 85},  # 신규: 체결 활성도 (추세)
+            "+1": int(os.getenv("SCORE_MACD_1", "70")),
+            "+2": int(os.getenv("SCORE_MACD_2", "80")),
+            "+4": int(os.getenv("SCORE_MACD_4", "90")),
+        },
+        "cvd_pctl": {
+            "+1": int(os.getenv("SCORE_CVD_1", "70")),
+            "+2": int(os.getenv("SCORE_CVD_2", "85")),
+        },
+        "imbalance": {
+            "+1": int(os.getenv("SCORE_IMBAL_1", "65")),
+            "+2": int(os.getenv("SCORE_IMBAL_2", "80")),
+        },
+        "nofi_pctl": {
+            "+1": int(os.getenv("SCORE_NOFI_1", "70")),
+            "+2": int(os.getenv("SCORE_NOFI_2", "85")),
+        },
+        "rsi": {
+            "+1": int(os.getenv("SCORE_RSI_1", "30")),
+            "+2": int(os.getenv("SCORE_RSI_2", "15")),
+        },
+        "buy_ratio": {
+            "+1": int(os.getenv("SCORE_BUY_1", "25")),
+            "+2": int(os.getenv("SCORE_BUY_2", "10")),
+        },
+        "vol_zscore": {
+            "+1": float(os.getenv("SCORE_VOL_1", "1.5")),
+            "+2": float(os.getenv("SCORE_VOL_2", "2.5")),
+        },
+        "oi_pctl": {
+            "+1": int(os.getenv("SCORE_OI_1", "70")),
+            "+2": int(os.getenv("SCORE_OI_2", "85")),
+        },
+        "tick_pctl": {
+            "+1": int(os.getenv("SCORE_TICK_1", "70")),
+            "+2": int(os.getenv("SCORE_TICK_2", "85")),
+        },
     }
 
     # ── V17 체결 & 사이징 파라미터 ────────────────────────────────────────

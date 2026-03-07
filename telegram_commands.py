@@ -56,7 +56,11 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "adx_boost   추세 가점용 ADX 백분위 (float, 70)\n"
         "adx_window  백분위수 윈도우 (int, 100)\n"
         "rsi_1 / rsi_2  RSI 1/2점 임계값 (예: 30 15)\n"
-        "macd_1 / macd_2 / macd_4 MACD 1/2/4점 임계값\n\n"
+        "macd_1 / macd_2 / macd_4 MACD 1/2/4점 임계값\n"
+        "cvd_1 / cvd_2  CVD 임계값 (예: 70 85)\n"
+        "vol_1 / vol_2  볼륨 Z-Score (예: 1.5 2.5)\n"
+        "oi_1 / oi_2    OI 변화율 백분위 (예: 70 85)\n"
+        "tick_1 / tick_2 체결 활성도 백분위 (예: 70 85)\n\n"
         "💰 체결 & 사이징\n"
         "risk        증거금 비율 (float, 0.01)\n"
         "leverage    레버리지 배수 (int)\n"
@@ -307,25 +311,26 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "kelly_min": ("KELLY_MIN_TRADES", int, "KELLY_MIN_TRADES"),
             "kelly_max": ("KELLY_MAX_FRACTION", float, "KELLY_MAX_FRACTION"),
             # Scoring Thresholds (Custom 키)
-            "macd_1": ("macd_pctl", float, "+1"),
-            "macd_2": ("macd_pctl", float, "+2"),
-            "macd_4": ("macd_pctl", float, "+4"),
-            "cvd_1": ("cvd_pctl", float, "+1"),
-            "cvd_2": ("cvd_pctl", float, "+2"),
-            "imbal_1": ("imbalance", float, "+1"),
-            "imbal_2": ("imbalance", float, "+2"),
-            "nofi_1": ("nofi_pctl", float, "+1"),
-            "nofi_2": ("nofi_pctl", float, "+2"),
-            "rsi_1": ("rsi", float, "+1"),
-            "rsi_2": ("rsi", float, "+2"),
-            "buy_1": ("buy_ratio", float, "+1"),
-            "buy_2": ("buy_ratio", float, "+2"),
-            "vol_1": ("vol_zscore", float, "+1"),
-            "vol_2": ("vol_zscore", float, "+2"),
-            "oi_1": ("oi_pctl", float, "+1"),
-            "oi_2": ("oi_pctl", float, "+2"),
-            "tick_1": ("tick_pctl", float, "+1"),
-            "tick_2": ("tick_pctl", float, "+2"),
+            # Scoring Thresholds (Custom 키: attr_name, cast_fn, env_key)
+            "macd_1": ("macd_pctl", int, "SCORE_MACD_1"),
+            "macd_2": ("macd_pctl", int, "SCORE_MACD_2"),
+            "macd_4": ("macd_pctl", int, "SCORE_MACD_4"),
+            "cvd_1": ("cvd_pctl", int, "SCORE_CVD_1"),
+            "cvd_2": ("cvd_pctl", int, "SCORE_CVD_2"),
+            "imbal_1": ("imbalance", int, "SCORE_IMBAL_1"),
+            "imbal_2": ("imbalance", int, "SCORE_IMBAL_2"),
+            "nofi_1": ("nofi_pctl", int, "SCORE_NOFI_1"),
+            "nofi_2": ("nofi_pctl", int, "SCORE_NOFI_2"),
+            "rsi_1": ("rsi", int, "SCORE_RSI_1"),
+            "rsi_2": ("rsi", int, "SCORE_RSI_2"),
+            "buy_1": ("buy_ratio", int, "SCORE_BUY_1"),
+            "buy_2": ("buy_ratio", int, "SCORE_BUY_2"),
+            "vol_1": ("vol_zscore", float, "SCORE_VOL_1"),
+            "vol_2": ("vol_zscore", float, "SCORE_VOL_2"),
+            "oi_1": ("oi_pctl", int, "SCORE_OI_1"),
+            "oi_2": ("oi_pctl", int, "SCORE_OI_2"),
+            "tick_1": ("tick_pctl", int, "SCORE_TICK_1"),
+            "tick_2": ("tick_pctl", int, "SCORE_TICK_2"),
         }
 
         if key not in mapping:
@@ -357,18 +362,40 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # 스코어링 임계값 딕셔너리 업데이트 처리
-        if "_" in key and mapping[key][0] in settings.SCORING_THRESHOLDS:
-            attr_name, cast_fn, sub_key = mapping[key]
+        if key in (
+            "macd_1",
+            "macd_2",
+            "macd_4",
+            "cvd_1",
+            "cvd_2",
+            "imbal_1",
+            "imbal_2",
+            "nofi_1",
+            "nofi_2",
+            "rsi_1",
+            "rsi_2",
+            "buy_1",
+            "buy_2",
+            "vol_1",
+            "vol_2",
+            "oi_1",
+            "oi_2",
+            "tick_1",
+            "tick_2",
+        ):
+            attr_name, cast_fn, env_key = mapping[key]
+            # sub_key 추출 (+1, +2 등)
+            sub_key = "+" + key.split("_")[1]
             new_val = cast_fn(raw_val)
 
             # settings.SCORING_THRESHOLDS 직접 업데이트
             settings.SCORING_THRESHOLDS[attr_name][sub_key] = new_val
 
-            # .env 파일에도 반영 (중첩 딕셔너리형태이므로 직렬화 고려하거나 주석 처리)
-            # 여기서는 메모리 반영 위주로 처리
+            # .env 파일에도 반영 (영구 저장)
+            update_env_variable(env_key, str(new_val))
 
             await update.message.reply_text(
-                f"✅ [스코어 기준] {attr_name}.{sub_key} → {new_val} 설정 완료"
+                f"✅ [스코어 기준] {key}({env_key}) → {new_val} 설정 및 저장 완료"
             )
             return
 
