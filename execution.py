@@ -331,6 +331,14 @@ class ExecutionEngine:
             return False
 
         try:
+            # [HOTFIX] 진입 시도 시작 시 즉각 pending_entries에 등록하여 수동진입 오탐지 방지
+            self.pending_entries[symbol] = {
+                "side": side,
+                "amount": amount,
+                "reason": reason,
+                "timestamp": time.time(),
+            }
+
             logger.info(
                 f"[{symbol}] 스마트 지정가(Chasing) 진입 시도. "
                 f"수량: {amount} (DRY_RUN: {settings.DRY_RUN})"
@@ -523,6 +531,10 @@ class ExecutionEngine:
             logger.error(f"[{symbol}] 시장가 진입 로직 처리 중 예외 발생: {e}")
             # TP/SL 생성 도중 에러가 나더라도 포지션은 체결되어 있으므로 봇 루프에서 관리되도록 True 반환
             return True
+        finally:
+            # 진입 프로세스(성공/실패/예외 전구간) 종료 후 대기열에서 제거
+            if symbol in self.pending_entries:
+                self.pending_entries.pop(symbol, None)
 
     async def cancel_pending_order(
         self, symbol: str, reason: str = "취소 요청"
@@ -662,9 +674,12 @@ class ExecutionEngine:
                 tp_amount_final = tp_amount
 
             if not settings.DRY_RUN:
+                tp_order_id = None
+                sl_order_id = None
+
                 if tp_amount_final > 0:
                     try:
-                        await self.exchange.create_order(
+                        tp_order = await self.exchange.create_order(
                             symbol=symbol,
                             type="limit",
                             side=exit_side,
@@ -672,18 +687,20 @@ class ExecutionEngine:
                             price=tp_price,
                             params={"reduceOnly": True},
                         )
+                        tp_order_id = tp_order.get("id")
                     except Exception as tp_err:
                         logger.warning(
                             f"[{symbol}] 지정가(Limit) TP 생성 거절됨. 시장가 우회(TAKE_PROFIT_MARKET)로 재시도합니다. 사유: {tp_err}"
                         )
                         try:
-                            await self.exchange.create_order(
+                            tp_order = await self.exchange.create_order(
                                 symbol=symbol,
                                 type="take_profit_market",
                                 side=exit_side,
                                 amount=tp_amount_final,
                                 params={"stopPrice": tp_price, "reduceOnly": True},
                             )
+                            tp_order_id = tp_order.get("id")
                         except Exception as tp_algo_err:
                             err_msg = str(tp_algo_err)
                             if "-4120" in err_msg or "Algo Order API" in err_msg:
@@ -703,24 +720,26 @@ class ExecutionEngine:
                                     "reduceOnly": "true",
                                     "algoType": "CONDITIONAL",
                                 }
-                                await self.exchange.request(
+                                tp_res = await self.exchange.request(
                                     path="algoOrder",
                                     api="fapiPrivate",
                                     method="POST",
                                     params=req_tp,
                                 )
+                                tp_order_id = tp_res.get("algoId")
                             else:
                                 raise tp_algo_err
 
-                # 2. Stop Loss (STOP_MARKET 방식, reduceOnly) — V17: SL은 전량 유지 (안전망)
+                # 2. Stop Loss (STOP_MARKET 방식, reduceOnly)
                 try:
-                    await self.exchange.create_order(
+                    sl_order = await self.exchange.create_order(
                         symbol=symbol,
                         type="stop_market",
                         side=exit_side,
                         amount=total_amount,
                         params={"stopPrice": sl_price, "reduceOnly": True},
                     )
+                    sl_order_id = sl_order.get("id")
                 except Exception as e:
                     err_msg = str(e)
                     if "-4120" in err_msg or "Algo Order API endpoints" in err_msg:
@@ -745,16 +764,19 @@ class ExecutionEngine:
                             "reduceOnly": "true",
                             "algoType": "CONDITIONAL",
                         }
-                        await self.exchange.request(
+                        sl_res = await self.exchange.request(
                             path="algoOrder",
                             api="fapiPrivate",
                             method="POST",
                             params=req,
                             headers={},
                         )
+                        sl_order_id = sl_res.get("orderId", sl_res.get("algoId"))
                     else:
                         raise e
             else:
+                tp_order_id = "DRY_TP"
+                sl_order_id = "DRY_SL"
                 logger.info(f"🧪 [DRY RUN] {symbol} TP/SL 가상 주문 완료 및 DB 기록됨")
 
             # 텔레그램 알림 전송 (REAL/DRY 공통)
@@ -772,11 +794,14 @@ class ExecutionEngine:
                 f"Real R:R: 1 : {abs(real_tp_pct / real_sl_pct) if real_sl_pct != 0 else 0:.2f}"
             )
 
-            # 포지션 상태 갱신
-            if settings.DRY_RUN:
-                self.active_positions[symbol] = entry_info
-            else:
-                self.active_positions[symbol] = True
+            # 포지션 상태 갱신 (ID 추적 포함)
+            entry_info.update(
+                {
+                    "tp_order_id": str(tp_order_id) if tp_order_id else None,
+                    "sl_order_id": str(sl_order_id) if sl_order_id else None,
+                }
+            )
+            self.active_positions[symbol] = entry_info
 
             return True
 
@@ -809,7 +834,12 @@ class ExecutionEngine:
                 for p in positions:
                     sym = p["symbol"]
                     contracts = float(p.get("contracts", 0))
-                    if contracts > 0 and sym not in self.active_positions:
+                    # [V18.1] 봇이 현재 진입 중(pending_entries)이거나 관리 중(active_positions)이면 수동 진입으로 간주하지 않음
+                    if (
+                        contracts > 0
+                        and sym not in self.active_positions
+                        and sym not in self.pending_entries
+                    ):
                         self.active_positions[sym] = True
                         entry_price = float(p.get("entryPrice", 0))
                         side = p.get("side", "long").upper()
@@ -1007,12 +1037,38 @@ class ExecutionEngine:
                         last_trade = trades[-1]
                         close_price = float(last_trade.get("price", 0.0))
                         close_qty = float(last_trade.get("amount", 0.0))
+                        last_order_id = str(last_trade.get("order", ""))
+
                         # 선물의 실현 손익 정보는 info 객체의 필드로 들어옵니다.
                         info = last_trade.get("info", {})
                         realized_pnl = float(info.get("realizedPnl", 0.0))
 
+                        # [V18.1] 청산 사유 정밀 식별
+                        exit_reason = "자동 청산 (감지)"
+                        pos_mem = self.active_positions.get(symbol)
+                        if isinstance(pos_mem, dict):
+                            stored_tp = pos_mem.get("tp_order_id")
+                            stored_sl = pos_mem.get("sl_order_id")
+
+                            if (
+                                last_order_id
+                                and stored_tp
+                                and last_order_id == stored_tp
+                            ):
+                                exit_reason = "Take Profit (자동 익절)"
+                            elif (
+                                last_order_id
+                                and stored_sl
+                                and last_order_id == stored_sl
+                            ):
+                                exit_reason = "Stop Loss (자동 손절)"
+                            else:
+                                exit_reason = "Manual / External Exit (수동/외부 청산)"
+                    else:
+                        exit_reason = "포지션 종료 감지 (개입/자동)"
+
                     logger.info(
-                        f"🏁 [{symbol}] 포지션 자동 청산 확인. DB 기록: PnL {realized_pnl:.4f} USDT"
+                        f"🏁 [{symbol}] 포지션 종료 확인. 사유: {exit_reason}, DB 기록: PnL {realized_pnl:.4f} USDT"
                     )
 
                     async with AsyncSessionLocal() as session:
@@ -1023,7 +1079,7 @@ class ExecutionEngine:
                             symbol=symbol,
                             price=close_price,
                             quantity=close_qty,
-                            reason="포지션 종료 감지 (개입/자동)",
+                            reason=exit_reason,
                             realized_pnl=realized_pnl,
                             dry_run=settings.DRY_RUN,
                             params=self._snapshot_params(),
@@ -1053,9 +1109,7 @@ class ExecutionEngine:
                                     trade_log.realized_pnl = (
                                         trade_log.realized_pnl or 0.0
                                     ) + realized_pnl
-                                    trade_log.exit_reason = (
-                                        "자동 청산 감지 (TP/SL/탈출)"
-                                    )
+                                    trade_log.exit_reason = exit_reason
 
                                     # 수익률 펀더멘탈 기록 (분할 익절 포함 전체 누적 수익률 계산)
                                     if (
@@ -1078,7 +1132,8 @@ class ExecutionEngine:
                         await session.commit()
 
                         await notifier.send_message(
-                            f"🏁 포지션 청산 자동 감지\n[{symbol}]\n"
+                            f"🏁 포지션 청산 완료 감지\n[{symbol}]\n"
+                            f"사유: {exit_reason}\n"
                             f"종료가: {close_price:.4f}\n"
                             f"실현손익(PnL): {realized_pnl:.4f} USDT"
                         )
