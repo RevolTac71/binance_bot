@@ -99,6 +99,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "kelly_min   켈리 계산용 최소 거래수 (20)\n"
             "kelly_max   켈리 최대 베팅 상한 (0.05)\n"
             "chasing     지정가 체결 대기 시간 (초)\n"
+            "refresh     종목 리프레시 주기 (시간 단위, 3)\n"
             "timeframe   메인 분석 봉 (예: 3m)\n"
             "htf_1h      장기 분석 봉 (예: 1h)\n"
             "htf_15m     중기 분석 봉 (예: 15m)"
@@ -329,6 +330,7 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "leverage": ("LEVERAGE", int, "LEVERAGE"),
             "timeframe": ("TIMEFRAME", str, "TIMEFRAME"),
             "time_exit": ("TIME_EXIT_MINUTES", int, "TIME_EXIT_MINUTES"),
+            "refresh": ("SYMBOL_REFRESH_INTERVAL", int, "SYMBOL_REFRESH_INTERVAL"),
             "htf_1h": ("HTF_TIMEFRAME_1H", str, "HTF_TIMEFRAME_1H"),
             "htf_15m": ("HTF_TIMEFRAME_15M", str, "HTF_TIMEFRAME_15M"),
             "atr_ratio": ("ATR_RATIO_MULT", float, "ATR_RATIO_MULT"),

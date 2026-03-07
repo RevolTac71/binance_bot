@@ -115,6 +115,9 @@ class Config:
     # 전체 최대 동시 진입 허용 개수 (알트코인 연쇄 손절 방지용)
     MAX_TRADES = int(os.getenv("MAX_TRADES", "3"))
 
+    # 종목 리프레시 주기 (시간 단위, 기본 3시간)
+    SYMBOL_REFRESH_INTERVAL = int(os.getenv("SYMBOL_REFRESH_INTERVAL", "3"))
+
     # 본절(Breakeven) 추적 로직 (V16+)
     BREAKEVEN_TRIGGER_MULT = float(os.getenv("BREAKEVEN_TRIGGER_MULT", "1.5"))
     BREAKEVEN_PROFIT_MULT = float(os.getenv("BREAKEVEN_PROFIT_MULT", "0.2"))

@@ -35,22 +35,28 @@ def calc_next_refresh_seconds() -> float:
     """
     now_utc = datetime.now(timezone.utc)
 
-    # 오늘 02:15부터 3시간 간격 후보 생성
+    # 설정된 간격(SYMBOL_REFRESH_INTERVAL)으로 오늘 후보 생성
+    interval = settings.SYMBOL_REFRESH_INTERVAL
     candidates = []
-    for h in range(2, 24, 3):
-        candidates.append(now_utc.replace(hour=h, minute=15, second=0, microsecond=0))
-
-    # 내일 02:15 첫 후보 생성
-    candidates.append(
-        now_utc.replace(hour=2, minute=15, second=0, microsecond=0) + timedelta(days=1)
-    )
+    # 02:15부터 시작하여 24시간을 해당 간격으로 나눈 후보 생성
+    for h in range(2, 26, interval):
+        if h < 24:
+            candidates.append(
+                now_utc.replace(hour=h, minute=15, second=0, microsecond=0)
+            )
+        else:
+            # 다음날 첫 후보
+            candidates.append(
+                now_utc.replace(hour=2, minute=15, second=0, microsecond=0)
+                + timedelta(days=1)
+            )
 
     # 현재 시각 이후의 가장 빠른 후보를 찾음
     for target in candidates:
         if target > now_utc:
             return (target - now_utc).total_seconds()
 
-    return 3 * 3600  # Fallback (3시간)
+    return interval * 3600  # Fallback
 
 
 def is_funding_fee_cutoff() -> bool:
