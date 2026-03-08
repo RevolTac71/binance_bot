@@ -73,21 +73,19 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif category == "score":
         msg = (
             "📈 [V18 진입 스코어링 파라미터]\n"
-            "진입 결정을 위한 주요 지표의 임계값입니다.\n\n"
+            "진입 결정을 위한 주요 지표의 임계값과 가중치입니다.\n\n"
             "── 통합 설정 ──\n"
-            "min_score   최소 진입 점수 (현재 7)\n"
+            "long_score  롱 진입 임계 점수 (Min Score)\n"
+            "short_score 숏 진입 임계 점수 (Min Score)\n"
             "adx_boost   추세 가점용 ADX 백분위 (70)\n"
             "adx_window  백분위 계산용 윈도우 (100)\n\n"
-            "── 상세 임계값 (1점 / 2점 / 4점 순) ──\n"
-            "macd_1/2/4  MACD 히스토그램 백분위\n"
-            "rsi_1/2     RSI 과매수/과매도 기준\n"
-            "cvd_1/2     CVD 기울기 백분위 기준\n"
-            "vol_1/2     거래량 Z-Score (float, 1.5 2.5)\n"
-            "oi_1/2      OI(미결제약정) 변화율 백분위\n"
-            "tick_1/2    Tick 활성도(수량) 백분위\n"
-            "imbal_1/2   오더북 불균형(Imbalance) 기준\n"
-            "nofi_1/2     OFI(Order Flow Imbalance) 기준\n"
-            "buy_1/2     시장가 매수 비중 임계값"
+            "── 상세 임계값 기준 (Thresholds) ──\n"
+            "macd_1/2/4, cvd_1/2, rsi_1/2, buy_1/2,\n"
+            "vol_1/2, imbalance_1/2, nofi_1/2, oi_1/2\n\n"
+            "── 지표별 가중치 (Weights) ──\n"
+            "w_macd_1/2/4, w_cvd_1/2, w_rsi_1/2, w_atr_2\n"
+            "w_htf_2, w_mtm_2, w_reg_1, w_vwap_2\n\n"
+            "💡 수정 예: `/setparam w_macd_4 10`"
         )
     elif category == "trade":
         msg = (
@@ -348,7 +346,8 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "be_profit": ("BREAKEVEN_PROFIT_MULT", float, "BREAKEVEN_PROFIT_MULT"),
             "mode": (None, None, None),
             # V18
-            "min_score": ("MIN_ENTRY_SCORE", int, "MIN_ENTRY_SCORE"),
+            "long_score": ("MIN_SCORE_LONG", int, "MIN_SCORE_LONG"),
+            "short_score": ("MIN_SCORE_SHORT", int, "MIN_SCORE_SHORT"),
             "adx_boost": ("ADX_BOOST_PCTL", float, "ADX_BOOST_PCTL"),
             "adx_window": ("PCTL_WINDOW", int, "PCTL_WINDOW"),
             "partial_tp": ("PARTIAL_TP_RATIO", float, "PARTIAL_TP_RATIO"),
@@ -357,7 +356,6 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "kelly_min": ("KELLY_MIN_TRADES", int, "KELLY_MIN_TRADES"),
             "kelly_max": ("KELLY_MAX_FRACTION", float, "KELLY_MAX_FRACTION"),
             # Scoring Thresholds (Custom 키)
-            # Scoring Thresholds (Custom 키: attr_name, cast_fn, env_key)
             "macd_1": ("macd_pctl", int, "SCORE_MACD_1"),
             "macd_2": ("macd_pctl", int, "SCORE_MACD_2"),
             "macd_4": ("macd_pctl", int, "SCORE_MACD_4"),
@@ -377,6 +375,38 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "oi_2": ("oi_pctl", int, "SCORE_OI_2"),
             "tick_1": ("tick_pctl", int, "SCORE_TICK_1"),
             "tick_2": ("tick_pctl", int, "SCORE_TICK_2"),
+            "atr_boost": (
+                "atr_boost",
+                int,
+                "SCORE_ATR_BOOST_2",
+            ),  # ATR Boost is a threshold
+            # Scoring Weights (Custom 키)
+            "w_macd_1": ("macd", int, "WEIGHT_MACD_1"),
+            "w_macd_2": ("macd", int, "WEIGHT_MACD_2"),
+            "w_macd_4": ("macd", int, "WEIGHT_MACD_4"),
+            "w_cvd_1": ("cvd", int, "WEIGHT_CVD_1"),
+            "w_cvd_2": ("cvd", int, "WEIGHT_CVD_2"),
+            "w_imbal_1": ("imbalance", int, "WEIGHT_IMBAL_1"),
+            "w_imbal_2": ("imbalance", int, "WEIGHT_IMBAL_2"),
+            "w_nofi_1": ("nofi", int, "WEIGHT_NOFI_1"),
+            "w_nofi_2": ("nofi", int, "WEIGHT_NOFI_2"),
+            "w_rsi_1": ("rsi", int, "WEIGHT_RSI_1"),
+            "w_rsi_2": ("rsi", int, "WEIGHT_RSI_2"),
+            "w_buy_1": ("buy_ratio", int, "WEIGHT_BUY_1"),
+            "w_buy_2": ("buy_ratio", int, "WEIGHT_BUY_2"),
+            "w_vol_1": ("vol_z", int, "WEIGHT_VOL_1"),
+            "w_vol_2": ("vol_z", int, "WEIGHT_VOL_2"),
+            "w_oi_1": ("oi", int, "WEIGHT_OI_1"),
+            "w_oi_2": ("oi", int, "WEIGHT_OI_2"),
+            "w_tick_1": ("tick", int, "WEIGHT_TICK_1"),
+            "w_tick_2": ("tick", int, "WEIGHT_TICK_2"),
+            "w_atr_2": ("atr", int, "WEIGHT_ATR_2"),
+            "w_adx_1": ("adx_boost", int, "WEIGHT_ADX_1"),
+            "w_fr_2": ("fr_boost", int, "WEIGHT_FR_2"),
+            "w_htf_2": ("htf_bias", int, "WEIGHT_HTF_BIAS"),
+            "w_mtm_2": ("mtf_moment", int, "WEIGHT_MTF_MOMENT"),
+            "w_reg_1": ("mtf_regime", int, "WEIGHT_MTF_REGIME"),
+            "w_vwap_2": ("vwap_dist", int, "WEIGHT_VWAP_DIST"),
         }
 
         if key not in mapping:
@@ -408,7 +438,7 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # 스코어링 임계값 딕셔너리 업데이트 처리
-        if key in (
+        threshold_keys = (
             "macd_1",
             "macd_2",
             "macd_4",
@@ -428,10 +458,16 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "oi_2",
             "tick_1",
             "tick_2",
-        ):
-            attr_name, cast_fn, env_key = mapping[key]
-            # sub_key 추출 (+1, +2 등)
-            sub_key = "+" + key.split("_")[1]
+            "atr_boost",
+        )
+        if key in threshold_keys:
+            # atr_boost는 sub_key가 +2로 고정
+            if key == "atr_boost":
+                sub_key = "+2"
+            else:
+                # sub_key 추출 (+1, +2 등)
+                sub_key = "+" + key.split("_")[1]
+
             new_val = cast_fn(raw_val)
 
             # settings.SCORING_THRESHOLDS 직접 업데이트
@@ -445,25 +481,34 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        # 스코어링 가중치(Weights) 업데이트 처리
+        if key.startswith("w_"):
+            # 'w_macd_1' -> 'macd', '1'
+            # 'w_atr_2' -> 'atr', '2'
+            # 'w_adx_1' -> 'adx_boost', '1'
+            # 'w_fr_2' -> 'fr_boost', '2'
+
+            # attr_name은 mapping에서 이미 가져옴 (예: 'macd', 'cvd', 'adx_boost')
+            # sub_key는 마지막 숫자 부분
+            sub_key = key.split("_")[-1]
+
+            new_val = cast_fn(raw_val)
+            settings.SCORING_WEIGHTS[attr_name][sub_key] = new_val
+            update_env_variable(env_key, str(new_val))
+            await update.message.reply_text(
+                f"✅ [가중치] {key}({env_key}) → {new_val} 설정 및 저장 완료"
+            )
+            return
+
         # 일반 키 처리 (변경 전 값을 먼저 읽어둠)
         old_val = getattr(settings, attr_name, "(없음)")
         new_val = cast_fn(raw_val)
 
-        # 변동성 추세 배수에 대한 하드 리미트 안정성 유효성 검사 (0.5 ~ 3.0)
-        if key in ("be_trigger",):
-            if new_val < 0.5 or new_val > 3.0:
-                await update.message.reply_text(
-                    f"❌ [거부됨] 해당 설정값({new_val})은 비정상적인 범위입니다.\n"
-                    f"안전장치에 의해 거부되었습니다. 올바른 범위(0.5 ~ 3.0) 내의 값을 지정해주세요."
-                )
-                return
-
-        # 본절 라인 수익률은 0.0 ~ 3.0 허용
-        if key == "be_profit":
+        # 유효성 검사 등...
+        if key in ("be_trigger", "be_profit"):
             if new_val < 0.0 or new_val > 3.0:
                 await update.message.reply_text(
-                    f"❌ [거부됨] 해당 설정값({new_val})은 비정상적인 범위입니다.\n"
-                    f"안전장치에 의해 거부되었습니다. 올바른 범위(0.0 ~ 3.0) 내의 값을 지정해주세요."
+                    "❌ 지정 가능한 범위를 벗어났습니다. (0.0~3.0)"
                 )
                 return
 
@@ -475,16 +520,12 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             restart_notice = f"\n⚠️ {key} 변경 시 /restart 권장!"
 
         await update.message.reply_text(
-            f"✅ [{key.upper()}] 변경 완료\n"
-            f"이전 값: {old_val}\n"
-            f"새로운 값: {new_val}\n"
-            f"(영구 저장 완료){restart_notice}"
+            f"✅ [{key.upper()}] 변경 완료\n이전: {old_val} → 새: {new_val}{restart_notice}"
         )
 
-    except ValueError:
-        await update.message.reply_text(
-            f"❌ [{key}]에 올바른 형식의 값을 입력하세요. (문자 입력 및 자료형 불일치 방지)"
-        )
+    except Exception as e:
+        logger.error(f"Error in setparam: {e}")
+        await update.message.reply_text(f"❌ 설정 변경 중 오류 발생: {e}")
 
 
 async def ignore_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -599,9 +640,9 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"MaxTrades : {getattr(settings, 'MAX_TRADES', 3)} (동일방향: {getattr(settings, 'MAX_CONCURRENT_SAME_DIR', 2)})\n"
         f"캔들/보유 : {getattr(settings, 'TIMEFRAME', '3m')} / {getattr(settings, 'TIME_EXIT_MINUTES', 0)}분\n\n"
         f"── 진입 조건 (V18 스코어링) ──\n"
-        f"컷트라인  : {settings.MIN_ENTRY_SCORE}점\n"
+        f"임계점수  : LONG={settings.MIN_SCORE_LONG} / SHORT={settings.MIN_SCORE_SHORT}\n"
         f"ADX 부스트: {settings.ADX_BOOST_PCTL}%tile (윈도우: {settings.PCTL_WINDOW})\n"
-        f"ATR 필터  : {settings.ATR_RATIO_MULT}x (롱길이: {settings.ATR_LONG_LEN})\n"
+        f"ATR 필터  : {settings.ATR_RATIO_MULT}x\n"
     )
 
     t = getattr(settings, "SCORING_THRESHOLDS", {})
@@ -617,6 +658,12 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"- 체결 횟수   : {t.get('tick_pctl', {}).get('+1')}/{t.get('tick_pctl', {}).get('+2')}%\n"
             f"- 역발상(Buy) : {t.get('buy_ratio', {}).get('+1')}/{t.get('buy_ratio', {}).get('+2')}%\n"
             f"- 볼륨 Z-스코어: {t.get('vol_zscore', {}).get('+1')}/{t.get('vol_zscore', {}).get('+2')}σ\n\n"
+            f"[V18 지표별 가중치(Weights)]\n"
+            f"- MACD(+1/+2/+4): {settings.SCORING_WEIGHTS['macd']['1']}/{settings.SCORING_WEIGHTS['macd']['2']}/{settings.SCORING_WEIGHTS['macd']['4']}점\n"
+            f"- CVD(+1/+2)     : {settings.SCORING_WEIGHTS['cvd']['1']}/{settings.SCORING_WEIGHTS['cvd']['2']}점\n"
+            f"- RSI(+1/+2)     : {settings.SCORING_WEIGHTS['rsi']['1']}/{settings.SCORING_WEIGHTS['rsi']['2']}점\n"
+            f"- ATR/ADX/FR     : {settings.SCORING_WEIGHTS['atr']['2']}/{settings.SCORING_WEIGHTS['adx_boost']['1']}/{settings.SCORING_WEIGHTS['fr_boost']['2']}점\n"
+            f"- HTF/MTM/Reg/VW : {settings.SCORING_WEIGHTS['htf_bias']['2']}/{settings.SCORING_WEIGHTS['mtf_moment']['2']}/{settings.SCORING_WEIGHTS['mtf_regime']['1']}/{settings.SCORING_WEIGHTS['vwap_dist']['2']}점\n\n"
         )
 
     msg += (

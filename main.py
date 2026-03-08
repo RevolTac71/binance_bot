@@ -355,9 +355,23 @@ async def process_closed_kline(
         )
 
         current_cvd = cvd_data.get(symbol, 0.0)
-        hist = cvd_history.get(symbol, [])
-        cvd_15m_sum = sum(hist[-5:]) if len(hist) > 0 else current_cvd
+        hist = cvd_history.setdefault(symbol, [])
+
+        # CVD 5m / 15m 델타 (누적값 차이) 계산
+        # hist에는 이전 캔들들의 마감 시점 CVD 누적값이 들어있음
+        cvd_5m_delta = (current_cvd - hist[-2]) if len(hist) >= 2 else 0.0
+        cvd_15m_delta = (current_cvd - hist[-5]) if len(hist) >= 5 else cvd_5m_delta
         cvd_slope = (current_cvd - hist[-1]) if len(hist) > 0 else 0.0
+
+        hist.append(current_cvd)
+        if len(hist) > 20:
+            hist.pop(0)
+
+        cvd_trend = (
+            "BUY_PRESSURE"
+            if cvd_slope > 0
+            else ("SELL_PRESSURE" if cvd_slope < 0 else None)
+        )
 
         # V17: 현재 종목과 활성 포지션 간 최대 상관계수 산출
         max_corr = 0.0
@@ -377,6 +391,21 @@ async def process_closed_kline(
                             corr = abs(aligned.iloc[:, 0].corr(aligned.iloc[:, 1]))
                             max_corr = max(max_corr, corr)
 
+        # [V18] HFT 파이프라인에서 최신 미시구조 피처(OI, Tick Count 등) 조회
+        hft_feats = {"open_interest": 0.0, "funding_rate": 0.0, "tick_count": 0}
+        if "hft_pipeline" in globals():
+            hft_pipe = globals()["hft_pipeline"]
+            try:
+                raw_sym = symbol.lower().replace("/", "").replace(":usdt", "")
+                oi, funding = hft_pipe.fetch_derivatives_data_cached(raw_sym)
+                hft_feats = {
+                    "open_interest": oi,
+                    "funding_rate": funding,
+                    "tick_count": len(hft_pipe.trade_buffer.get(raw_sym, [])),
+                }
+            except Exception as hft_err:
+                logger.warning(f"[{symbol}] HFT 피처 조회 중 일시적 오류: {hft_err}")
+
         snapshot = {
             "timestamp": new_dt.to_pydatetime()
             if hasattr(new_dt, "to_pydatetime")
@@ -389,8 +418,8 @@ async def process_closed_kline(
             "atr_200": curr_atr_200,
             "ema_1h_dist": ema_1h_dist,
             "ema_15m_dist": ema_15m_dist,
-            "cvd_5m_sum": current_cvd,
-            "cvd_15m_sum": float(cvd_15m_sum),
+            "cvd_5m_sum": float(cvd_5m_delta),
+            "cvd_15m_sum": float(cvd_15m_delta),
             "cvd_delta_slope": float(cvd_slope),
             "bid_ask_imbalance": float(twap_imbalance),
             "funding_rate_match": fr_match,
@@ -398,43 +427,12 @@ async def process_closed_kline(
             "correlation_max": float(max_corr),
         }
 
-        # [V16.1 CVD] 실시간 누적 거래량 델타 추세 연산
-        current_cvd = cvd_data.get(symbol, 0.0)
-        hist = cvd_history.setdefault(symbol, [])
-        hist.append(current_cvd)
-        if len(hist) > 10:
-            hist.pop(0)
-
-        cvd_trend = None
-        if len(hist) >= 2:
-            # 방금 캔들의 CVD가 직전 캔들의 CVD보다 높으면 매수 우위, 낮으면 매도 우위
-            if hist[-1] > hist[-2]:
-                cvd_trend = "BUY_PRESSURE"
-            elif hist[-1] < hist[-2]:
-                cvd_trend = "SELL_PRESSURE"
-
-        # [V18] HFT 파이프라인에서 최신 미시구조 피처(OI, Tick Count 등) 조회
-        # main.py 전역에 hft_pipeline 인스턴스가 있다고 가정 (main()에서 초기화됨)
-        hft_feats = {}
-        if "hft_pipeline" in globals():
-            hft_pipe = globals()["hft_pipeline"]
-            # hft_pipeline.py에 정의된 fetch_derivatives_data_cached 등을 활용하여 현재 심볼의 최신 피처 추출
-            # 여기서는 hft_pipeline의 내부 버퍼나 캐시를 직접 참조하도록 구성
-            raw_sym = symbol.lower().replace("/", "").replace(":usdt", "")
-            oi, funding = hft_pipe.fetch_derivatives_data_cached(raw_sym)
-
-            # 최근 1분 스냅샷 기반 추가 피처 (Log Vol Z-Score 등) - hft_pipeline에서 계산된 최신값 호출
-            # hft_pipeline.py의 log_volume_history 등을 활용
-            hft_feats = {
-                "open_interest": oi,
-                "funding_rate": funding,
-                "tick_count": len(
-                    hft_pipe.trade_buffer.get(raw_sym, [])
-                ),  # 현재 쌓여있는 틱 갯수 활용
-            }
-
         # 3. [V18.1] 신규 진입 필터 (데이터 업데이트 이후 수행)
         if symbol in execution.active_positions or symbol in execution.pending_entries:
+            # 포지션이 있더라도 마감 스냅샷 기록은 진행
+            snapshot["long_score"] = 0
+            snapshot["short_score"] = 0
+            snapshot_queue.append(snapshot)
             return
 
         decision = strategy.check_entry(
@@ -454,7 +452,6 @@ async def process_closed_kline(
         snapshot["buy_ratio"] = decision.get("buy_ratio", 0.5)
         snapshot["long_score"] = decision.get("long_score")
         snapshot["short_score"] = decision.get("short_score")
-
         snapshot_queue.append(snapshot)
 
         if decision["signal"]:
@@ -983,6 +980,7 @@ async def main():
             )
             await warm_up_data(settings.CURRENT_TARGET_SYMBOLS, pipeline)
 
+        global hft_pipeline
         hft_pipeline = HFTDataPipeline(settings.CURRENT_TARGET_SYMBOLS)
         asyncio.create_task(hft_pipeline.start())
 

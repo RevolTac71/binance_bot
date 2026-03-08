@@ -96,39 +96,31 @@ class RiskManager:
         if capital <= 0 or entry_price <= 0 or atr_val <= 0:
             return {"size": 0.0, "invest_usdt": 0.0, "tp_dist": 0.0, "sl_dist": 0.0}
 
-        # 1. 진입 유형별 SL/TP 배율 설정 (v18 전략 반영)
-        if entry_type == "TREND_MACD":
-            sl_mult = 3.0
-            tp_mult = 5.0
-        else:  # SCALP_CVD
-            sl_mult = 1.0
-            tp_mult = 5.0
+        # 1. 진입 유형별 SL/TP 배율 설정 (v18 전략 권장값)
+        # 만약 settings에 명시적으로 설정된 값이 있다면 그것을 우선하되, 기본값은 유형별 차등 적용
+        sl_mult = getattr(
+            settings, "SL_MULT", (3.0 if entry_type == "TREND_MACD" else 1.0)
+        )
+        tp_mult = getattr(settings, "TP_MULT", 6.0)
 
-        # Kelly 사이징 활성 시 비중 조절 (기존 로직 유지하되 v18 배율 우선)
+        # Kelly 사이징 활성 시 비중 조절
         risk_pct = self.risk_pct
-
         if getattr(settings, "KELLY_SIZING", False):
             min_trades = getattr(settings, "KELLY_MIN_TRADES", 20)
             p, b = await self._fetch_recent_stats(min_trades)
             if p is not None and b is not None:
                 risk_pct = self._half_kelly(p, b)
                 if risk_pct <= 0:
-                    logger.info(
-                        "[Kelly] 산출 비율이 0 이하 → 손실 기대 구간. "
-                        f"고정 비율({self.risk_pct * 100:.1f}%)로 폴백."
-                    )
                     risk_pct = self.risk_pct
 
-        # 1. 1회 투입 증거금 액수 산출
+        # 2. 1회 투입 증거금 액수 산출
         margin_invest = capital * risk_pct
 
-        # 2. 거래당 스탑폭/익절폭 금액 산출
-        sl_mult = getattr(settings, "SL_MULT", 3.0)
-        tp_mult = getattr(settings, "TP_MULT", 6.0)
+        # 3. 거래당 스탑폭/익절폭 금액 산출
         sl_distance = atr_val * sl_mult
         tp_distance = atr_val * tp_mult
 
-        # 3. 최대 레버리지를 곱한 명목 진입 금액 (Notional Value)
+        # 4. 최대 레버리지를 곱한 명목 진입 금액 (Notional Value)
         notional_value = margin_invest * self.leverage
 
         # 4. 바이낸스 최소 주문 한도(5.5~6.0 USDT) 방어

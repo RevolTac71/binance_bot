@@ -408,110 +408,43 @@ class StrategyEngine:
         hft_features: Optional[dict] = None,
     ) -> dict:
         """
-        [V16] 다중 시간 프레임 기반 진입 신호를 판단합니다.
-
-        Args:
-            symbol     : 종목 심볼
-            df         : 3분봉 OHLCV + 지표 데이터프레임 (지표 연산 완료 상태)
-            portfolio  : PortfolioState 공유 인스턴스
-            df_1h      : 1시간봉 데이터프레임 (EMA50, EMA200 컬럼 포함)
-            df_15m     : 15분봉 데이터프레임 (ADX_14, MACD, MACD_S 컬럼 포함)
-            cvd_trend  : CVD 오더플로우 방향 (Placeholder)
-            bid_ask_imbalance: 오더북 불균형
-            all_htf_15m: 전체 심볼의 15분봉 데이터 (상관관계 산출용)
-            hft_features: hft_pipeline에서 수집한 OI, Tick Count 등 정보
-            dict:
-                "signal"      : "LONG" | "SHORT" | None
-                "market_price": float
-                "atr_val"     : float
-                "vwap_mid"    : float
-                "reason"      : str
+        [V18] 다중 시간 프레임 기반 진입 신호를 판단합니다.
+        순서: 1) 데이터 수집/정규화 -> 2) 스코어 산출(무조건 실행) -> 3) 진입 조건 필터링
         """
-        # ── 기초 데이터 검증 ──────────────────────────────────────────────
+        # ── 1. 기초 데이터 검증 및 연산 ────────────────────────────────────
         if len(df) < 250:
             return {"signal": None, "reason": "데이터 부족 (최소 250개 필요)"}
 
         current = df.iloc[-1]
-
         market_price = float(current["close"])
-        high_price = float(current["high"])
-        low_price = float(current["low"])
-        volume = float(current["volume"])
-
-        rsi_val = current.get("RSI", 50.0)
         vwap_mid = current.get("VWAP", market_price)
         vol_sma_20 = current.get("Vol_SMA_20")
         atr_14 = current.get("ATR_14", market_price * 0.005)
-
         atr_long_len = getattr(settings, "ATR_LONG_LEN", 200)
         atr_long = current.get(f"ATR_{atr_long_len}", atr_14)
 
-        # 결측치 방어 (NoneType 예외 차단 로직 강화)
         if vol_sma_20 is None or pd.isna(atr_14) or pd.isna(vol_sma_20):
-            return {
-                "signal": None,
-                "reason": "지표 결측치 발생 (방어 로직 등 데이터 부족)",
-            }
+            return {"signal": None, "reason": "지표 결측치 발생 (초동 방어)"}
 
-        # ── STEP 1: Session Filter ────────────────────────────────────────
-        # [V16.1] 24-Hour Rolling VWAP 설계 도입으로 인해, 00:00 기준 리셋 대기시간(Session Block) 삭제
-
-        # ── STEP 2: 동적 ATR 변동성 필터 ─────────────────────────────────
-        atr_ratio_mult = getattr(settings, "ATR_RATIO_MULT", 1.2)
-        if atr_14 <= atr_long * atr_ratio_mult:
-            logger.info(
-                f"[{symbol}] 📉 [STEP2 Volatility Filter] 변동성 부족 — "
-                f"ATR14={atr_14:.4f} ≤ ATR{atr_long_len}({atr_long:.4f}) × {atr_ratio_mult}"
-            )
-            return {
-                "signal": None,
-                "reason": (
-                    f"Low Volatility (ATR Short {atr_14:.4f} "
-                    f"<= ATR Long {atr_long:.4f} x {atr_ratio_mult})"
-                ),
-            }
-        # ── STEP 2.5: MTF 추세 강도 / 모멘텀 판별 복원 ─────────────────────
-        mtf = self.get_mtf_regime(df_15m)
-        regime = mtf.get("regime")
-
-        # ══════════════════════════════════════════════════════════════
-        # V18 스코어링 진입 엔진 (STEP 3~8 직렬 AND 게이트 전면 교체)
-        # ══════════════════════════════════════════════════════════════
-
+        # ── 2. 데이터 정규화 및 피처 주입 (스코어 산출용) ───────────────────
         from scoring import compute_live_percentiles, calculate_entry_score
-        import numpy as np
 
-        # 1. 실시간 백분위수 산출 (O(window) 최적화)
-        pctl_window = getattr(settings, "PCTL_WINDOW", 100)
-
-        # 콜드스타트 방어: 데이터 부족 시 진입 유보
-        if len(df) < 20:
-            return {
-                "signal": None,
-                "reason": f"V18 콜드스타트 — 데이터 {len(df)}개 (최소 20개 필요)",
-            }
-
-        # 외부 전달 데이터를 df 컬럼으로 주입 (백분위수 산출 소스)
+        # 외부 전달 데이터를 df 컬럼으로 주입
         if "cvd_delta_slope" not in df.columns:
             df["cvd_delta_slope"] = 0.0
             if cvd_trend == "BUY_PRESSURE":
                 df.iloc[-1, df.columns.get_loc("cvd_delta_slope")] = 1.0
             elif cvd_trend == "SELL_PRESSURE":
                 df.iloc[-1, df.columns.get_loc("cvd_delta_slope")] = -1.0
-
         if "bid_ask_imbalance" not in df.columns:
             df["bid_ask_imbalance"] = bid_ask_imbalance
-
         if "ADX_14" not in df.columns and df_15m is not None and not df_15m.empty:
             df["ADX_14"] = df_15m.iloc[-1].get("ADX_14", 20.0)
-
         if "buy_ratio" not in df.columns:
             df["buy_ratio"] = 0.5
-
         if "NOFI" not in df.columns:
             df["NOFI"] = 0.0
 
-        # [V18] HFT 피처 주입
         if hft_features:
             df["open_interest"] = hft_features.get("open_interest", 0.0)
             df["tick_count"] = hft_features.get("tick_count", 0)
@@ -522,18 +455,30 @@ class StrategyEngine:
             df["tick_count"] = 0
 
         # 백분위수 산출
+        pctl_window = getattr(settings, "PCTL_WINDOW", 100)
         percentiles = compute_live_percentiles(df, window=pctl_window)
 
-        # HTF bias를 환경 부스트용 펀딩비 방향으로 활용
-        htf_bias = self.get_htf_bias(df_1h)
-        funding_rate_match = 0
-        if htf_bias == "BULL":
-            funding_rate_match = 1
-        elif htf_bias == "BEAR":
-            funding_rate_match = -1
-        percentiles["funding_rate_match"] = funding_rate_match
+        # ATR 부스트 및 HTF/MTF 정보 수집
+        atr_ratio_mult = getattr(settings, "ATR_RATIO_MULT", 1.2)
+        atr_boost_flag = atr_14 > (atr_long * atr_ratio_mult)
+        mtf = self.get_mtf_regime(df_15m)
+        htf_bias_str = self.get_htf_bias(df_1h)
+        mtf_moment_str = mtf.get("momentum", "NEUTRAL")
+        mtf_regime_str = mtf.get("regime", "RANGE")
 
-        # 2. 스코어링 엔진 실행
+        percentiles["atr_boost_flag"] = atr_boost_flag
+        percentiles["htf_bias"] = (
+            1 if htf_bias_str == "BULL" else (-1 if htf_bias_str == "BEAR" else 0)
+        )
+        percentiles["mtf_moment"] = (
+            1
+            if mtf_moment_str == "BULLISH"
+            else (-1 if mtf_moment_str == "BEARISH" else 0)
+        )
+        percentiles["mtf_regime"] = 1 if mtf_regime_str == "TREND" else 0
+        percentiles["vwap_dist"] = market_price - vwap_mid
+
+        # ── 3. 스코어링 엔진 실행 (무조건 실행 - 로깅 보장) ─────────────────
         adx_boost = getattr(settings, "ADX_BOOST_PCTL", 70.0)
         score_result = calculate_entry_score(percentiles, adx_boost_pctl=adx_boost)
 
@@ -541,87 +486,92 @@ class StrategyEngine:
         short_score = score_result["short_score"]
         raw_signal = score_result["signal"]
         score_detail = score_result["detail"]
-        l_macd = score_result.get("l_macd", 0)
-        s_macd = score_result.get("s_macd", 0)
 
-        # 3. 최소 점수 임계값 필터
-        min_score = getattr(settings, "MIN_ENTRY_SCORE", 5)
+        # ── 4. 진입 조건 필터링 (최종 결정) ───────────────────────────────
+        min_score_long = getattr(settings, "MIN_SCORE_LONG", 12)
+        min_score_short = getattr(settings, "MIN_SCORE_SHORT", 9)
         signal_type = None
         reason = ""
 
-        if raw_signal == 1 and long_score >= min_score:
-            is_scalp = l_macd < 2
-            if is_scalp:
-                has_hft_signal = (
-                    score_result.get("l_cvd", 0) >= 1
-                    or score_result.get("l_nofi", 0) >= 1
-                )
-                if not has_hft_signal:
-                    return {
-                        "signal": None,
-                        "reason": f"V18 SCALP 거부 — CVD/OFI 점수 없음 ({score_detail})",
-                    }
+        # A. ATR 변동성 필터 (V18: 변동성 부족 시 시그널만 차단, 점수는 이미 산출됨)
+        # atr_boost_flag가 False여도 점수가 높으면 진입 가능하지만, 극단적 횡보장 방지용
+        # 여기서는 atr_boost_flag를 가중치로만 쓰기로 했으나, 명시적 '최소 변동성'이 필요하다면 추가 가능.
+        # User requested: "진입 시그널은 변동성 부족 시 차단" -> 보수적으로 atr_boost_flag 또는 최소 비율 체크
+        volatility_ok = atr_14 > (
+            atr_long * 0.8
+        )  # 최소한 장기 평균의 80%는 되어야 함 (예시)
 
-            signal_type = "LONG"
-            reason = f"[V18 SCORE LONG] {score_detail} (≥{min_score})"
-        elif raw_signal == -1 and short_score >= min_score:
-            is_scalp = s_macd < 2
-            if is_scalp:
-                has_hft_signal = (
-                    score_result.get("s_cvd", 0) >= 1
-                    or score_result.get("s_nofi", 0) >= 1
-                )
-                if not has_hft_signal:
-                    return {
-                        "signal": None,
-                        "reason": f"V18 SCALP 거부 — CVD/OFI 점수 없음 ({score_detail})",
-                    }
-
-            signal_type = "SHORT"
-            reason = f"[V18 SCORE SHORT] {score_detail} (≥{min_score})"
-
-        # V18 진단 로그
-        adx_pctl_val = percentiles.get("adx_pctl", 0)
-        rsi_val_log = percentiles.get("rsi", 50)
-        vol_z_val = percentiles.get("vol_zscore", 0)
-
-        if signal_type is not None:
-            logger.info(
-                f"[{symbol}] 🎯 [V18] {signal_type} 진입! "
-                f"{score_detail} | RSI={rsi_val_log:.1f} | VolZ={vol_z_val:.1f}"
-            )
+        if not volatility_ok:
+            reason = f"변동성 부족 (ATR_14={atr_14:.4f} < {atr_long * 0.8:.4f})"
         else:
-            best = max(long_score, short_score)
-            best_dir = "L" if long_score >= short_score else "S"
-            if not reason:
-                reason = (
-                    f"V18 점수 미달 | {best_dir}={best}/{min_score} | "
-                    f"HTF={htf_bias} | RSI={rsi_val_log:.1f}"
-                )
-            logger.info(
-                f"[{symbol}] 📊 [V18] {best_dir}={best}/{min_score} | "
-                f"RSI={rsi_val_log:.1f} | ADX%={adx_pctl_val:.0f} | VolZ={vol_z_val:.1f}"
+            # B. 비대칭 스코어 임계값 체크
+            if raw_signal == 1 and long_score >= min_score_long:
+                # C. 스캘핑 안전 장치 (Scalp Gear Check)
+                l_macd = score_result.get("l_macd", 0)
+                if l_macd < 2:  # 추세(MACD) 점수가 낮으면
+                    has_orderflow = (
+                        score_result.get("l_cvd", 0) >= 1
+                        or score_result.get("l_nofi", 0) >= 1
+                    )
+                    if not has_orderflow:
+                        reason = f"Scalp Gear Reject: No Orderflow in low trend ({score_detail})"
+                    else:
+                        signal_type = "LONG"
+                else:
+                    signal_type = "LONG"
+
+                if signal_type:
+                    reason = f"[V18 SCORE LONG] {score_detail} (≥{min_score_long})"
+
+            elif raw_signal == -1 and short_score >= min_score_short:
+                s_macd = score_result.get("s_macd", 0)
+                if s_macd < 2:
+                    has_orderflow = (
+                        score_result.get("s_cvd", 0) >= 1
+                        or score_result.get("s_nofi", 0) >= 1
+                    )
+                    if not has_orderflow:
+                        reason = f"Scalp Gear Reject: No Orderflow in low trend ({score_detail})"
+                    else:
+                        signal_type = "SHORT"
+                else:
+                    signal_type = "SHORT"
+
+                if signal_type:
+                    reason = f"[V18 SCORE SHORT] {score_detail} (≥{min_score_short})"
+
+        # [V18] entry_type 산출 (로깅 및 사이징용)
+        entry_type = (
+            "TREND_MACD"
+            if (
+                score_result.get("l_macd", 0) >= 2 or score_result.get("s_macd", 0) >= 2
             )
+            else "SCALP_CVD"
+        )
 
-        # [V16.8] Pydantic Schema Validation
+        # 최종 진단 로그
+        if not reason and not signal_type:
+            reason = f"V18 점수 미달 (L={long_score}/{min_score_long}, S={short_score}/{min_score_short})"
+
+        logger.info(
+            f"[{symbol}] [V18 Analysis] {reason if not signal_type else 'MATCH'} (Type: {entry_type})"
+        )
+
+        # [V18] 시장 데이터 스냅샷 (Pydantic)
         market_data_obj = None
-        if signal_type is not None:
+        if signal_type:
             market_data_obj = MarketDataSnapshot(
-                rsi=float(rsi_val),
-                sma_20=float(vol_sma_20) if vol_sma_20 is not None else None,
-                volume=float(volume),
+                rsi=float(current.get("RSI", 50)),
+                volume=float(current["volume"]),
                 atr_14=float(atr_14),
-                adx_15m=float(mtf["adx"])
-                if "adx" in mtf and mtf["adx"] is not None
-                else None,
-                mtf_bias_1h=str(htf_bias) if htf_bias else None,
-                regime=str(regime) if regime else None,
+                adx_15m=float(mtf["adx"]) if mtf.get("adx") else None,
+                mtf_bias_1h=str(htf_bias_str),
+                regime=str(mtf_regime_str),
                 twap_imbalance=float(bid_ask_imbalance),
+                long_score=int(long_score),
+                short_score=int(short_score),
+                entry_type=str(entry_type),
             ).model_dump(exclude_none=True)
-
-        # [V18] 진입 원인 판별 (SL/TP 차등 적용용)
-        # MACD 점수가 높으면 추세 추종형, 그 외(CVD/OFI 등)가 높으면 스캘핑(반전)형으로 분류
-        entry_type = "TREND_MACD" if l_macd >= 2 or s_macd >= 2 else "SCALP_CVD"
 
         return {
             "signal": signal_type,

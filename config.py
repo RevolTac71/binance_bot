@@ -123,9 +123,8 @@ class Config:
     BREAKEVEN_PROFIT_MULT = float(os.getenv("BREAKEVEN_PROFIT_MULT", "0.2"))
 
     # ── V18 스코어링 진입 엔진 파라미터 ────────────────────────────────
-    MIN_ENTRY_SCORE = int(
-        os.getenv("MIN_ENTRY_SCORE", "7")
-    )  # v18 추천: 7점 이상으로 보수화
+    MIN_SCORE_LONG = int(os.getenv("MIN_SCORE_LONG", "12"))
+    MIN_SCORE_SHORT = int(os.getenv("MIN_SCORE_SHORT", "9"))
     PCTL_WINDOW = int(os.getenv("PCTL_WINDOW", "100"))  # 백분위수 산출 윈도우
     ADX_BOOST_PCTL = float(
         os.getenv("ADX_BOOST_PCTL", "70")
@@ -171,6 +170,83 @@ class Config:
         "tick_pctl": {
             "+1": int(os.getenv("SCORE_TICK_1", "70")),
             "+2": int(os.getenv("SCORE_TICK_2", "85")),
+        },
+        "atr_boost": {
+            "+2": int(os.getenv("SCORE_ATR_BOOST_2", "2")),
+        },
+        "htf_bias": {
+            "BULL": 1,
+            "BEAR": -1,
+        },
+        "mtf_momentum": {
+            "BULLISH": 1,
+            "BEARISH": -1,
+        },
+        "mtf_regime": {
+            "TREND": 1,
+            "RANGE": 0,
+        },
+    }
+
+    # [V18] 지표별 부여 점수 (Weights) - 텔레그램에서 실시간 수정 가능
+    SCORING_WEIGHTS = {
+        "macd": {
+            "1": int(os.getenv("WEIGHT_MACD_1", "1")),
+            "2": int(os.getenv("WEIGHT_MACD_2", "2")),
+            "4": int(os.getenv("WEIGHT_MACD_4", "4")),
+        },
+        "cvd": {
+            "1": int(os.getenv("WEIGHT_CVD_1", "1")),
+            "2": int(os.getenv("WEIGHT_CVD_2", "2")),
+        },
+        "imbalance": {
+            "1": int(os.getenv("WEIGHT_IMBAL_1", "1")),
+            "2": int(os.getenv("WEIGHT_IMBAL_2", "2")),
+        },
+        "nofi": {
+            "1": int(os.getenv("WEIGHT_NOFI_1", "1")),
+            "2": int(os.getenv("WEIGHT_NOFI_2", "2")),
+        },
+        "rsi": {
+            "1": int(os.getenv("WEIGHT_RSI_1", "1")),
+            "2": int(os.getenv("WEIGHT_RSI_2", "2")),
+        },
+        "buy_ratio": {
+            "1": int(os.getenv("WEIGHT_BUY_1", "1")),
+            "2": int(os.getenv("WEIGHT_BUY_2", "2")),
+        },
+        "vol_z": {
+            "1": int(os.getenv("WEIGHT_VOL_1", "1")),
+            "2": int(os.getenv("WEIGHT_VOL_2", "2")),
+        },
+        "oi": {
+            "1": int(os.getenv("WEIGHT_OI_1", "1")),
+            "2": int(os.getenv("WEIGHT_OI_2", "2")),
+        },
+        "tick": {
+            "1": int(os.getenv("WEIGHT_TICK_1", "1")),
+            "2": int(os.getenv("WEIGHT_TICK_2", "2")),
+        },
+        "atr": {
+            "2": int(os.getenv("WEIGHT_ATR_2", "2")),
+        },
+        "adx_boost": {
+            "1": int(os.getenv("WEIGHT_ADX_1", "1")),
+        },
+        "fr_boost": {
+            "2": int(os.getenv("WEIGHT_FR_2", "2")),
+        },
+        "htf_bias": {
+            "2": int(os.getenv("WEIGHT_HTF_BIAS", "2")),
+        },
+        "mtf_moment": {
+            "2": int(os.getenv("WEIGHT_MTF_MOMENT", "2")),
+        },
+        "mtf_regime": {
+            "1": int(os.getenv("WEIGHT_MTF_REGIME", "1")),
+        },
+        "vwap_dist": {
+            "2": int(os.getenv("WEIGHT_VWAP_DIST", "2")),
         },
     }
 

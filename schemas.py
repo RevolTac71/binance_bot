@@ -35,6 +35,11 @@ class MarketDataSnapshot(BaseModel):
     mtf_bias_15m: Optional[str] = None
     regime: Optional[str] = None
 
+    # V18 scoring fields for DB mapping
+    long_score: Optional[int] = None
+    short_score: Optional[int] = None
+    entry_type: Optional[str] = None
+
 
 class HFTFeatures1m(BaseModel):
     """
