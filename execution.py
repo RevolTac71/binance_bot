@@ -290,7 +290,7 @@ class ExecutionEngine:
         market_data: dict = None,
     ) -> bool:
         """
-        [V16.1] 시장가(Market) 대신 포스트 온리(Maker) 지정가로 호가를 추격(Chasing)하며 진입합니다.
+        [V18] 시장가(Market) 대신 포스트 온리(Maker) 지정가로 호가를 추격(Chasing)하며 진입합니다.
         3.5초 내 미체결 시 취소하고 최우선 호가로 재생성하여 수수료(Taker Fee)를 절약합니다.
         체결 성공 시, 실제 체결가(average price)를 기반으로 TP/SL 주문을 연이어 등록합니다.
         """
@@ -399,7 +399,7 @@ class ExecutionEngine:
 
                         pass
 
-                        # 3. V17: Config 기반 Chasing 대기 시간
+                        # 3. V18
                         chasing_wait = getattr(settings, "CHASING_WAIT_SEC", 5.0)
                         await asyncio.sleep(chasing_wait)
 
@@ -601,7 +601,7 @@ class ExecutionEngine:
         sl_price = entry_info["sl_price"]
         entry_price = entry_info["limit_price"]
 
-        # V17: 분할 익절 — TP 주문은 전체 수량의 일부만, SL은 전량 유지
+        # V18
         partial_ratio = getattr(settings, "PARTIAL_TP_RATIO", 0.5)
         tp_amount = total_amount * partial_ratio
         sl_amount = total_amount  # SL은 전량 (안전망)
@@ -643,14 +643,14 @@ class ExecutionEngine:
                     symbol=symbol,
                     price=entry_price,
                     quantity=total_amount,
-                    reason=f"{dr_prefix}V17 시장가/추격 진입 완료 (분할TP {partial_ratio * 100:.0f}%)",
+                    reason=f"{dr_prefix}V18 시장가/추격 진입 완료 (분할TP {partial_ratio * 100:.0f}%)",
                     dry_run=settings.DRY_RUN,
                     params=self._snapshot_params(),
                     market_data=entry_info.get("market_data"),
                 )
                 session.add(new_trade)
 
-                # [V16.2 ML] ML 파이프라인 전용 TradeLog 모델
+                # [V18] ML 파이프라인 전용 TradeLog 모델
                 new_tradelog = TradeLog(
                     symbol=symbol,
                     direction=signal_type,
@@ -672,7 +672,7 @@ class ExecutionEngine:
 
                 await session.commit()
 
-            # 1. Take Profit (LIMIT 방식) — V17: 분할 익절 (partial_ratio만큼만)
+            # 1. Take Profit (LIMIT 방식) — V18: 분할 익절 (partial_ratio만큼만)
             # TP 수량 정밀도 보정
             try:
                 tp_amount_str = self.exchange.amount_to_precision(symbol, tp_amount)
@@ -1176,7 +1176,7 @@ class ExecutionEngine:
                         )
                         session.add(new_trade)
 
-                        # [V16.2 ML] 기존 TradeLog 찾아 청산/성과 데이터 업데이트
+                        # [V18] 기존 TradeLog 찾아 청산/성과 데이터 업데이트
                         if not settings.DRY_RUN:
                             try:
                                 stmt = (

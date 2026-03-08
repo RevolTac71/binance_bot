@@ -1,7 +1,7 @@
 """
-strategy.py  —  StrategyEngine V16
+strategy.py  —  StrategyEngine V18
 ======================================
-[V16 주요 변경사항]
+[V18 주요 변경사항]
 1. 다중 시간 프레임(MTF) 필터링:
    - 1H EMA50/200 배열 → 거시적 방향 (BULL / BEAR / NEUTRAL)
    - 15m ADX + MACD   → 추세 강도 및 모멘텀
@@ -28,7 +28,7 @@ from config import settings, logger
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 포트폴리오 상태 관리 클래스 (V16 신규)
+# 포트폴리오 상태 관리 클래스 (V18)
 # ────────────────────────────────────────────────────────────────────────────
 class PortfolioState:
     """
@@ -219,11 +219,10 @@ class PortfolioState:
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 전략 엔진 (V16 MTF + Chandelier + Portfolio + CVD)
+# 전략 엔진 (V18 MTF + Chandelier + Portfolio + CVD)
 # ────────────────────────────────────────────────────────────────────────────
 class StrategyEngine:
-    """
-    [V16] 다중 시간 프레임 적응형 스캘핑 전략 엔진
+    """[V18] 다중 시간 프레임 적응형 스캘핑 전략 엔진
 
     Data Flow:
         main.py (WebSocket)
@@ -246,7 +245,7 @@ class StrategyEngine:
     # ────────────────────────────────────────────────────────────────────────
     def get_htf_bias(self, df_1h: Optional[pd.DataFrame]) -> str:
         """
-        [V16 MTF] 1H 봉의 EMA50/200 배열로 거시적 시장 방향을 판단합니다.
+        [V18] 1H 봉의 EMA50/200 배열로 거시적 시장 방향을 판단합니다.
 
         판단 기준:
           - EMA50 > EMA200 * 1.002 → "BULL"  (완전한 골든크로스 상태)
@@ -284,7 +283,7 @@ class StrategyEngine:
     # ────────────────────────────────────────────────────────────────────────
     def get_mtf_regime(self, df_15m: Optional[pd.DataFrame]) -> dict:
         """
-        [V16 MTF] 15m 봉의 ADX와 MACD로 현재 장세 유형과 모멘텀 방향을 반환합니다.
+        [V18] 15m 봉의 ADX와 MACD로 현재 장세 유형과 모멘텀 방향을 반환합니다.
 
         Returns:
             dict:
@@ -313,7 +312,7 @@ class StrategyEngine:
         macd = last.get("MACD", None)
         macd_s = last.get("MACD_S", None)
 
-        # ADX 기반 장세 분류 — V17: 백분위수 활용
+        # ADX 기반 장세 분류 — V18
         adx_pctl = last.get("ADX_PCTL_80", None)
         if adx is not None and not pd.isna(adx):
             result["adx"] = float(adx)
@@ -361,7 +360,7 @@ class StrategyEngine:
         current_atr: float,
     ) -> dict:
         """
-        [V16 Chandelier] state_machine_loop에서 매 캔들 마감 시 호출합니다.
+        [V18] state_machine_loop에서 매 캔들 마감 시 호출합니다.
         손절선을 갱신한 뒤, 현재가가 돌파 시 EXIT 신호를 반환합니다.
 
         Args:
@@ -393,7 +392,7 @@ class StrategyEngine:
         }
 
     # ────────────────────────────────────────────────────────────────────────
-    # 4. 메인 진입 판단 함수 (V16 통합 버전)
+    # 4. 메인 진입 판단 함수 (V18)
     # ────────────────────────────────────────────────────────────────────────
     def check_entry(
         self,

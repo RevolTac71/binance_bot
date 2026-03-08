@@ -87,7 +87,7 @@ class DataPipeline:
         주어진 심볼의 바이낸스 캔들 데이터를 비동기로 불러와 DataFrame으로 변환합니다.
         (V15: 1분봉 당일 누적 데이터 수집을 위해 최대 한도 1500개를 끌어옵니다)
         """
-        # [V16.9.2] 1500 -> 1000 (RAM 최적화)
+        # [V18 (RAM 최적화)
         candles = await self.exchange.fetch_ohlcv(
             symbol, timeframe, since=since, limit=1000
         )
@@ -97,14 +97,14 @@ class DataPipeline:
         )
         df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms")
         df.set_index("datetime", inplace=True)
-        # [V16.9.2] float32 다운캐스팅
+        # [V18 float32 다운캐스팅
         return df.astype(
             {col: "float32" for col in df.select_dtypes(include=["float64"]).columns}
         )
 
     def calculate_vwap_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        [V16.1] Rolling Window 기반 VWAP 및 제반 지표 연산
+        [V18 Rolling Window 기반 VWAP 및 제반 지표 연산
         - 기존 00:00 단위 Anchored VWAP을 탈피하고 최근 24시간(480 캔들, 3분봉) 기준의 롤링 VWAP 적용
         """
         if len(df) == 0:
@@ -152,7 +152,7 @@ class DataPipeline:
         else:
             df[f"ATR_{atr_long_len}"] = df["ATR_14"]
 
-        # V17: 로그 변환 Z-Score 거래량 (우측 꼬리 왜곡 방지)
+        # V18: 로그 변환 Z-Score 거래량 (우측 꼬리 왜곡 방지)
         log_vol = np.log1p(df["volume"])
         log_vol_mean = log_vol.rolling(window=100, min_periods=20).mean()
         log_vol_std = log_vol.rolling(window=100, min_periods=20).std()
@@ -164,7 +164,7 @@ class DataPipeline:
         self, series: pd.Series, d: float = 0.4, window: int = 50
     ) -> pd.Series:
         """
-        V17: 부분 차분 (Fractional Differentiation)
+        V18: 부분 차분 (Fractional Differentiation)
         가격 데이터의 장기 기억을 훼손하지 않으면서 정상성을 확보합니다.
         - d: 차분 차수 (0 < d < 1, 0.4가 일반적)
         - window: 가중치 절단 윈도우 (계산 효율)
@@ -192,7 +192,7 @@ class DataPipeline:
         self, symbol: str, timeframe: str, limit: int = 300
     ) -> pd.DataFrame:
         """
-        [V16 MTF] 상위 타임프레임(1H, 15m) 캔들 데이터를 비동기로 취득합니다.
+        [V18 상위 타임프레임(1H, 15m) 캔들 데이터를 비동기로 취득합니다.
         - 1H: EMA50/200 계산을 위해 최소 200개 필요
         - 15m: ADX·MACD 계산을 위해 최소 60개 필요
         """
@@ -208,7 +208,7 @@ class DataPipeline:
         self, df_1h: pd.DataFrame, df_15m: pd.DataFrame
     ) -> tuple:
         """
-        [V16 MTF] 상위 타임프레임 지표를 연산합니다.
+        [V18 상위 타임프레임 지표를 연산합니다.
 
         1H 지표:
           - EMA_50  : 50 이동평균 (중기 추세)
@@ -243,7 +243,7 @@ class DataPipeline:
             # 종목별 ADX 평균치 (기준선) 산출 (판다스 내장 rolling 함수 사용)
             if "ADX_14" in df_15m.columns:
                 df_15m["ADX_SMA_50"] = df_15m["ADX_14"].rolling(window=50).mean()
-                # V17: 동적 백분위수 기반 국면 판별용 (종목별 고유 변동성 보정)
+                # V18: 동적 백분위수 기반 국면 판별용 (종목별 고유 변동성 보정)
                 pctl_window = getattr(settings, "ADX_PCTL_WINDOW", 100)
                 pctl_rank = getattr(settings, "ADX_PCTL_RANK", 0.8)
                 df_15m["ADX_PCTL_80"] = (
@@ -298,7 +298,7 @@ class DataPipeline:
         top_symbols = [pair[0] for pair in sorted_pairs[:limit]]
         return top_symbols
 
-    # [V16.2 ML] 호가창 불균형(Imbalance) 조회
+    # [V18 ML] 호가창 불균형(Imbalance) 조회
     @with_exponential_backoff(max_retries=3)
     async def fetch_orderbook_imbalance(self, symbol: str, depth: int = 10) -> float:
         """
@@ -325,7 +325,7 @@ class DataPipeline:
             logger.warning(f"[{symbol}] 오더북 조회 실패: {e}")
             return 0.5
 
-    # [V16.2 ML] 펀딩비 조회
+    # [V18 ML] 펀딩비 조회
     @with_exponential_backoff(max_retries=3)
     async def fetch_funding_rate(self, symbol: str) -> float:
         """

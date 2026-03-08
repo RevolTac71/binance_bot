@@ -22,7 +22,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
     msg = (
-        "🤖 V15.2 자동매매 봇 컨트롤 패널\n\n"
+        "🤖 V18 자동매매 봇 컨트롤 패널\n\n"
         "📌 기본 명령어\n"
         "/help — 전체 명령어 도움말\n"
         "/status — 봇 상태 및 포지션 요약\n"
@@ -426,7 +426,7 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ 매매 모드 → {label} 설정 완료")
             return
 
-        # V17: Kelly 사이징 on/off 특별 처리
+        # V18: Kelly 사이징 on/off 특별 처리
         elif key == "kelly":
             is_on = raw_val.lower() in ("true", "1", "yes", "on")
             settings.KELLY_SIZING = is_on

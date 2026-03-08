@@ -35,15 +35,8 @@ REST_BASE_URL = (
 # Ticks는 메모리 상에 최대 2만건만 보관하여 누수 방지
 MAX_DEQUE_SIZE = 20000
 RETENTION_DAYS = 7
-# V17: OI/펀딩비 조회 주기 (초) — Rate Limit 방어
+# V18: OI/펀딩비 조회 주기 (초) — Rate Limit 방어
 DERIVATIVES_FETCH_INTERVAL = 300  # 5분
-
-# 인메모리 버퍼 (Symbol -> deque)
-orderbook_buffer = {}
-trade_buffer = {}
-
-# V17: 1분 로그 거래량 히스토리 (Z-Score 산출용)
-log_volume_history = {}  # {sym: deque(maxlen=100)}
 
 
 class HFTDataPipeline:
@@ -54,21 +47,26 @@ class HFTDataPipeline:
         self.session = None
         self.scaler = RobustScaler()
 
-        # [V16.8] 동시성 제어 락 (주기적인 Snapshot 시 스레드 경합 방지)
+        # 인메모리 버퍼
+        self.orderbook_buffer = {}
+        self.trade_buffer = {}
+        self.log_volume_history = {}  # V18: 1분 로그 거래량 히스토리 (Z-Score 산출용)
+
+        # [V18] 동시성 제어 락 (주기적인 Snapshot 시 스레드 경합 방지)
         self.buffer_locks = {}
-        # [V16.8] DB Insert 실패 시 재적재를 위한 메모리 큐
+        # [V18] DB Insert 실패 시 재적재를 위한 메모리 큐
         self.retry_queue = []
 
-        # V17: OI/펀딩비 5분 캐시 (Rate Limit 회피)
+        # V18: OI/펀딩비 5분 캐시 (Rate Limit 회피)
         self._derivatives_cache = {}  # {sym: (oi, funding)}
         self._derivatives_last_fetch = 0  # UTC timestamp
 
         # Initialize deques for each symbol
         for sym in self.symbols:
-            orderbook_buffer[sym] = deque(maxlen=MAX_DEQUE_SIZE)
-            trade_buffer[sym] = deque(maxlen=MAX_DEQUE_SIZE)
+            self.orderbook_buffer[sym] = deque(maxlen=MAX_DEQUE_SIZE)
+            self.trade_buffer[sym] = deque(maxlen=MAX_DEQUE_SIZE)
             self.buffer_locks[sym] = asyncio.Lock()
-            log_volume_history[sym] = deque(maxlen=100)
+            self.log_volume_history[sym] = deque(maxlen=100)
 
     async def init_session(self):
         if not self.session:
@@ -114,7 +112,7 @@ class HFTDataPipeline:
             return
 
         sym = msg["s"].lower()
-        if sym in orderbook_buffer:
+        if sym in self.orderbook_buffer:
             record = {
                 "timestamp": msg.get("E", 0),
                 "bid_price": float(msg["b"]),
@@ -123,7 +121,7 @@ class HFTDataPipeline:
                 "ask_qty": float(msg["A"]),
             }
             async with self.buffer_locks[sym]:
-                orderbook_buffer[sym].append(record)
+                self.orderbook_buffer[sym].append(record)
 
     async def handle_aggtrade(self, msg: dict):
         """틱 단위 체결 내역 핸들링 (@aggTrade)"""
@@ -131,7 +129,7 @@ class HFTDataPipeline:
             return
 
         sym = msg["s"].lower()
-        if sym in trade_buffer:
+        if sym in self.trade_buffer:
             record = {
                 "timestamp": msg.get("E", 0),
                 "price": float(msg["p"]),
@@ -139,9 +137,16 @@ class HFTDataPipeline:
                 "is_buyer_maker": msg["m"],  # True = Sell Trade
             }
             async with self.buffer_locks[sym]:
-                trade_buffer[sym].append(record)
+                self.trade_buffer[sym].append(record)
 
-    # ── 2.5 V17: OI/펀딩비 5분 캐시 조회 ──
+    def get_recent_tick_count(self, symbol: str) -> int:
+        """현재 버퍼에 쌓인 틱 갯수 반환 (main.py 스냅샷용)"""
+        sym = symbol.lower().replace("/", "").replace(":usdt", "")
+        if sym in self.trade_buffer:
+            return len(self.trade_buffer[sym])
+        return 0
+
+    # ── 2.5 V18: OI/펀딩비 5분 캐시 조회 ──
     async def _fetch_single_derivatives(self, sym: str) -> tuple:
         """단일 종목 OI·펀딩비 REST 조회"""
         raw_sym = sym.upper()
@@ -235,10 +240,10 @@ class HFTDataPipeline:
         # NOFI (Normalized OFI)
         nofi = ofi / volume if volume > 0 else 0.0
 
-        # V17: 매수 체결 비율 (Buy Ratio) — 체결 강도 지표
+        # V18: 매수 체결 비율 (Buy Ratio) — 체결 강도 지표
         buy_ratio = float(buy_qty / volume) if volume > 0 else 0.5
 
-        # V17: 평균 호가 스프레드 — 유동성 지표
+        # V18: 평균 호가 스프레드 — 유동성 지표
         spread_avg = 0.0
         if ob_ticks:
             spreads = [
@@ -249,12 +254,12 @@ class HFTDataPipeline:
             if spreads:
                 spread_avg = float(np.mean(spreads))
 
-        # V17: 로그 Z-Score 거래량 — 극단 스파이크 통계 판별
+        # V18: 로그 Z-Score 거래량 — 극단 스파이크 통계 판별
         log_vol_zscore = 0.0
-        vol_hist = log_volume_history.get(sym, deque(maxlen=100))
+        vol_hist = self.log_volume_history.get(sym, deque(maxlen=100))
         log_vol = float(np.log1p(volume))
         vol_hist.append(log_vol)
-        log_volume_history[sym] = vol_hist
+        self.log_volume_history[sym] = vol_hist
 
         if len(vol_hist) >= 20:
             arr = np.array(vol_hist)
@@ -304,21 +309,21 @@ class HFTDataPipeline:
 
             logger.info(f"[HFT] Creating 1-Min Snapshot at {snapshot_time}")
 
-            # V17: 5분 주기 OI/펀딩비 캐시 갱신
+            # V18: 5분 주기 OI/펀딩비 캐시 갱신
             await self._refresh_derivatives_cache()
 
             # 모든 심볼 연산 완료 대기 및 큐 스왑
             snapshot_tasks = []
             for sym in self.symbols:
-                # V17: 캐시된 OI/펀딩비 사용
+                # V18: 캐시된 OI/펀딩비 사용
                 oi, funding = self.fetch_derivatives_data_cached(sym)
 
-                # [V16.8] O(1) Queue Swap with AsyncLock
+                # [V18] O(1) Queue Swap with AsyncLock
                 async with self.buffer_locks[sym]:
-                    ob_ticks = list(orderbook_buffer[sym])
-                    tr_ticks = list(trade_buffer[sym])
-                    orderbook_buffer[sym].clear()
-                    trade_buffer[sym].clear()
+                    ob_ticks = list(self.orderbook_buffer[sym])
+                    tr_ticks = list(self.trade_buffer[sym])
+                    self.orderbook_buffer[sym].clear()
+                    self.trade_buffer[sym].clear()
 
                 task = asyncio.to_thread(
                     self._process_1m_snapshot_sync,
@@ -334,7 +339,7 @@ class HFTDataPipeline:
             results = await asyncio.gather(*snapshot_tasks)
             valid_results = [r for r in results if r is not None]
 
-            # [V16.8] DB Bulk Insert 및 Retry Fallback
+            # [V18] DB Bulk Insert 및 Retry Fallback
             insert_batch = self.retry_queue + valid_results
 
             if insert_batch:

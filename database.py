@@ -30,7 +30,7 @@ class Trade(Base):
 
 
 # ==========================================
-# [V16.2 ML Data Pipeline Models]
+# [V18 ML Data Pipeline Models]
 # ==========================================
 
 
@@ -66,7 +66,7 @@ class MarketSnapshot(Base):
     # 4. 기타 시장 정보
     funding_rate_match = Column(Integer, nullable=True)  # 1(일치), 0(불일치), -1(반대)
 
-    # 5. V17 확장 피처
+    # 5. V18 확장 피처
     log_vol_zscore = Column(Float, nullable=True)  # 로그 변환 거래량 Z-Score
     correlation_max = Column(Float, nullable=True)  # 동조화 최대 상관계수
 
@@ -128,7 +128,7 @@ class TradeLog(Base):
 
 class MarketData_1m(Base):
     """
-    [V16.6 HFT] 인메모리 파이프라인 전용 1분 단위 압축 스냅샷
+    [V18 HFT] 인메모리 파이프라인 전용 1분 단위 압축 스냅샷
     원시 틱 데이터를 DB에 적재하지 않고, OHLCV와 파생지표(OI, 펀딩비, OFI 등)를
     단일 JSON 컬럼으로 통합 보관하여 DB 부하(Write)를 최소화합니다.
     """

@@ -6,7 +6,7 @@ from sqlalchemy.future import select
 class RiskManager:
     def __init__(self, data_pipeline):
         """
-        V17 리스크 매니지먼트 (Half-Kelly + Risk Parity 하이브리드)
+        V18 리스크 매니지먼트 (Half-Kelly + Risk Parity 하이브리드)
         - KELLY_SIZING=True 시: 최근 거래 기록의 승률(p)과 손익비(b)로 투입 비중 자동 계산
         - KELLY_SIZING=False 시: 기존 RISK_PERCENTAGE 고정 비율 방식 유지
         """

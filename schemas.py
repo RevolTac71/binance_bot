@@ -4,7 +4,7 @@ from typing import Optional
 
 class MarketDataSnapshot(BaseModel):
     """
-    [V16.6] strategy.py 에서 진입 시점에 캡처되는 보조지표 스냅샷 규격
+    [V18] strategy.py 에서 진입 시점에 캡처되는 보조지표 스냅샷 규격
     데이터 타입과 Key 누락을 방지하여 ML 전처리 파이프라인의 안전성을 보장합니다.
     """
 
@@ -43,7 +43,7 @@ class MarketDataSnapshot(BaseModel):
 
 class HFTFeatures1m(BaseModel):
     """
-    [V16.8] hft_pipeline.py 에서 1분마다 취합되는 미시구조 지표 스냅샷 규격
+    [V18] hft_pipeline.py 에서 1분마다 취합되는 미시구조 지표 스냅샷 규격
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -53,7 +53,7 @@ class HFTFeatures1m(BaseModel):
     open_interest: float = Field(description="현재 미결제약정")
     funding_rate: float = Field(description="현재 펀딩비율")
     tick_count: int = Field(description="해당 분봉의 원시 체결 틱 갯수")
-    # V17 신규 미시구조 피처
+    # V18
     buy_ratio: float = Field(default=0.5, description="매수 체결 비율 (0~1, 0.5=중립)")
     spread_avg: float = Field(
         default=0.0, description="1분간 평균 호가 스프레드 (ask-bid)"

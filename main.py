@@ -21,7 +21,7 @@ from hft_pipeline import HFTDataPipeline
 def get_today_0000_utc_timestamp() -> int:
     """
     현재 시각을 기준으로 가장 최근의 당일 00:00 UTC 타임스탬프(ms)를 계산합니다.
-    (V16.2 시간축 혼동 방지를 위해 UTC 자정 기준으로 통일)
+    (V18 시간축 혼동 방지를 위해 UTC 자정 기준으로 통일)
     """
     now_utc = datetime.now(timezone.utc)
     target_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -94,7 +94,7 @@ async def warm_up_differential_data(new_symbols: set, pipeline: DataPipeline):
     global df_map, htf_df_1h, htf_df_15m
     logger.info(f"🆕 신규 편입 종목 웜업 시작: {new_symbols}")
 
-    # [V16.9.2] 1500 -> 1000으로 단축 (RAM 절감)
+    # [V18] 1500 -> 1000으로 단축 (RAM 절감)
     since_ts = get_today_0000_utc_timestamp() - (1000 * 60 * 1000)
 
     tasks_3m = [
@@ -143,21 +143,21 @@ async def warm_up_differential_data(new_symbols: set, pipeline: DataPipeline):
 # 3분봉 데이터 (15종목 × 1500개)
 df_map: dict[str, pd.DataFrame] = {}
 
-# [V16 MTF] 상위 타임프레임 데이터 (종목별 1H / 15m)
+# [V18] 상위 타임프레임 데이터 (종목별 1H / 15m)
 htf_df_1h: dict[str, pd.DataFrame] = {}
 htf_df_15m: dict[str, pd.DataFrame] = {}
 
-# [V16] 포트폴리오 전역 상태 (단일 인스턴스 공유)
+# V18 포트폴리오 전역 상태 (단일 인스턴스 공유)
 portfolio = PortfolioState()
 
-# [V16.1] CVD 실시간 틱 누적 공간
+# [V18] CVD 실시간 틱 누적 공간
 cvd_data: dict[str, float] = {}
 # 캔들 마감 시점의 CVD 스냅샷 저장 (추세 판단용)
 cvd_history: dict[str, list] = {}
 
-import gc  # [V16.9.2] RAM 최적화용 가비지 컬렉터
+import gc  # [V18] RAM 최적화용 가비지 컬렉터
 
-# [V16.2 ML] 호가창 불균형(Imbalance) TWAP 내역 및 스냅샷 큐
+# [V18 ML] 호가창 불균형(Imbalance) TWAP 내역 및 스냅샷 큐
 imbalance_history: dict[str, list] = {}
 snapshot_queue: list[dict] = []
 
@@ -165,7 +165,7 @@ snapshot_queue: list[dict] = []
 async def warm_up_data(symbols: list, pipeline: DataPipeline):
     """
     최초 접속 혹은 재접속 시 이전 데이터를 로드하여 지표 연속성을 확보합니다.
-    [V16] 3분봉에 더해 1H / 15m 상위 타임프레임 데이터도 함께 웜업합니다.
+    V18 3분봉에 더해 1H / 15m 상위 타임프레임 데이터도 함께 웜업합니다.
     """
     global df_map, htf_df_1h, htf_df_15m
 
@@ -179,7 +179,7 @@ async def warm_up_data(symbols: list, pipeline: DataPipeline):
         for sym in symbols
     ]
 
-    # [V16 MTF] 1H·15m 로드 태스크 (동시 병렬 처리)
+    # [V18] 1H·15m 로드 태스크 (동시 병렬 처리)
     # 장기 지표(EMA200, ATR200 등) 수렴(Smoothing)을 위해 최소 1000개 로드
     tasks_1h = [
         pipeline.fetch_ohlcv_htf(sym, timeframe=settings.HTF_TIMEFRAME_1H, limit=1000)
@@ -200,7 +200,7 @@ async def warm_up_data(symbols: list, pipeline: DataPipeline):
         if isinstance(res, Exception):
             logger.error(f"[{sym}] 웜업 데이터 로딩 실패: {res}")
             continue
-        # [V16.9.2] float32 다운캐스팅으로 메모리 50% 절감
+        # [V18] float32 다운캐스팅으로 메모리 50% 절감
         df_map[sym] = res.astype(
             {col: "float32" for col in res.select_dtypes(include=["float64"]).columns}
         )
@@ -250,7 +250,7 @@ async def process_closed_kline(
 ):
     """
     웹소켓으로 수신된 '마감된(x: True)' 캔들을 기존 df에 병합하고 판단을 내립니다.
-    [V16] HTF 데이터(df_1h, df_15m)와 PortfolioState를 strategy에 함께 전달합니다.
+    V18 HTF 데이터(df_1h, df_15m)와 PortfolioState를 strategy에 함께 전달합니다.
     """
     if symbol not in df_map:
         return
@@ -277,7 +277,7 @@ async def process_closed_kline(
                 }
             ]
         )
-        # [V16.9.3] float32 타겟팅: LossySetitemError(float64->float32) 방지
+        # [V18] float32 타겟팅: LossySetitemError(float64->float32) 방지
         new_row = new_row.astype(
             {col: "float32" for col in ["open", "high", "low", "close", "volume"]}
         )
@@ -291,7 +291,7 @@ async def process_closed_kline(
         else:
             df.loc[new_dt] = new_row.iloc[0]
 
-        # [V16.9.2] 메모리 점유 방지를 위해 1000개만 유지 및 다운캐스팅
+        # [V18] 메모리 점유 방지를 위해 1000개만 유지 및 다운캐스팅
         df = df.astype(
             {col: "float32" for col in df.select_dtypes(include=["float64"]).columns}
         ).tail(1000)
@@ -309,11 +309,11 @@ async def process_closed_kline(
             pipeline.calculate_vwap_indicators, curr_df.copy()
         )
 
-        # [V16 MTF] 상위 타임프레임 데이터 참조 (htf_refresh_loop가 주기적으로 갱신)
+        # [V18] 상위 타임프레임 데이터 참조 (htf_refresh_loop가 주기적으로 갱신)
         df_1h = htf_df_1h.get(symbol)
         df_15m = htf_df_15m.get(symbol)
 
-        # [V16.2 ML] Snapshot Feature 수집 및 Queue 적재
+        # [V18 ML] Snapshot Feature 수집 및 Queue 적재
         imbal_list = imbalance_history.get(symbol, [])
         twap_imbalance = sum(imbal_list) / len(imbal_list) if imbal_list else 0.5
 
@@ -373,7 +373,7 @@ async def process_closed_kline(
             else ("SELL_PRESSURE" if cvd_slope < 0 else None)
         )
 
-        # V17: 현재 종목과 활성 포지션 간 최대 상관계수 산출
+        # V18: 현재 종목과 활성 포지션 간 최대 상관계수 산출
         max_corr = 0.0
         if df_15m is not None and not df_15m.empty:
             target_returns = df_15m["close"].pct_change().dropna().tail(100)
@@ -401,7 +401,7 @@ async def process_closed_kline(
                 hft_feats = {
                     "open_interest": oi,
                     "funding_rate": funding,
-                    "tick_count": len(hft_pipe.trade_buffer.get(raw_sym, [])),
+                    "tick_count": hft_pipe.get_recent_tick_count(raw_sym),
                 }
             except Exception as hft_err:
                 logger.warning(f"[{symbol}] HFT 피처 조회 중 일시적 오류: {hft_err}")
@@ -447,7 +447,7 @@ async def process_closed_kline(
             hft_features=hft_feats,
         )
 
-        # 3. [V18] 스코어 및 신규 피처를 MarketSnapshot에 기록 (DB 적재용)
+        # 3. [V18] 스코어 및 확장 피처를 MarketSnapshot에 기록 (DB 적재용)
         snapshot["nofi_1m"] = decision.get("nofi_1m", 0.0)
         snapshot["buy_ratio"] = decision.get("buy_ratio", 0.5)
         snapshot["long_score"] = decision.get("long_score")
@@ -500,7 +500,7 @@ async def process_closed_kline(
                 market_data=decision.get("market_data"),
             )
 
-            # [V16] 포트폴리오 상태에 포지션 등록 (Chandelier 추적 시작)
+            # V18 포트폴리오 상태에 포지션 등록 (Chandelier 추적 시작)
             portfolio.register_position(
                 symbol=symbol,
                 direction=decision["signal"],
@@ -515,7 +515,7 @@ async def process_closed_kline(
 
 async def htf_refresh_loop(pipeline: DataPipeline):
     """
-    [V16 MTF] 15분마다 1H·15m 상위 타임프레임 데이터를 갱신하는 독립 루프.
+    [V18] 15분마다 1H·15m 상위 타임프레임 데이터를 갱신하는 독립 루프.
     WebSocket 루프와 별도로 asyncio.create_task()로 병렬 가동됩니다.
 
     갱신 주기: 15분 (15m 봉 마감 주기와 동일하게 설정)
@@ -569,7 +569,7 @@ async def htf_refresh_loop(pipeline: DataPipeline):
 
 async def orderbook_twap_loop(pipeline: DataPipeline):
     """
-    [V16.2 ML] 매 5초 단위로 15개 종목의 오더북 Imbalance를 폴링하여
+    [V18 ML] 매 5초 단위로 15개 종목의 오더북 Imbalance를 폴링하여
     지속적으로 기록해 두고, 최근 6회(30초)의 TWAP을 산출하기 위한 메인 루프.
     """
     global imbalance_history
@@ -598,7 +598,7 @@ async def orderbook_twap_loop(pipeline: DataPipeline):
 
 async def snapshot_flush_loop():
     """
-    [V16.2 ML] DB 쓰기 병목(I/O 부하) 방지를 위해 큐에 쌓인
+    [V18 ML] DB 쓰기 병목(I/O 부하) 방지를 위해 큐에 쌓인
     전 종목의 MarketSnapshot 데이터를 단일 트랜잭션으로 bulk_insert 합니다.
     """
     global snapshot_queue
@@ -626,7 +626,7 @@ async def chandelier_monitoring_loop(
     strategy: StrategyEngine, execution: ExecutionEngine, pipeline: DataPipeline
 ):
     """
-    [V16 Chandelier] 매 캔들 주기(~30초)마다 활성 포지션의 샹들리에 손절선을 점검합니다.
+    [V18] 매 캔들 주기(~30초)마다 활성 포지션의 샹들리에 손절선을 점검합니다.
     손절선 돌파 시 시장가 청산 요청을 트리거합니다.
 
     동작 방식:
@@ -706,7 +706,7 @@ async def chandelier_monitoring_loop(
                             symbol, reason="Chandelier Exit"
                         )
 
-                        # 포지션 트래킹 삭제 로직 제거 (V16.5)
+                        # 포지션 트래킹 삭제 로직 제거 (V18)
                         # - 여기서 수동으로 삭제해버리면 state_machine_loop가 체결(청산)을 감지하지 못해
                         #   DB 기록(Trade, TradeLog) 로직이 통째로 씹히는 치명적 버그가 발생합니다.
                         # - 따라서 봇은 오직 거래소 청산 호출만 날리고, 추적망 삭제와 DB 기록은
@@ -815,7 +815,7 @@ async def websocket_loop(
     execution: ExecutionEngine,
 ):
     """
-    [V16] Aiohttp를 활용한 동적 타임프레임 무지연 이벤트 루프
+    V18 Aiohttp를 활용한 동적 타임프레임 무지연 이벤트 루프
     """
     while True:
         try:
@@ -852,7 +852,7 @@ async def websocket_loop(
                             data = json.loads(msg.data)
                             stream_name = data.get("stream", "")
 
-                            # [V16.1] CVD 실시간 틱 처리 (@aggTrade)
+                            # [V18] CVD 실시간 틱 처리 (@aggTrade)
                             if "@aggTrade" in stream_name:
                                 trade = data["data"]
                                 binance_sym = trade["s"].lower()
@@ -916,7 +916,7 @@ async def websocket_loop(
 async def state_machine_loop(execution: ExecutionEngine):
     """
     지정가 대기 취소/체결 판별 및 TP/SL 포워딩을 수행하는 별도의 폴링 루프
-    [V16] PortfolioState 동기화: execution에서 포지션이 청산되면 portfolio에서도 제거
+    V18 PortfolioState 동기화: execution에서 포지션이 청산되면 portfolio에서도 제거
     """
     while True:
         try:
@@ -924,7 +924,7 @@ async def state_machine_loop(execution: ExecutionEngine):
             await execution.check_active_positions_state()
             await execution.check_state_mismatch()
 
-            # [V16] execution과 portfolio 상태 동기화
+            # V18 execution과 portfolio 상태 동기화
             # execution.active_positions에 없는 심볼이 portfolio에 남아 있으면 제거
             for sym in list(portfolio.positions.keys()):
                 if sym not in execution.active_positions:
@@ -940,7 +940,7 @@ async def state_machine_loop(execution: ExecutionEngine):
 
 
 async def main():
-    logger.info("============== BINANCE V16 MTF SCALPING BOT START ==============")
+    logger.info("============== BINANCE V18 MTF SCALPING BOT START ==============")
 
     is_db_connected = await check_db_connection()
     if not is_db_connected:
@@ -950,7 +950,7 @@ async def main():
         return
 
     await notifier.send_message(
-        f"🚀 [시작] 바이낸스 V16 MTF {settings.TIMEFRAME} 스캘핑 봇 웹소켓 대기열 접속 중..."
+        f"🚀 [시작] 바이낸스 V18 MTF {settings.TIMEFRAME} 스캘핑 봇 웹소켓 대기열 접속 중..."
     )
 
     pipeline = DataPipeline()
@@ -967,7 +967,7 @@ async def main():
             await app.start()
             await app.updater.start_polling()
 
-        # [V16.9] 포트폴리오 최초 종목 15개 선정 및 웜업 (HFT Pipeline 가동 전)
+        # [V18] 포트폴리오 최초 종목 15개 선정 및 웜업 (HFT Pipeline 가동 전)
         if not getattr(settings, "CURRENT_TARGET_SYMBOLS", None):
             base_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
             alts = await pipeline.fetch_top_altcoins_by_volume(
@@ -976,7 +976,7 @@ async def main():
             settings.CURRENT_TARGET_SYMBOLS = base_symbols + alts
 
             logger.info(
-                f"📡 [V16] 최초 포트폴리오 15종목 동적 선정 결과: {settings.CURRENT_TARGET_SYMBOLS}"
+                f"📡 V18 최초 포트폴리오 15종목 동적 선정 결과: {settings.CURRENT_TARGET_SYMBOLS}"
             )
             await warm_up_data(settings.CURRENT_TARGET_SYMBOLS, pipeline)
 
@@ -984,17 +984,17 @@ async def main():
         hft_pipeline = HFTDataPipeline(settings.CURRENT_TARGET_SYMBOLS)
         asyncio.create_task(hft_pipeline.start())
 
-        # [V16] 백그라운드 태스크는 최초 진입 시 한 번만 가동
+        # [V18] 백그라운드 태스크는 최초 진입 시 한 번만 가동
         asyncio.create_task(htf_refresh_loop(pipeline))
         asyncio.create_task(orderbook_twap_loop(pipeline))
         asyncio.create_task(snapshot_flush_loop())
-        # [V16.3] 12시간 주기 동적 타임프레임 갱신 루프 가동
+        # [V18.3] 12시간 주기 동적 타임프레임 갱신 루프 가동
         asyncio.create_task(target_refresh_loop(pipeline, execution))
         logger.info(
-            "[V16] 백그라운드 태스크(HTF / TWAP / Snapshot Flush / Refresher) 가동 완료."
+            "[V18] 백그라운드 태스크(HTF / TWAP / Snapshot Flush / Refresher) 가동 완료."
         )
 
-        # [V16] 메인 웹소켓 루프 / 스테이트 머신 / 샹들리에 모니터링 병렬 가동
+        # V18 메인 웹소켓 루프 / 스테이트 머신 / 샹들리에 모니터링 병렬 가동
         async def guarded(coro, name):
             try:
                 await coro

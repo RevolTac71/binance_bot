@@ -88,27 +88,27 @@ class Config:
     # SL을 넓혀 일시적 되돌림에 손절되지 않도록 함
     SL_MULT = float(
         os.getenv("SL_MULT", "1.5")
-    )  # ATR × 1.5 = 손절 거리 (V17 스코어링 기준)
+    )  # ATR × 1.5 = 손절 거리 (V18 스코어링 기준)
     TP_MULT = float(
         os.getenv("TP_MULT", "5.0")
-    )  # ATR × 5.0 = 익절 거리 (V17 스코어링 기준) (R:R = 2:1)
+    )  # ATR × 5.0 = 익절 거리 (V18 스코어링 기준) (R:R = 2:1)
 
     # 동일 종목 연속 손실 시 쿨다운 (분)
     LOSS_COOLDOWN_MINUTES = int(os.getenv("LOSS_COOLDOWN_MINUTES", "15"))
 
-    # ── V16 MTF 필터 파라미터 ─────────────────────────────────────────────
+    # ── V18 필터 파라미터 ─────────────────────────────────────────────
     # 상위 타임프레임 설정 (CCXT 포맷)
     HTF_TIMEFRAME_1H = os.getenv("HTF_TIMEFRAME_1H", "1h")  # 1시간봉 (거시 추세)
     HTF_TIMEFRAME_15M = os.getenv(
         "HTF_TIMEFRAME_15M", "15m"
     )  # 15분봉 (추세 강도·모멘텀)
-    # ADX 기준값: 이 이상이면 추세장(모멘텀 추종), 미만이면 횡보장(역추세/평균회귀) (V17 레거시, V18에서 백분위수로 대체됨)
-    # ── V16 샹들리에 청산(Chandelier Exit / Trailing Stop) 파라미터 ────────
+    # ADX 기준값: 이 이상이면 추세장(모멘텀 추종), 미만이면 횡보장(역추세/평균회귀) (V18에서 백분위수로 대체됨)
+    # ── V18 샹들리에 청산(Chandelier Exit / Trailing Stop) 파라미터 ────────
     # 진입 후 최고점(Long) 또는 최저점(Short)에서 ATR × 배수 만큼 후퇴 시 손절
     CHANDELIER_MULT = float(os.getenv("CHANDELIER_MULT", "2.0"))
     CHANDELIER_ATR_LEN = int(os.getenv("CHANDELIER_ATR_LEN", "14"))  # ATR 산출 기간
 
-    # ── V16 포트폴리오 동시 진입 제한 ────────────────────────────────────
+    # ── V18 포트폴리오 동시 진입 제한 ────────────────────────────────────
     # 동일 방향(롱 또는 숏) 포지션이 이 개수 이상이면 추가 진입 차단
     MAX_CONCURRENT_SAME_DIR = int(os.getenv("MAX_CONCURRENT_SAME_DIR", "2"))
 
@@ -118,7 +118,7 @@ class Config:
     # 종목 리프레시 주기 (시간 단위, 기본 3시간)
     SYMBOL_REFRESH_INTERVAL = int(os.getenv("SYMBOL_REFRESH_INTERVAL", "3"))
 
-    # 본절(Breakeven) 추적 로직 (V16+)
+    # 본절(Breakeven) 추적 로직 (V18)
     BREAKEVEN_TRIGGER_MULT = float(os.getenv("BREAKEVEN_TRIGGER_MULT", "1.5"))
     BREAKEVEN_PROFIT_MULT = float(os.getenv("BREAKEVEN_PROFIT_MULT", "0.2"))
 
@@ -250,7 +250,7 @@ class Config:
         },
     }
 
-    # ── V17 체결 & 사이징 파라미터 ────────────────────────────────────────
+    # ── V18 체결 & 사이징 파라미터 ────────────────────────────────────────
     # Half-Kelly 동적 사이징 (승률·손익비 기반 투입 비중 자동 조절)
     KELLY_SIZING = os.getenv("KELLY_SIZING", "False").lower() == "true"
     KELLY_MIN_TRADES = int(os.getenv("KELLY_MIN_TRADES", "20"))  # 최소 표본 수
@@ -261,7 +261,7 @@ class Config:
     # Chasing 지정가 체결 대기 시간 (초)
     CHASING_WAIT_SEC = float(os.getenv("CHASING_WAIT_SEC", "5.0"))
 
-    # ── V17 분할 익절 파라미터 ────────────────────────────────────────────
+    # ── V18 분할 익절 파라미터 ────────────────────────────────────────────
     # TP 도달 시 전체 물량 중 이 비율만 1차 익절, 잔량은 Chandelier 추적
     PARTIAL_TP_RATIO = float(os.getenv("PARTIAL_TP_RATIO", "0.5"))  # 50% 분할 익절
 
