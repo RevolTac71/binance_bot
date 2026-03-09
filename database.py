@@ -80,6 +80,15 @@ class MarketSnapshot(Base):
     open_interest = Column(Float, nullable=True)
     tick_count = Column(Integer, nullable=True)
 
+    # 8. V18.4 전략 파라미터 스냅샷 (추가)
+    min_score_long = Column(Integer, nullable=True)
+    min_score_short = Column(Integer, nullable=True)
+    long_tp_mult = Column(Float, nullable=True)
+    long_sl_mult = Column(Float, nullable=True)
+    short_tp_mult = Column(Float, nullable=True)
+    short_sl_mult = Column(Float, nullable=True)
+    macd_filter_enabled = Column(Boolean, nullable=True)
+
 
 class TradeLog(Base):
     """

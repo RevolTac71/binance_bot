@@ -209,6 +209,7 @@ class Config:
     DRY_RUN = os.getenv("DRY_RUN", "True").lower() == "true"
 
     # ── V18 시스템 & 설정 ──────────────────────────────────────────────
+    MACD_FILTER_ENABLED = os.getenv("MACD_FILTER_ENABLED", "True").lower() == "true"
     SYMBOL_REFRESH_INTERVAL = int(os.getenv("SYMBOL_REFRESH_INTERVAL", "3"))
     CURRENT_TARGET_SYMBOLS = []  # 메인 루프에서 동적으로 채워짐 (AttributeError 방지)
 

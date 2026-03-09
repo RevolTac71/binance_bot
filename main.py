@@ -455,6 +455,16 @@ async def process_closed_kline(
         snapshot["buy_ratio"] = decision.get("buy_ratio", 0.5)
         snapshot["long_score"] = decision.get("long_score")
         snapshot["short_score"] = decision.get("short_score")
+
+        # [V18.4] 신규 파라미터 스냅샷 추가
+        snapshot["min_score_long"] = min_score_long
+        snapshot["min_score_short"] = min_score_short
+        snapshot["long_tp_mult"] = getattr(settings, "LONG_TP_MULT", 5.0)
+        snapshot["long_sl_mult"] = getattr(settings, "LONG_SL_MULT", 1.5)
+        snapshot["short_tp_mult"] = getattr(settings, "SHORT_TP_MULT", 5.0)
+        snapshot["short_sl_mult"] = getattr(settings, "SHORT_SL_MULT", 1.5)
+        snapshot["macd_filter_enabled"] = getattr(settings, "MACD_FILTER_ENABLED", True)
+
         snapshot_queue.append(snapshot)
 
         if decision["signal"]:

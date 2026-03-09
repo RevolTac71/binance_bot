@@ -457,6 +457,13 @@ class StrategyEngine:
         if "NOFI" not in df.columns:
             df["NOFI"] = 0.0
 
+        if "open_interest" not in df.columns:
+            df["open_interest"] = 0.0
+        if "tick_count" not in df.columns:
+            df["tick_count"] = 0
+        if "Log_Vol_ZScore" not in df.columns:
+            df["Log_Vol_ZScore"] = 0.0
+
         if hft_features:
             df.iloc[-1, df.columns.get_loc("open_interest")] = hft_features.get(
                 "open_interest", 0.0
@@ -470,9 +477,6 @@ class StrategyEngine:
                 df.iloc[-1, df.columns.get_loc("Log_Vol_ZScore")] = hft_features[
                     "log_volume_zscore"
                 ]
-        else:
-            df["open_interest"] = 0.0
-            df["tick_count"] = 0
 
         # 백분위수 산출
         pctl_window = getattr(settings, "PCTL_WINDOW", 100)
@@ -535,10 +539,30 @@ class StrategyEngine:
 
         # 롱 진입 검증
         if raw_signal == 1 and long_score >= min_score_long:
-            signal_type = "LONG"
-            reason = f"[V18 SCORE LONG] {score_detail} (≥{min_score_long}, Type={entry_type})"
+            # [V18.4] MACD 하드 필터 체크
+            if settings.MACD_FILTER_ENABLED:
+                macd_p = percentiles.get("macd_hist_pctl", 50.0)
+                if macd_p <= 50.0:
+                    raw_signal = None  # 필터 탈락
+                    logger.info(
+                        f"[{symbol}] LONG 시그널 발생했으나 MACD 하드 필터에 의해 차단됨 (Pctl: {macd_p:.1f} <= 50)"
+                    )
 
         # 숏 진입 검증
+        if raw_signal == -1 and short_score >= min_score_short:
+            # [V18.4] MACD 하드 필터 체크
+            if settings.MACD_FILTER_ENABLED:
+                macd_p = percentiles.get("macd_hist_pctl", 50.0)
+                if macd_p >= 50.0:
+                    raw_signal = None  # 필터 탈락
+                    logger.info(
+                        f"[{symbol}] SHORT 시그널 발생했으나 MACD 하드 필터에 의해 차단됨 (Pctl: {macd_p:.1f} >= 50)"
+                    )
+
+        # 필터 통과 후 최종 시그널 결정
+        if raw_signal == 1 and long_score >= min_score_long:
+            signal_type = "LONG"
+            reason = f"[V18 SCORE LONG] {score_detail} (≥{min_score_long}, Type={entry_type})"
         elif raw_signal == -1 and short_score >= min_score_short:
             signal_type = "SHORT"
             reason = f"[V18 SCORE SHORT] {score_detail} (≥{min_score_short}, Type={entry_type})"
@@ -585,6 +609,16 @@ class StrategyEngine:
                 short_score=int(short_score),
                 excess_score=int(excess_score),
                 entry_type=str(entry_type),
+                # [V18.4] Settings Snapshot
+                min_score_long=int(min_score_long),
+                min_score_short=int(min_score_short),
+                long_tp_mult=float(getattr(settings, "LONG_TP_MULT", 5.0)),
+                long_sl_mult=float(getattr(settings, "LONG_SL_MULT", 1.5)),
+                short_tp_mult=float(getattr(settings, "SHORT_TP_MULT", 5.0)),
+                short_sl_mult=float(getattr(settings, "SHORT_SL_MULT", 1.5)),
+                macd_filter_enabled=bool(
+                    getattr(settings, "MACD_FILTER_ENABLED", True)
+                ),
             ).model_dump(exclude_none=True)
 
         return {

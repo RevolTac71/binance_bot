@@ -81,8 +81,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "기본 형식: <code>{l/s}_{지표}_{t/w}{단계}</code>\n"
             "▫ <code>t</code>: 임계값 (상위 %, σ 등)\n"
             "▫ <code>w</code>: 부여할 점수 (배점)\n"
-            "예: <code>l_macd_t1 65</code> (롱 MACD 1단계 기준 65%)\n"
             "예: <code>s_rsi_w2 2</code> (숏 RSI 2단계 달성 시 2점 부여)\n\n"
+            "▫ <code>macd_filter</code>: ON 설정 시 MACD 방향 불일치 시 스코어 무관 진입 차단\n\n"
             "💡 <b>팁:</b> 특정 방향 진입을 막으려면 <code>min_score</code>를 매우 높게 설정하세요."
         )
     elif category == "trade":
@@ -429,6 +429,7 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "w_mtm_2": ("mtf_moment", int, "WEIGHT_MTF_MOMENT"),
             "w_reg_1": ("mtf_regime", int, "WEIGHT_MTF_REGIME"),
             "w_vwap_2": ("vwap_dist", int, "WEIGHT_VWAP_DIST"),
+            "macd_filter": ("MACD_FILTER_ENABLED", bool, "MACD_FILTER_ENABLED"),
         }
 
         if key not in mapping:
@@ -457,6 +458,17 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "활성화 (Half-Kelly 동적 사이징)" if is_on else "비활성화 (고정 비율)"
             )
             await update.message.reply_text(f"✅ Kelly 사이징 → {label} 설정 완료")
+            return
+
+        # [V18.4] MACD 하드 필터 on/off 특별 처리
+        elif key == "macd_filter":
+            is_on = raw_val.lower() in ("true", "1", "yes", "on")
+            settings.MACD_FILTER_ENABLED = is_on
+            update_env_variable("MACD_FILTER_ENABLED", str(is_on).capitalize())
+            label = (
+                "활성화 (방향 불일치 시 진입 차단)" if is_on else "비활성화 (필터 무시)"
+            )
+            await update.message.reply_text(f"✅ MACD 하드 필터 → {label} 설정 완료")
             return
 
         # [V18.4] 규칙 기반(Long/Short Rules) 및 가중치 업데이트 처리
@@ -676,6 +688,7 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• <b>재진입대기</b>: {getattr(settings, 'LOSS_COOLDOWN_MINUTES', 15)}분\n\n"
         "━━━━━━ <b>기술적 필터 (Hard)</b> ━━━━━━\n"
         f"• <b>ADX 부스트</b>: {getattr(settings, 'ADX_BOOST_PCTL', 70.0)}%tile (윈도우: {getattr(settings, 'PCTL_WINDOW', 100)})\n"
+        f"• <b>MACD 필터</b> : {'ON (하드필터)' if getattr(settings, 'MACD_FILTER_ENABLED', True) else 'OFF (점수만계산)'}\n"
         f"• <b>ATR 부스트</b>: {getattr(settings, 'ATR_RATIO_MULT', 1.2)}x ({getattr(settings, 'ATR_LONG_LEN', 200)}봉 대비)\n"
         f"• <b>Kelly</b>     : {'ON' if getattr(settings, 'KELLY_SIZING', False) else 'OFF'} (MinSample:{getattr(settings, 'KELLY_MIN_TRADES', 20)}, Cap:{getattr(settings, 'KELLY_MAX_FRACTION', 0.05)})\n"
         f"• <b>Chasing</b>   : Wait={getattr(settings, 'CHASING_WAIT_SEC', 2.5)}s, Retry={getattr(settings, 'CHASING_MAX_RETRY', 10)}, Market_At={getattr(settings, 'CHASING_MARKET_THRESHOLD', 2)}\n\n"

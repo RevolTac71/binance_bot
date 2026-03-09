@@ -65,10 +65,17 @@ class ExecutionEngine:
                     settings, "BREAKEVEN_PROFIT_MULT", None
                 ),
                 # V18 스코어링 엔진 파라미터
-                "min_entry_score": getattr(settings, "MIN_ENTRY_SCORE", None),
+                "macd_filter_enabled": getattr(settings, "MACD_FILTER_ENABLED", True),
+                "min_score_long": getattr(settings, "MIN_SCORE_LONG", 18),
+                "min_score_short": getattr(settings, "MIN_SCORE_SHORT", 17),
                 "pctl_window": getattr(settings, "PCTL_WINDOW", None),
                 "adx_boost_pctl": getattr(settings, "ADX_BOOST_PCTL", None),
                 "scoring_thresholds": getattr(settings, "SCORING_THRESHOLDS", {}),
+                # V18 방향별 차등 TP/SL 파라미터
+                "long_tp_mult": getattr(settings, "LONG_TP_MULT", 5.0),
+                "long_sl_mult": getattr(settings, "LONG_SL_MULT", 1.5),
+                "short_tp_mult": getattr(settings, "SHORT_TP_MULT", 5.0),
+                "short_sl_mult": getattr(settings, "SHORT_SL_MULT", 1.5),
                 # 포트폴리오 관리 파라미터
                 "max_concurrent_same_dir": getattr(
                     settings, "MAX_CONCURRENT_SAME_DIR", None
@@ -832,6 +839,7 @@ class ExecutionEngine:
                     "tp_order_id": str(tp_order_id) if tp_order_id else None,
                     "sl_order_id": str(sl_order_id) if sl_order_id else None,
                     "is_partial_tp_done": False,
+                    "last_summed_ts": self.exchange.milliseconds(),  # PnL 합산 기준점
                 }
             )
             self.active_positions[symbol] = entry_info
@@ -873,7 +881,11 @@ class ExecutionEngine:
                         and sym not in self.active_positions
                         and sym not in self.pending_entries
                     ):
-                        self.active_positions[sym] = True
+                        self.active_positions[sym] = {
+                            "amount": contracts,
+                            "last_summed_ts": self.exchange.milliseconds(),
+                            "is_partial_tp_done": False,
+                        }
                         entry_price = float(p.get("entryPrice", 0))
                         side = p.get("side", "long").upper()
 
@@ -977,17 +989,27 @@ class ExecutionEngine:
                         f"⚖️ [{symbol}] 포지션 수량 감소 감지 ({prev_qty} -> {current_contracts}). 수익 정산을 시작합니다."
                     )
                     try:
-                        trades = await self.exchange.fetch_my_trades(symbol, limit=10)
+                        trades = await self.exchange.fetch_my_trades(symbol, limit=20)
                         partial_pnl = 0.0
-                        # 최근 60초 이내의 실현 손익 합산 (네트워크/체결 지연 방어)
-                        now_ts = self.exchange.milliseconds()
-                        for t in reversed(trades):
-                            if now_ts - t["timestamp"] < 60000:  # 최근 60초 이내 체결
-                                partial_pnl += float(
-                                    t.get("info", {}).get("realizedPnl", 0.0)
-                                )
+                        # last_summed_ts 이후의 모든 실현 손익 합산 (중복 방지)
+                        last_ts = self.active_positions[symbol].get("last_summed_ts", 0)
+                        new_last_ts = last_ts
+
+                        for t in trades:
+                            t_ts = t["timestamp"]
+                            if t_ts > last_ts:
+                                pnl = float(t.get("info", {}).get("realizedPnl", 0.0))
+                                if pnl != 0:
+                                    partial_pnl += pnl
+                                if t_ts > new_last_ts:
+                                    new_last_ts = t_ts
 
                         if partial_pnl != 0:
+                            # 타임스탬프 갱신
+                            self.active_positions[symbol]["last_summed_ts"] = (
+                                new_last_ts
+                            )
+
                             async with AsyncSessionLocal() as session:
                                 stmt = (
                                     select(TradeLog)
@@ -1149,20 +1171,46 @@ class ExecutionEngine:
                             f"[{symbol}] 잔여 조건부(Algo) 주문 취소 실패 (무시 가능): {algo_cancel_e}"
                         )
 
-                    trades = await self.exchange.fetch_my_trades(symbol, limit=5)
+                    trades = await self.exchange.fetch_my_trades(symbol, limit=20)
                     realized_pnl = 0.0
                     close_price = 0.0
                     close_qty = 0.0
+                    last_order_id = ""
 
                     if trades:
-                        last_trade = trades[-1]
-                        close_price = float(last_trade.get("price", 0.0))
-                        close_qty = float(last_trade.get("amount", 0.0))
-                        last_order_id = str(last_trade.get("order", ""))
+                        # [V18.4] last_summed_ts 이후의 모든 실현 손익 합산 (중복 방지)
+                        pos_mem = self.active_positions.get(symbol)
+                        last_ts = 0
+                        if isinstance(pos_mem, dict):
+                            last_ts = pos_mem.get("last_summed_ts", 0)
 
-                        # 선물의 실현 손익 정보는 info 객체의 필드로 들어옵니다.
-                        info = last_trade.get("info", {})
-                        realized_pnl = float(info.get("realizedPnl", 0.0))
+                        processed_trades = []
+                        for t in trades:
+                            t_ts = t["timestamp"]
+                            if t_ts > last_ts:
+                                pnl = float(t.get("info", {}).get("realizedPnl", 0.0))
+                                realized_pnl += pnl
+                                processed_trades.append(t)
+
+                        if processed_trades:
+                            last_trade = processed_trades[-1]  # 가장 최근 체결
+                            close_price = float(last_trade.get("price", 0.0))
+                            close_qty = sum(
+                                [
+                                    float(tr.get("amount", 0.0))
+                                    for tr in processed_trades
+                                ]
+                            )
+                            last_order_id = str(last_trade.get("order", ""))
+                        else:
+                            # 필터링 후 남은게 없다면 (드문 경우) 마지막 한 거래 기준으로 폴백
+                            last_trade = trades[-1]
+                            close_price = float(last_trade.get("price", 0.0))
+                            close_qty = float(last_trade.get("amount", 0.0))
+                            last_order_id = str(last_trade.get("order", ""))
+                            realized_pnl = float(
+                                last_trade.get("info", {}).get("realizedPnl", 0.0)
+                            )
 
                         # [V18.1] 청산 사유 정밀 식별
                         exit_reason = "자동 청산 (감지)"
