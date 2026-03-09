@@ -87,29 +87,29 @@ class Config:
     # val: 실제 값 (Log_Vol_ZScore 등)
     SC_RULES_LONG = {
         "trend": {
-            "macd_pctl": [
+            "macd_hist": [
                 (int(os.getenv("L_MACD_T1", "65")), int(os.getenv("L_MACD_W1", "1"))),
                 (int(os.getenv("L_MACD_T2", "75")), int(os.getenv("L_MACD_W2", "2"))),
                 (int(os.getenv("L_MACD_T4", "85")), int(os.getenv("L_MACD_W4", "4"))),
             ],
-            "cvd_pctl": [
+            "cvd_delta_slope": [
                 (int(os.getenv("L_CVD_T1", "70")), int(os.getenv("L_CVD_W1", "1"))),
                 (int(os.getenv("L_CVD_T2", "85")), int(os.getenv("L_CVD_W2", "2"))),
             ],
-            "imbalance": [
+            "bid_ask_imbalance": [
                 (int(os.getenv("L_IMBAL_T1", "80")), int(os.getenv("L_IMBAL_W1", "1")))
             ],
-            "nofi_pctl": [
+            "nofi_1m": [
                 (int(os.getenv("L_NOFI_T1", "85")), int(os.getenv("L_NOFI_W1", "1")))
             ],
-            "oi_pctl": [
+            "open_interest": [
                 (int(os.getenv("L_OI_T1", "70")), int(os.getenv("L_OI_W1", "2"))),
                 (int(os.getenv("L_OI_T2", "85")), int(os.getenv("L_OI_W2", "4"))),
             ],
-            "tick_pctl": [
+            "tick_count": [
                 (int(os.getenv("L_TICK_T1", "85")), int(os.getenv("L_TICK_W1", "1")))
             ],
-            "vol_zscore": [
+            "log_volume_zscore": [
                 (
                     float(os.getenv("L_VOL_T1", "1.9")),
                     int(os.getenv("L_VOL_W1", "1")),
@@ -208,10 +208,25 @@ class Config:
     # Dry Run Mode (True면 실제 매매하지 않고 DB 기록만 함)
     DRY_RUN = os.getenv("DRY_RUN", "True").lower() == "true"
 
+    # ── V18 시스템 & 설정 ──────────────────────────────────────────────
+    SYMBOL_REFRESH_INTERVAL = int(os.getenv("SYMBOL_REFRESH_INTERVAL", "3"))
+    CURRENT_TARGET_SYMBOLS = []  # 메인 루프에서 동적으로 채워짐 (AttributeError 방지)
+
+    # ── V18 방향별 차등 TP/SL 파라미터 ──────────────────────────────
+    LONG_TP_MULT = float(os.getenv("L_TP_MULT", "5.0"))
+    LONG_SL_MULT = float(os.getenv("L_SL_MULT", "1.5"))
+    SHORT_TP_MULT = float(os.getenv("S_TP_MULT", "5.0"))
+    SHORT_SL_MULT = float(os.getenv("S_SL_MULT", "1.5"))
+
+    # 하위 호환용 (기존 코드에서 참조할 경우의 Fallback)
+    SL_MULT = float(os.getenv("SL_MULT", "1.5"))
+    TP_MULT = float(os.getenv("TP_MULT", "5.0"))
+
     # Telegram Interactive Pause Mode
     IS_PAUSED = False
-    HTF_TIMEFRAME_1H=os.getenv("HTF_TIMEFRAME_1H", "1h")
-    HTF_TIMEFRAME_15M=os.getenv("HTF_TIMEFRAME_15M", "15m")
+    HTF_TIMEFRAME_1H = os.getenv("HTF_TIMEFRAME_1H", "1h")
+    HTF_TIMEFRAME_15M = os.getenv("HTF_TIMEFRAME_15M", "15m")
+
 
 class TelegramLogHandler(logging.Handler):
     """

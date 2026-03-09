@@ -138,13 +138,13 @@ def calculate_entry_score(indicators: dict, adx_boost_pctl: float = 70.0) -> dic
     w = settings.SCORING_WEIGHTS
 
     # ━━━━━ LONG 스코어링 ━━━━━
-    l_macd = evaluate_rule_score(macd_p, rl["trend"]["macd_pctl"], "upper")
-    l_cvd = evaluate_rule_score(cvd_p, rl["trend"]["cvd_pctl"], "upper")
+    l_macd = evaluate_rule_score(macd_p, rl["trend"]["macd_hist"], "upper")
+    l_cvd = evaluate_rule_score(cvd_p, rl["trend"]["cvd_delta_slope"], "upper")
     l_imbal = evaluate_rule_score(imbal_p, rl["trend"]["bid_ask_imbalance"], "upper")
-    l_nofi = evaluate_rule_score(nofi_p, rl["trend"]["nofi_pctl"], "upper")
-    l_oi = evaluate_rule_score(oi_p, rl["trend"]["oi_pctl"], "upper")
-    l_tick = evaluate_rule_score(tick_p, rl["trend"]["tick_pctl"], "upper")
-    l_vol = evaluate_rule_score(vol_z, rl["trend"]["vol_zscore"], "upper")
+    l_nofi = evaluate_rule_score(nofi_p, rl["trend"]["nofi_1m"], "upper")
+    l_oi = evaluate_rule_score(oi_p, rl["trend"]["open_interest"], "upper")
+    l_tick = evaluate_rule_score(tick_p, rl["trend"]["tick_count"], "upper")
+    l_vol = evaluate_rule_score(vol_z, rl["trend"]["log_volume_zscore"], "upper")
 
     l_rsi = evaluate_rule_score(rsi_val, rl["mean_reversion"]["rsi"], "lower")
     l_buy = evaluate_rule_score(buy_p, rl["mean_reversion"]["buy_ratio"], "lower")
@@ -231,7 +231,7 @@ def calculate_entry_score(indicators: dict, adx_boost_pctl: float = 70.0) -> dic
     else:
         detail = (
             f"S[MACD={s_macd} CVD={s_cvd} Imbal={s_imbal} OFI={s_nofi} RSI={s_rsi} Vol={s_vol} "
-            f"OI={s_oi} Tick={s_tick} HTF={s_htf} MOM={s_mtf_m} Reg={l_mtf_r} VWAP={s_vwap} ATR={s_atr}]={short_score}"
+            f"OI={s_oi} Tick={s_tick} HTF={s_htf} MOM={s_mtf_m} Reg={s_mtf_r} VWAP={s_vwap} ATR={s_atr}]={short_score}"
         )
 
     return {

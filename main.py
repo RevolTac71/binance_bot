@@ -472,13 +472,14 @@ async def process_closed_kline(
             reason = decision["reason"]
             atr_val = decision.get("atr_val", market_price * 0.005)
 
-            # 3. 투입 사이즈 산출 (V18: 진입 유형별 차등 SL/TP 반영)
+            # 3. 투입 사이즈 산출 (V18.4: 진입 방향별 차등 TP/SL 반영)
             sizing = await risk.calculate_position_size(
                 symbol,
                 capital,
                 market_price,
                 atr_val,
                 entry_type=decision.get("entry_type", "TREND_MACD"),
+                direction=(1 if decision["signal"] == "LONG" else -1),
             )
 
             if sizing["size"] <= 0:

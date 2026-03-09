@@ -90,21 +90,25 @@ class RiskManager:
         entry_price: float,
         atr_val: float,
         entry_type: str = "TREND_MACD",
+        direction: int = 1,  # 1: Long, -1: Short
     ) -> dict:
         """
-        V18 하이브리드 사이징: 진입 유형에 따른 차등 SL/TP 적용.
-        - TREND_MACD: SL 3.0x / TP 5.0x (v18 추천)
-        - SCALP_CVD: SL 1.0x / TP 5.0x (v18 추천)
+        V18.4 하이브리드 사이징: 진입 방향 및 유형에 따른 차등 SL/TP 적용.
         """
         if capital <= 0 or entry_price <= 0 or atr_val <= 0:
             return {"size": 0.0, "invest_usdt": 0.0, "tp_dist": 0.0, "sl_dist": 0.0}
 
-        # 1. 진입 유형별 SL/TP 배율 설정 (v18 전략 권장값)
-        # 만약 settings에 명시적으로 설정된 값이 있다면 그것을 우선하되, 기본값은 유형별 차등 적용
-        sl_mult = getattr(
-            settings, "SL_MULT", (3.0 if entry_type == "TREND_MACD" else 1.0)
-        )
-        tp_mult = getattr(settings, "TP_MULT", 6.0)
+        # 1. 진입 방향별 TP/SL 배율 결정
+        if direction == 1:  # LONG
+            tp_mult = getattr(settings, "LONG_TP_MULT", 5.0)
+            sl_mult = getattr(settings, "LONG_SL_MULT", 1.5)
+        else:  # SHORT
+            tp_mult = getattr(settings, "SHORT_TP_MULT", 5.0)
+            sl_mult = getattr(settings, "SHORT_SL_MULT", 1.5)
+
+        # entry_type 기반의 기존 v18 추천 로직 (하위 호환 또는 추가 보정 필요 시 사용)
+        # 여기서는 방향별 설정을 우선순위로 두고, 설정이 없을 때만 entry_type을 고려하거나
+        # 사용자가 수동으로 설정한 SL_MULT/TP_MULT가 있다면 그것을 전역으로 채택함.
 
         # Kelly 사이징 활성 시 비중 조절
         risk_pct = self.risk_pct

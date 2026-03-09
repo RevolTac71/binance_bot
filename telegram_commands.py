@@ -422,6 +422,11 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "s_buy_w1": ("SC_RULES_SHORT", int, "S_BUY_W1"),
             "s_buy_w2": ("SC_RULES_SHORT", int, "S_BUY_W2"),
             # Weights (Global)
+            "refresh": ("SYMBOL_REFRESH_INTERVAL", int, "SYMBOL_REFRESH_INTERVAL"),
+            "l_tp": ("LONG_TP_MULT", float, "L_TP_MULT"),
+            "l_sl": ("LONG_SL_MULT", float, "L_SL_MULT"),
+            "s_tp": ("SHORT_TP_MULT", float, "S_TP_MULT"),
+            "s_sl": ("SHORT_SL_MULT", float, "S_SL_MULT"),
             "w_atr_2": ("atr", int, "WEIGHT_ATR_2"),
             "w_adx_1": ("adx_boost", int, "WEIGHT_ADX_1"),
             "w_fr_2": ("fr_boost", int, "WEIGHT_FR_2"),
@@ -666,37 +671,46 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "━━━━━━ <b>지표별 임계치 & 가중치</b> ━━━━━━\n"
     )
 
-    t = getattr(settings, "SCORING_THRESHOLDS", {})
+    # [V18.4] 숏/롱 분리형 규칙 및 방향별 TP/SL 출력
+    rl = getattr(settings, "SC_RULES_LONG", {})
+    rs = getattr(settings, "SC_RULES_SHORT", {})
     w = getattr(settings, "SCORING_WEIGHTS", {})
 
-    if t and w:
-        # 단일 테이블 형식으로 지표별 (임계치 -> 점수) 출력
-        msg += (
-            f"• <b>MACD Hist</b> (+1/+2/+4): {t['macd_pctl']['+1']}/{t['macd_pctl']['+2']}/{t['macd_pctl']['+4']}% → {w['macd']['1']}/{w['macd']['2']}/{w['macd']['4']}점\n"
-            f"• <b>CVD Slope</b> (+1/+2): {t['cvd_pctl']['+1']}/{t['cvd_pctl']['+2']}% → {w['cvd']['1']}/{w['cvd']['2']}점\n"
-            f"• <b>Imbalance</b> (+1/+2): {t['imbalance']['+1']}/{t['imbalance']['+2']}% → {w['imbalance']['1']}/{w['imbalance']['2']}점\n"
-            f"• <b>Norm OFI</b> (+1/+2): {t['nofi_pctl']['+1']}/{t['nofi_pctl']['+2']}% → {w['nofi']['1']}/{w['nofi']['2']}점\n"
-            f"• <b>RSI</b> (+1/+2): {t['rsi']['+1']}/{t['rsi']['+2']} → {w['rsi']['1']}/{w['rsi']['2']}점\n"
-            f"• <b>Buy Ratio</b> (+1/+2): {t['buy_ratio']['+1']}/{t['buy_ratio']['+2']}% → {w['buy_ratio']['1']}/{w['buy_ratio']['2']}점\n"
-            f"• <b>Vol Z-Score</b> (+1/+2): {t['vol_zscore']['+1']}/{t['vol_zscore']['+2']}σ → {w['vol_z']['1']}/{w['vol_z']['2']}점\n"
-            f"• <b>OI Change</b> (+1/+2): {t['oi_pctl']['+1']}/{t['oi_pctl']['+2']}% → {w['oi']['1']}/{w['oi']['2']}점\n"
-            f"• <b>Tick Count</b> (+1/+2): {t['tick_pctl']['+1']}/{t['tick_pctl']['+2']}% → {w['tick']['1']}/{w['tick']['2']}점\n\n"
-            "━━━━━━ <b>거시 & 환경 점수</b> ━━━━━━\n"
-            f"• <b>HTF Bias</b> (1H): {w['htf_bias']['2']}점\n"
-            f"• <b>MTF Moment</b> (15m): {w['mtf_moment']['2']}점\n"
-            f"• <b>MTF Regime</b> (15m): {w['mtf_regime']['1']}점\n"
-            f"• <b>ATR Boost/ADX</b>: {w['atr']['2']}/{w['adx_boost']['1']}점\n"
-            f"• <b>VWAP Distance</b>: {w['vwap_dist']['2']}점\n"
-            f"• <b>Funding Rate Match</b>: {w['fr_boost']['2']}점\n\n"
-        )
+    msg += "━━━━━━ <b>[LONG] 진입 규칙</b> ━━━━━━\n"
+    for group_name, sensors in rl.items():
+        msg += f"<i>[{group_name.upper()}]</i>\n"
+        for sensor, rules in sensors.items():
+            rule_str = (
+                ", ".join([f"{r[0]}→{r[1]}점" for r in rules]) if rules else "비활성"
+            )
+            msg += f" • {sensor}: {rule_str}\n"
+
+    msg += "\n━━━━━━ <b>[SHORT] 진입 규칙</b> ━━━━━━\n"
+    for group_name, sensors in rs.items():
+        msg += f"<i>[{group_name.upper()}]</i>\n"
+        for sensor, rules in sensors.items():
+            rule_str = (
+                ", ".join([f"{r[0]}→{r[1]}점" for r in rules]) if rules else "비활성"
+            )
+            msg += f" • {sensor}: {rule_str}\n"
+
+    msg += "\n━━━━━━ <b>거시 & 환경 점수</b> ━━━━━━\n"
+    msg += (
+        f"• <b>HTF Bias</b> (1H): {w['htf_bias']['2']}점\n"
+        f"• <b>MTF Moment</b> (15m): {w['mtf_moment']['2']}점\n"
+        f"• <b>MTF Regime</b> (15m): {w['mtf_regime']['1']}점\n"
+        f"• <b>ATR/ADX/VWAP</b>: {w['atr']['2']}/{w['adx_boost']['1']}/{w['vwap_dist']['2']}점\n"
+        f"• <b>Funding Match</b>: {w['fr_boost']['2']}점\n\n"
+    )
 
     msg += (
         "━━━━━━ <b>청산 & 탈출</b> ━━━━━━\n"
-        f"• <b>SL / TP</b>   : {getattr(settings, 'SL_MULT', 1.5)}x / {getattr(settings, 'TP_MULT', 5.0)}x\n"
-        f"• <b>분할익절</b>  : {getattr(settings, 'PARTIAL_TP_RATIO', 0.5) * 100:.0f}%\n"
-        f"• <b>본절발동</b>  : {getattr(settings, 'BREAKEVEN_TRIGGER_MULT', 1.5)}x (보존: {getattr(settings, 'BREAKEVEN_PROFIT_MULT', 0.2)}x)\n\n"
+        f"• <b>LONG SL/TP</b> : {settings.LONG_SL_MULT}x / {settings.LONG_TP_MULT}x\n"
+        f"• <b>SHORT SL/TP</b>: {settings.SHORT_SL_MULT}x / {settings.SHORT_TP_MULT}x\n"
+        f"• <b>분할익절</b>   : {getattr(settings, 'PARTIAL_TP_RATIO', 0.5) * 100:.0f}%\n"
+        f"• <b>본절/리프레시</b>: {getattr(settings, 'BREAKEVEN_TRIGGER_MULT', 1.5)}x / {settings.SYMBOL_REFRESH_INTERVAL}h\n\n"
         "💡 변경: /setparam [옵션] [값]\n"
-        "💡 도움말: /help score"
+        "💡 지표: l_macd_t1, l_tp, s_sl 등"
     )
 
     await update.message.reply_text(msg, parse_mode="HTML")
