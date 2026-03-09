@@ -808,9 +808,16 @@ class ExecutionEngine:
             dr_tag = "🧪 [DRY RUN] " if settings.DRY_RUN else "✅ "
             reason = entry_info.get("reason", "자동 진입")
 
+            # [V18.2] 신호 강도(Excess Score) 추출
+            market_snapshot = entry_info.get("market_data", {})
+            excess_score = market_snapshot.get("excess_score", 0)
+            strength_tag = (
+                f" (강도: +{excess_score})" if excess_score > 0 else " (커트라인)"
+            )
+
             await notifier.send_message(
                 f"{dr_tag}포지션 진입 완료\n"
-                f"[{symbol}] {signal_type}\n"
+                f"[{symbol}] {signal_type}{strength_tag}\n"
                 f"사유: {reason}\n"
                 f"체결가: {entry_price:.4f}\n"
                 f"TP 지정가: {tp_price} (수량: {tp_amount_final}, {partial_ratio * 100:.0f}%)\n"

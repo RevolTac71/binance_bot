@@ -72,20 +72,22 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     elif category == "score":
         msg = (
-            "📈 [V18 진입 스코어링 파라미터]\n"
-            "진입 결정을 위한 주요 지표의 임계값과 가중치입니다.\n\n"
-            "── 통합 설정 ──\n"
-            "long_score  롱 진입 임계 점수 (Min Score)\n"
-            "short_score 숏 진입 임계 점수 (Min Score)\n"
-            "adx_boost   추세 가점용 ADX 백분위 (70)\n"
-            "adx_window  백분위 계산용 윈도우 (100)\n\n"
-            "── 상세 임계값 기준 (Thresholds) ──\n"
-            "macd_1/2/4, cvd_1/2, rsi_1/2, buy_1/2,\n"
-            "vol_1/2, imbalance_1/2, nofi_1/2, oi_1/2\n\n"
-            "── 지표별 가중치 (Weights) ──\n"
-            "w_macd_1/2/4, w_cvd_1/2, w_rsi_1/2, w_atr_2\n"
-            "w_htf_2, w_mtm_2, w_reg_1, w_vwap_2\n\n"
-            "💡 수정 예: `/setparam w_macd_4 10`"
+            "📈 <b>[V18 진입 스코어링 시스템 안내]</b>\n"
+            "점수가 합격점을 넘어야 진입하며, 아래 3단계로 조절합니다.\n\n"
+            "<b>1. 진입 합격점 (Min Score)</b>\n"
+            "▫ <code>long_score</code> : 롱 최소 점수 (높을수록 엄격)\n"
+            "▫ <code>short_score</code>: 숏 최소 점수\n\n"
+            "<b>2. 지표별 점수 발생 기준 (Thresholds)</b>\n"
+            "지표가 상위 N%일 때 점수가 발생합니다. (1이 초보, 4가 고점)\n"
+            "▫ <code>macd_1/2/4</code>, <code>cvd_1/2</code>, <code>rsi_1/2</code>\n"
+            "▫ <code>imbal_1/2</code>, <code>nofi_1/2</code>, <code>oi_1/2</code>, <code>tick_1/2</code>\n\n"
+            "<b>3. 지표별 실제 배점 (Weights)</b>\n"
+            "위 기준 통과 시 실제로 합산될 <b>가중치</b>입니다.\n"
+            "▫ <code>w_macd_4</code> : MACD 강한 신호 시 배점\n"
+            "▫ <code>w_htf_2</code>  : 상위 봉 추세 유지 시 배점\n"
+            "▫ <code>w_atr_2</code>  : 필터 확장 시 배점\n\n"
+            "💡 <b>예시:</b> MACD를 아주 중요하게 보고 싶다면?\n"
+            "👉 <code>/setparam w_macd_4 15</code> (가중치 대폭 상향)"
         )
     elif category == "trade":
         msg = (
@@ -375,11 +377,6 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "oi_2": ("oi_pctl", int, "SCORE_OI_2"),
             "tick_1": ("tick_pctl", int, "SCORE_TICK_1"),
             "tick_2": ("tick_pctl", int, "SCORE_TICK_2"),
-            "atr_boost": (
-                "atr_boost",
-                int,
-                "SCORE_ATR_BOOST_2",
-            ),  # ATR Boost is a threshold
             # Scoring Weights (Custom 키)
             "w_macd_1": ("macd", int, "WEIGHT_MACD_1"),
             "w_macd_2": ("macd", int, "WEIGHT_MACD_2"),
@@ -458,15 +455,10 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "oi_2",
             "tick_1",
             "tick_2",
-            "atr_boost",
         )
         if key in threshold_keys:
-            # atr_boost는 sub_key가 +2로 고정
-            if key == "atr_boost":
-                sub_key = "+2"
-            else:
-                # sub_key 추출 (+1, +2 등)
-                sub_key = "+" + key.split("_")[1]
+            # sub_key 추출 (+1, +2 등)
+            sub_key = "+" + key.split("_")[1]
 
             new_val = cast_fn(raw_val)
 
@@ -632,53 +624,59 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     mode = "모의투자(DRY_RUN)" if settings.DRY_RUN else "실전매매(REAL)"
 
+    # [V18.3] 텔레그램 파라미터 출력 최적화
     msg = (
-        "⚙️ [V18 현재 설정 파라미터]\n"
-        f"모드      : {mode}\n"
-        f"레버리지  : {settings.LEVERAGE}x\n"
-        f"리스크    : {settings.RISK_PERCENTAGE * 100:.1f}%\n"
-        f"MaxTrades : {getattr(settings, 'MAX_TRADES', 3)} (동일방향: {getattr(settings, 'MAX_CONCURRENT_SAME_DIR', 2)})\n"
-        f"캔들/보유 : {getattr(settings, 'TIMEFRAME', '3m')} / {getattr(settings, 'TIME_EXIT_MINUTES', 0)}분\n\n"
-        f"── 진입 조건 (V18 스코어링) ──\n"
-        f"임계점수  : LONG={settings.MIN_SCORE_LONG} / SHORT={settings.MIN_SCORE_SHORT}\n"
-        f"ADX 부스트: {settings.ADX_BOOST_PCTL}%tile (윈도우: {settings.PCTL_WINDOW})\n"
-        f"ATR 부스트 : {settings.ATR_RATIO_MULT}x ({getattr(settings, 'ATR_LONG_LEN', 200)}봉 대비)\n"
+        "⚙️ <b>[V18.3 현재 설정 파라미터]</b>\n"
+        "━━━━━━ <b>시스템 & 리스크</b> ━━━━━━\n"
+        f"• <b>매매 모드</b>  : {mode}\n"
+        f"• <b>레버리지</b>  : {settings.LEVERAGE}x\n"
+        f"• <b>리스크</b>    : {settings.RISK_PERCENTAGE * 100:.1f}%\n"
+        f"• <b>MaxTrades</b> : {getattr(settings, 'MAX_TRADES', 3)} (동일방향: {getattr(settings, 'MAX_CONCURRENT_SAME_DIR', 2)})\n"
+        f"• <b>캔들/보유</b> : {getattr(settings, 'TIMEFRAME', '3m')} / {getattr(settings, 'TIME_EXIT_MINUTES', 0)}분\n"
+        f"• <b>진입 임계</b> : LONG={settings.MIN_SCORE_LONG} / SHORT={settings.MIN_SCORE_SHORT}\n"
+        f"• <b>재진입대기</b>: {getattr(settings, 'LOSS_COOLDOWN_MINUTES', 15)}분\n\n"
+        "━━━━━━ <b>기술적 필터 (Hard)</b> ━━━━━━\n"
+        f"• <b>ADX 부스트</b>: {settings.ADX_BOOST_PCTL}%tile (윈도우: {settings.PCTL_WINDOW})\n"
+        f"• <b>ATR 부스트</b>: {settings.ATR_RATIO_MULT}x ({getattr(settings, 'ATR_LONG_LEN', 200)}봉 대비)\n"
+        f"• <b>Kelly</b>     : {'ON' if getattr(settings, 'KELLY_SIZING', False) else 'OFF'} (MinSample:{getattr(settings, 'KELLY_MIN_TRADES', 20)}, Cap:{getattr(settings, 'KELLY_MAX_FRACTION', 0.05)})\n"
+        f"• <b>Chasing</b>   : Wait={getattr(settings, 'CHASING_WAIT_SEC', 2.5)}s, Retry={getattr(settings, 'CHASING_MAX_RETRY', 10)}, Market_At={getattr(settings, 'CHASING_MARKET_THRESHOLD', 2)}\n\n"
+        "━━━━━━ <b>지표별 임계치 & 가중치</b> ━━━━━━\n"
     )
 
     t = getattr(settings, "SCORING_THRESHOLDS", {})
-    if t:
+    w = getattr(settings, "SCORING_WEIGHTS", {})
+
+    if t and w:
+        # 단일 테이블 형식으로 지표별 (임계치 -> 점수) 출력
         msg += (
-            f"\n[V18 세부 지표 점수(+1/+2/+4) 기준]\n"
-            f"- MACD 히스토 : {t.get('macd_pctl', {}).get('+1')}/{t.get('macd_pctl', {}).get('+2')}/{t.get('macd_pctl', {}).get('+4')}%\n"
-            f"- CVD 기울기  : {t.get('cvd_pctl', {}).get('+1')}/{t.get('cvd_pctl', {}).get('+2')}%\n"
-            f"- 호가 불균형 : {t.get('imbalance', {}).get('+1')}/{t.get('imbalance', {}).get('+2')}%\n"
-            f"- 정규화 OFI  : {t.get('nofi_pctl', {}).get('+1')}/{t.get('nofi_pctl', {}).get('+2')}%\n"
-            f"- RSI 과매도  : {t.get('rsi', {}).get('+1')}/{t.get('rsi', {}).get('+2')}\n"
-            f"- 미결제약정  : {t.get('oi_pctl', {}).get('+1')}/{t.get('oi_pctl', {}).get('+2')}%\n"
-            f"- 체결 횟수   : {t.get('tick_pctl', {}).get('+1')}/{t.get('tick_pctl', {}).get('+2')}%\n"
-            f"- 역발상(Buy) : {t.get('buy_ratio', {}).get('+1')}/{t.get('buy_ratio', {}).get('+2')}%\n"
-            f"- 볼륨 Z-스코어: {t.get('vol_zscore', {}).get('+1')}/{t.get('vol_zscore', {}).get('+2')}σ\n\n"
-            f"[V18 지표별 가중치(Weights)]\n"
-            f"- MACD(+1/+2/+4): {settings.SCORING_WEIGHTS['macd']['1']}/{settings.SCORING_WEIGHTS['macd']['2']}/{settings.SCORING_WEIGHTS['macd']['4']}점\n"
-            f"- CVD(+1/+2)     : {settings.SCORING_WEIGHTS['cvd']['1']}/{settings.SCORING_WEIGHTS['cvd']['2']}점\n"
-            f"- RSI(+1/+2)     : {settings.SCORING_WEIGHTS['rsi']['1']}/{settings.SCORING_WEIGHTS['rsi']['2']}점\n"
-            f"- 환경(ATR/ADX/FR): {settings.SCORING_WEIGHTS['atr']['2']}/{settings.SCORING_WEIGHTS['adx_boost']['1']}/{settings.SCORING_WEIGHTS['fr_boost']['2']}점\n"
-            f"- 거시(HTF/MOM/REG): {settings.SCORING_WEIGHTS['htf_bias']['2']}/{settings.SCORING_WEIGHTS['mtf_moment']['2']}/{settings.SCORING_WEIGHTS['mtf_regime']['1']}점\n"
-            f"- 가격(VWAP Dist) : {settings.SCORING_WEIGHTS['vwap_dist']['2']}점\n\n"
+            f"• <b>MACD Hist</b> (+1/+2/+4): {t['macd_pctl']['+1']}/{t['macd_pctl']['+2']}/{t['macd_pctl']['+4']}% → {w['macd']['1']}/{w['macd']['2']}/{w['macd']['4']}점\n"
+            f"• <b>CVD Slope</b> (+1/+2): {t['cvd_pctl']['+1']}/{t['cvd_pctl']['+2']}% → {w['cvd']['1']}/{w['cvd']['2']}점\n"
+            f"• <b>Imbalance</b> (+1/+2): {t['imbalance']['+1']}/{t['imbalance']['+2']}% → {w['imbalance']['1']}/{w['imbalance']['2']}점\n"
+            f"• <b>Norm OFI</b> (+1/+2): {t['nofi_pctl']['+1']}/{t['nofi_pctl']['+2']}% → {w['nofi']['1']}/{w['nofi']['2']}점\n"
+            f"• <b>RSI</b> (+1/+2): {t['rsi']['+1']}/{t['rsi']['+2']} → {w['rsi']['1']}/{w['rsi']['2']}점\n"
+            f"• <b>Buy Ratio</b> (+1/+2): {t['buy_ratio']['+1']}/{t['buy_ratio']['+2']}% → {w['buy_ratio']['1']}/{w['buy_ratio']['2']}점\n"
+            f"• <b>Vol Z-Score</b> (+1/+2): {t['vol_zscore']['+1']}/{t['vol_zscore']['+2']}σ → {w['vol_z']['1']}/{w['vol_z']['2']}점\n"
+            f"• <b>OI Change</b> (+1/+2): {t['oi_pctl']['+1']}/{t['oi_pctl']['+2']}% → {w['oi']['1']}/{w['oi']['2']}점\n"
+            f"• <b>Tick Count</b> (+1/+2): {t['tick_pctl']['+1']}/{t['tick_pctl']['+2']}% → {w['tick']['1']}/{w['tick']['2']}점\n\n"
+            "━━━━━━ <b>거시 & 환경 점수</b> ━━━━━━\n"
+            f"• <b>HTF Bias</b> (1H): {w['htf_bias']['2']}점\n"
+            f"• <b>MTF Moment</b> (15m): {w['mtf_moment']['2']}점\n"
+            f"• <b>MTF Regime</b> (15m): {w['mtf_regime']['1']}점\n"
+            f"• <b>ATR Boost/ADX</b>: {w['atr']['2']}/{w['adx_boost']['1']}점\n"
+            f"• <b>VWAP Distance</b>: {w['vwap_dist']['2']}점\n"
+            f"• <b>Funding Rate Match</b>: {w['fr_boost']['2']}점\n\n"
         )
 
     msg += (
-        f"── 체결 & 사이징 ──\n"
-        f"Kelly    : {'ON' if getattr(settings, 'KELLY_SIZING', False) else 'OFF'} (Min:{getattr(settings, 'KELLY_MIN_TRADES', 20)}, Max:{getattr(settings, 'KELLY_MAX_FRACTION', 0.05)})\n"
-        f"Chasing  : {getattr(settings, 'CHASING_WAIT_SEC', 5.0)}초\n\n"
-        f"── 청산 & 리스크 ──\n"
-        f"SL / TP   : {getattr(settings, 'SL_MULT', 1.5)}x / {getattr(settings, 'TP_MULT', 5.0)}x\n"
-        f"분할익절  : {getattr(settings, 'PARTIAL_TP_RATIO', 0.5) * 100:.0f}%\n"
-        f"본절발동  : {getattr(settings, 'BREAKEVEN_TRIGGER_MULT', 1.5)}x (보존: {getattr(settings, 'BREAKEVEN_PROFIT_MULT', 0.2)}x)\n"
-        f"재진입대기: {getattr(settings, 'LOSS_COOLDOWN_MINUTES', 15)}분\n\n"
-        "💡 변경은 /setparam [옵션] [값] 이용"
+        "━━━━━━ <b>청산 & 탈출</b> ━━━━━━\n"
+        f"• <b>SL / TP</b>   : {getattr(settings, 'SL_MULT', 1.5)}x / {getattr(settings, 'TP_MULT', 5.0)}x\n"
+        f"• <b>분할익절</b>  : {getattr(settings, 'PARTIAL_TP_RATIO', 0.5) * 100:.0f}%\n"
+        f"• <b>본절발동</b>  : {getattr(settings, 'BREAKEVEN_TRIGGER_MULT', 1.5)}x (보존: {getattr(settings, 'BREAKEVEN_PROFIT_MULT', 0.2)}x)\n\n"
+        "💡 변경: /setparam [옵션] [값]\n"
+        "💡 도움말: /help score"
     )
-    await update.message.reply_text(msg)
+
+    await update.message.reply_text(msg, parse_mode="HTML")
 
 
 async def refresh_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):

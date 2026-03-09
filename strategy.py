@@ -498,60 +498,8 @@ class StrategyEngine:
         raw_signal = score_result["signal"]
         score_detail = score_result["detail"]
 
-        # ── 4. 진입 조건 필터링 (최종 결정) ───────────────────────────────
-        min_score_long = getattr(settings, "MIN_SCORE_LONG", 12)
-        min_score_short = getattr(settings, "MIN_SCORE_SHORT", 9)
-        signal_type = None
-        reason = ""
-
-        # A. ATR 변동성 필터 (V18: 변동성 부족 시 시그널만 차단, 점수는 이미 산출됨)
-        # atr_boost_flag가 False여도 점수가 높으면 진입 가능하지만, 극단적 횡보장 방지용
-        # 여기서는 atr_boost_flag를 가중치로만 쓰기로 했으나, 명시적 '최소 변동성'이 필요하다면 추가 가능.
-        # User requested: "진입 시그널은 변동성 부족 시 차단" -> 보수적으로 atr_boost_flag 또는 최소 비율 체크
-        volatility_ok = atr_14 > (
-            atr_long * 0.8
-        )  # 최소한 장기 평균의 80%는 되어야 함 (예시)
-
-        if not volatility_ok:
-            reason = f"변동성 부족 (ATR_14={atr_14:.4f} < {atr_long * 0.8:.4f})"
-        else:
-            # B. 비대칭 스코어 임계값 체크
-            if raw_signal == 1 and long_score >= min_score_long:
-                # C. 스캘핑 안전 장치 (Scalp Gear Check)
-                l_macd = score_result.get("l_macd", 0)
-                if l_macd < 2:  # 추세(MACD) 점수가 낮으면
-                    has_orderflow = (
-                        score_result.get("l_cvd", 0) >= 1
-                        or score_result.get("l_nofi", 0) >= 1
-                    )
-                    if not has_orderflow:
-                        reason = f"Scalp Gear Reject: No Orderflow in low trend ({score_detail})"
-                    else:
-                        signal_type = "LONG"
-                else:
-                    signal_type = "LONG"
-
-                if signal_type:
-                    reason = f"[V18 SCORE LONG] {score_detail} (≥{min_score_long})"
-
-            elif raw_signal == -1 and short_score >= min_score_short:
-                s_macd = score_result.get("s_macd", 0)
-                if s_macd < 2:
-                    has_orderflow = (
-                        score_result.get("s_cvd", 0) >= 1
-                        or score_result.get("s_nofi", 0) >= 1
-                    )
-                    if not has_orderflow:
-                        reason = f"Scalp Gear Reject: No Orderflow in low trend ({score_detail})"
-                    else:
-                        signal_type = "SHORT"
-                else:
-                    signal_type = "SHORT"
-
-                if signal_type:
-                    reason = f"[V18 SCORE SHORT] {score_detail} (≥{min_score_short})"
-
-        # [V18] entry_type 산출 (로깅 및 사이징용)
+        # [V18.3] 진입 유형(entry_type) 선제적 판별 (필터 분기용)
+        # MACD 점수가 2점 이상(추세적)이면 TREND, 아니면 SCALP로 분류
         entry_type = (
             "TREND_MACD"
             if (
@@ -560,12 +508,97 @@ class StrategyEngine:
             else "SCALP_CVD"
         )
 
+        # ── 4. 진입 조건 필터링 (최종 결정: Hard Filters) ─────────────────
+        min_score_long = getattr(settings, "MIN_SCORE_LONG", 12)
+        min_score_short = getattr(settings, "MIN_SCORE_SHORT", 9)
+        signal_type = None
+        reason = ""
+
+        # [V18.2] 필수 관문(Hard Filters) 검증
+        # A. ATR 변동성 필터 (횡보장 차단)
+        min_vol_ratio = 0.7  # 최소 장기 평균의 70%는 되어야 함
+        volatility_ok = atr_14 >= (atr_long * min_vol_ratio)
+
+        # B. MACD 방향성 필터 (현재 봉 기준 역추세 차단)
+        macd_h = current.get("MACD_H", 0)
+        macd_ok_long = macd_h > 0
+        macd_ok_short = macd_h < 0
+
+        # C. HTF(1H) 추세 필터 (BULL/BEAR 거시 방향 일치 여부)
+        htf_ok_long = htf_bias_str == "BULL"
+        htf_ok_short = htf_bias_str == "BEAR"
+
+        if not volatility_ok:
+            reason = f"[{entry_type}] 진입 거부: 변동성 부족 (ATR14={atr_14:.4f} < {atr_long * min_vol_ratio:.4f})"
+        else:
+            # 롱 진입 검증
+            if raw_signal == 1 and long_score >= min_score_long:
+                if not htf_ok_long:
+                    reason = (
+                        f"[{entry_type}] 진입 거부: HTF 추세 불일치 ({htf_bias_str})"
+                    )
+                elif not macd_ok_long:
+                    reason = f"[{entry_type}] 진입 거부: MACD 역방향 (H={macd_h:.6f})"
+                else:
+                    # D. 스캘핑 안전 장치 (Scalp Gear Check)
+                    l_macd_score = score_result.get("l_macd", 0)
+                    if l_macd_score < 2:  # 추세 점수가 낮음 (스캘핑성)
+                        has_orderflow = (
+                            score_result.get("l_cvd", 0) >= 1
+                            or score_result.get("l_nofi", 0) >= 1
+                        )
+                        if not has_orderflow:
+                            reason = f"Scalp Gear Reject: No Orderflow in low trend ({score_detail})"
+                        else:
+                            signal_type = "LONG"
+                    else:
+                        signal_type = "LONG"
+
+                if signal_type:
+                    reason = f"[V18 SCORE LONG] {score_detail} (≥{min_score_long}, Type={entry_type})"
+
+            # 숏 진입 검증
+            elif raw_signal == -1 and short_score >= min_score_short:
+                if not htf_ok_short:
+                    reason = (
+                        f"[{entry_type}] 진입 거부: HTF 추세 불일치 ({htf_bias_str})"
+                    )
+                elif not macd_ok_short:
+                    reason = f"[{entry_type}] 진입 거부: MACD 역방향 (H={macd_h:.6f})"
+                else:
+                    # D. 스캘핑 안전 장치 (Scalp Gear Check)
+                    s_macd_score = score_result.get("s_macd", 0)
+                    if s_macd_score < 2:  # 추세 점수가 낮음 (스캘핑성)
+                        has_orderflow = (
+                            score_result.get("s_cvd", 0) >= 1
+                            or score_result.get("s_nofi", 0) >= 1
+                        )
+                        if not has_orderflow:
+                            reason = f"Scalp Gear Reject: No Orderflow in low trend ({score_detail})"
+                        else:
+                            signal_type = "SHORT"
+                    else:
+                        signal_type = "SHORT"
+
+                if signal_type:
+                    reason = f"[V18 SCORE SHORT] {score_detail} (≥{min_score_short}, Type={entry_type})"
+
+        # entry_type은 위에서 선제 판별됨
+
+        # [V18.2] Excess Score 산출 (임계치 대비 여유 점수)
+        excess_score = 0
+        if signal_type == "LONG":
+            excess_score = int(long_score - min_score_long)
+        elif signal_type == "SHORT":
+            excess_score = int(short_score - min_score_short)
+
         # 최종 진단 로그
         if not reason and not signal_type:
             reason = f"V18 점수 미달 (L={long_score}/{min_score_long}, S={short_score}/{min_score_short})"
 
         logger.info(
-            f"[{symbol}] [V18 Analysis] {reason if not signal_type else 'MATCH'} (Type: {entry_type})"
+            f"[{symbol}] [V18 Analysis] {reason if not signal_type else 'MATCH'} "
+            f"(Strength: +{excess_score if signal_type else 0}, Type: {entry_type})"
         )
 
         # [V18] 시장 데이터 스냅샷 (Pydantic)
@@ -581,6 +614,7 @@ class StrategyEngine:
                 twap_imbalance=float(bid_ask_imbalance),
                 long_score=int(long_score),
                 short_score=int(short_score),
+                excess_score=int(excess_score),
                 entry_type=str(entry_type),
             ).model_dump(exclude_none=True)
 
@@ -593,6 +627,7 @@ class StrategyEngine:
             "market_data": market_data_obj,
             "long_score": long_score,
             "short_score": short_score,
+            "excess_score": excess_score,
             "nofi_1m": float(df["NOFI"].iloc[-1]),
             "buy_ratio": float(df["buy_ratio"].iloc[-1]),
             "entry_type": entry_type,

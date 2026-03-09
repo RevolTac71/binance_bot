@@ -62,21 +62,24 @@ class RiskManager:
 
     def _half_kelly(self, p: float, b: float) -> float:
         """
-        Half-Kelly 비율 산출.
+        Half-Kelly 비율 산출 (V18.3 안전 강화)
         공식: f* = (p(b+1) - 1) / b
-        꼬리 위험 방어를 위해 산출값의 절반 사용.
+        꼬리 위험(Tail Risk) 방어를 위해 산출값의 절반(0.5배)만 사용하며,
+        최종적으로 총 자본 대비 MAX_FRACTION 캡을 적용합니다.
         """
-        kelly = (p * (b + 1) - 1) / b
-        kelly = max(0.0, kelly)  # 음수면 베팅하지 않음 (손실 기대)
-        half_kelly = kelly / 2  # 꼬리 위험 방어
+        raw_kelly = (p * (b + 1) - 1) / b
+        raw_kelly = max(0.0, raw_kelly)  # 음수면 베팅하지 않음 (기댓값 음수)
 
-        # 최대 투입 비율 캡 적용
+        # 0.5배 Half-Kelly 적용 (파산 위험 방어)
+        half_kelly = raw_kelly * 0.5
+
+        # 전역 최대 투입 비율 캡 적용 (기본 5%)
         max_frac = getattr(settings, "KELLY_MAX_FRACTION", 0.05)
         result = min(half_kelly, max_frac)
 
         logger.info(
-            f"[Kelly] 풀 Kelly={kelly:.4f}, "
-            f"Half-Kelly={half_kelly:.4f}, 캡 적용={result:.4f}"
+            f"[Kelly Safety] Raw={raw_kelly:.4f}, Half={half_kelly:.4f}, "
+            f"Final_Cap={result:.4f} (MaxAllowed={max_frac:.2%})"
         )
         return result
 

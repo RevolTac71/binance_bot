@@ -38,6 +38,7 @@ class MarketDataSnapshot(BaseModel):
     # V18 scoring fields for DB mapping
     long_score: Optional[int] = None
     short_score: Optional[int] = None
+    excess_score: Optional[int] = None  # [V18.2] 임계치 대비 여유 점수 (actual - min)
     entry_type: Optional[str] = None
 
 

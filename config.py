@@ -171,21 +171,6 @@ class Config:
             "+1": int(os.getenv("SCORE_TICK_1", "70")),
             "+2": int(os.getenv("SCORE_TICK_2", "85")),
         },
-        "atr_boost": {
-            "+2": int(os.getenv("SCORE_ATR_BOOST_2", "2")),
-        },
-        "htf_bias": {
-            "BULL": 1,
-            "BEAR": -1,
-        },
-        "mtf_momentum": {
-            "BULLISH": 1,
-            "BEARISH": -1,
-        },
-        "mtf_regime": {
-            "TREND": 1,
-            "RANGE": 0,
-        },
     }
 
     # [V18] 지표별 부여 점수 (Weights) - 텔레그램에서 실시간 수정 가능
