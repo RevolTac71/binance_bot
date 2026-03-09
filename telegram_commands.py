@@ -472,7 +472,8 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # [V18.4] 규칙 기반(Long/Short Rules) 및 가중치 업데이트 처리
-        if key.startswith(("l_", "s_", "w_")):
+        # l_sl, l_tp 등 일반 설정은 attr_name이 SC_RULES_... 가 아니므로 아래 블록을 건너뜁니다.
+        if key.startswith("w_") or attr_name in ("SC_RULES_LONG", "SC_RULES_SHORT"):
             new_val = cast_fn(raw_val)
 
             # .env 저장 (공통)
