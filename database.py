@@ -15,8 +15,8 @@ class Trade(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     timestamp = Column(DateTime)
-    action = Column(String(10))  # 'BUY' or 'SELL', 'MANUAL', 'CLOSED' 등의 구분자
-    symbol = Column(String(20))  # 예: 'BTC/USDT:USDT'
+    action = Column(String(50))  # 'BUY' or 'SELL', 'PARTIAL_CLOSED' 등의 구분자
+    symbol = Column(String(50))  # 예: 'BTC/USDT:USDT'
     price = Column(Float)
     quantity = Column(Float)
     realized_pnl = Column(Float, nullable=True)  # 실현손익 (청산 시에만 기록)
@@ -44,7 +44,7 @@ class MarketSnapshot(Base):
 
     snapshot_id = Column(Integer, primary_key=True, autoincrement=True)
     timestamp = Column(DateTime, index=True)
-    symbol = Column(String(20), index=True)
+    symbol = Column(String(50), index=True)
 
     # 1. 가격 및 오실레이터 (Price & Oscillators)
     rsi = Column(Float, nullable=True)
@@ -76,6 +76,10 @@ class MarketSnapshot(Base):
     long_score = Column(Integer, nullable=True)
     short_score = Column(Integer, nullable=True)
 
+    # 7. V18.2 HFT 확장 피처 (추가)
+    open_interest = Column(Float, nullable=True)
+    tick_count = Column(Integer, nullable=True)
+
 
 class TradeLog(Base):
     """
@@ -86,8 +90,8 @@ class TradeLog(Base):
     __tablename__ = "trade_logs"
 
     trade_id = Column(Integer, primary_key=True, autoincrement=True)
-    symbol = Column(String(20), index=True)
-    direction = Column(String(10))  # 'LONG' or 'SHORT'
+    symbol = Column(String(50), index=True)
+    direction = Column(String(20))  # 'LONG' or 'SHORT'
     qty = Column(Float)
 
     # 진입 스펙
@@ -114,6 +118,9 @@ class TradeLog(Base):
     tp_price = Column(Float, nullable=True)
     sl_price = Column(Float, nullable=True)
 
+    # [V18.2] 진입 시점의 시장 지표 스냅샷 (추가)
+    market_data = Column(JSONB, nullable=True)
+
     # 지연 모델링 레이블 (MFE, MAE 및 수익률) - Offline 배치로 UPDATE 됨
     mfe = Column(
         Float, nullable=True
@@ -136,7 +143,7 @@ class MarketData_1m(Base):
     __tablename__ = "market_data_1m"
 
     timestamp = Column(DateTime, primary_key=True, index=True)
-    symbol = Column(String(20), primary_key=True)
+    symbol = Column(String(50), primary_key=True)
     open = Column(Float, nullable=True)
     high = Column(Float, nullable=True)
     low = Column(Float, nullable=True)

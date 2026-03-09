@@ -642,7 +642,7 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"── 진입 조건 (V18 스코어링) ──\n"
         f"임계점수  : LONG={settings.MIN_SCORE_LONG} / SHORT={settings.MIN_SCORE_SHORT}\n"
         f"ADX 부스트: {settings.ADX_BOOST_PCTL}%tile (윈도우: {settings.PCTL_WINDOW})\n"
-        f"ATR 필터  : {settings.ATR_RATIO_MULT}x\n"
+        f"ATR 부스트 : {settings.ATR_RATIO_MULT}x ({getattr(settings, 'ATR_LONG_LEN', 200)}봉 대비)\n"
     )
 
     t = getattr(settings, "SCORING_THRESHOLDS", {})
@@ -662,8 +662,9 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"- MACD(+1/+2/+4): {settings.SCORING_WEIGHTS['macd']['1']}/{settings.SCORING_WEIGHTS['macd']['2']}/{settings.SCORING_WEIGHTS['macd']['4']}점\n"
             f"- CVD(+1/+2)     : {settings.SCORING_WEIGHTS['cvd']['1']}/{settings.SCORING_WEIGHTS['cvd']['2']}점\n"
             f"- RSI(+1/+2)     : {settings.SCORING_WEIGHTS['rsi']['1']}/{settings.SCORING_WEIGHTS['rsi']['2']}점\n"
-            f"- ATR/ADX/FR     : {settings.SCORING_WEIGHTS['atr']['2']}/{settings.SCORING_WEIGHTS['adx_boost']['1']}/{settings.SCORING_WEIGHTS['fr_boost']['2']}점\n"
-            f"- HTF/MTM/Reg/VW : {settings.SCORING_WEIGHTS['htf_bias']['2']}/{settings.SCORING_WEIGHTS['mtf_moment']['2']}/{settings.SCORING_WEIGHTS['mtf_regime']['1']}/{settings.SCORING_WEIGHTS['vwap_dist']['2']}점\n\n"
+            f"- 환경(ATR/ADX/FR): {settings.SCORING_WEIGHTS['atr']['2']}/{settings.SCORING_WEIGHTS['adx_boost']['1']}/{settings.SCORING_WEIGHTS['fr_boost']['2']}점\n"
+            f"- 거시(HTF/MOM/REG): {settings.SCORING_WEIGHTS['htf_bias']['2']}/{settings.SCORING_WEIGHTS['mtf_moment']['2']}/{settings.SCORING_WEIGHTS['mtf_regime']['1']}점\n"
+            f"- 가격(VWAP Dist) : {settings.SCORING_WEIGHTS['vwap_dist']['2']}점\n\n"
         )
 
     msg += (

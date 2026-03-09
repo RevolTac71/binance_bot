@@ -425,6 +425,9 @@ async def process_closed_kline(
             "funding_rate_match": fr_match,
             "log_vol_zscore": float(df_ind.iloc[-1].get("Log_Vol_ZScore", 0.0)),
             "correlation_max": float(max_corr),
+            # [V18.2] HFT 피처 명시적 추가
+            "open_interest": float(hft_feats.get("open_interest", 0.0)),
+            "tick_count": int(hft_feats.get("tick_count", 0)),
         }
 
         # 3. [V18.1] 신규 진입 필터 (데이터 업데이트 이후 수행)

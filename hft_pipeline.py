@@ -164,7 +164,7 @@ class HFTDataPipeline:
                     data = await resp.json()
                     oi = float(data.get("openInterest", 0.0))
         except Exception as e:
-            logger.warning(f"[HFT] {raw_sym} OI 조회 실패: {e}")
+            logger.warning(f"[HFT] {raw_sym} OI 조회 실패: {type(e).__name__} - {e}")
 
         try:
             # 펀딩비
@@ -176,8 +176,14 @@ class HFTDataPipeline:
                 if resp.status == 200:
                     data = await resp.json()
                     funding = float(data.get("lastFundingRate", 0.0))
+                else:
+                    logger.warning(
+                        f"[HFT] {raw_sym} 펀딩비 조회 HTTP API 에러: Status {resp.status}"
+                    )
         except Exception as e:
-            logger.warning(f"[HFT] {raw_sym} 펀딩비 조회 실패: {e}")
+            logger.warning(
+                f"[HFT] {raw_sym} 펀딩비 조회 실패: {type(e).__name__} - {e}"
+            )
 
         return oi, funding
 

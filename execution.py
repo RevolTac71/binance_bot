@@ -359,42 +359,58 @@ class ExecutionEngine:
             average_price = 0.0
 
             if not settings.DRY_RUN:
-                max_retries = 10
+                max_retries = getattr(settings, "CHASING_MAX_RETRY", 10)
+                market_threshold = getattr(settings, "CHASING_MARKET_THRESHOLD", 3)
                 remaining_amount = amount
                 total_cost = 0.0
                 filled_amount = 0.0
 
                 for attempt in range(max_retries):
                     try:
-                        # 1. 호가창(Orderbook) 조회하여 최우선 호가 파악
-                        ob = await self.exchange.fetch_order_book(symbol, limit=5)
-                        if side == "buy":
-                            target_price = float(ob["bids"][0][0])
+                        # [V18.2] Hybrid Chasing: 일정 횟수 실패 시 시장가로 전환하여 진입 보장
+                        is_market_fallback = attempt >= market_threshold
+
+                        if is_market_fallback:
+                            logger.info(
+                                f"[{symbol}] Chasing {attempt + 1}/{max_retries}: 지정가 체결 실패로 인한 '시장가' 전환 진입 수행"
+                            )
+                            # 시장가 주문은 price와 GTX 파라미터가 필요 없음
+                            entry_order = await self.exchange.create_order(
+                                symbol=symbol,
+                                type="market",
+                                side=side,
+                                amount=remaining_amount,
+                            )
                         else:
-                            target_price = float(ob["asks"][0][0])
+                            # 1. 호가창(Orderbook) 조회하여 최우선 호가 파악
+                            ob = await self.exchange.fetch_order_book(symbol, limit=5)
+                            if side == "buy":
+                                target_price = float(ob["bids"][0][0])
+                            else:
+                                target_price = float(ob["asks"][0][0])
 
-                        price_str = self.exchange.price_to_precision(
-                            symbol, target_price
-                        )
-                        amount_str = self.exchange.amount_to_precision(
-                            symbol, remaining_amount
-                        )
+                            price_str = self.exchange.price_to_precision(
+                                symbol, target_price
+                            )
+                            amount_str = self.exchange.amount_to_precision(
+                                symbol, remaining_amount
+                            )
 
-                        if float(amount_str) <= 0:
-                            break
+                            if float(amount_str) <= 0:
+                                break
 
-                        # 2. Limit Maker (Post-Only) 주문 제출
-                        logger.info(
-                            f"[{symbol}] Chasing {attempt + 1}/{max_retries}: {target_price}에 Post-Only 지정가 {amount_str}개 제출"
-                        )
-                        entry_order = await self.exchange.create_order(
-                            symbol=symbol,
-                            type="limit",
-                            side=side,
-                            amount=float(amount_str),
-                            price=float(price_str),
-                            params={"timeInForce": "GTX"},  # Post-Only 강제
-                        )
+                            # 2. Limit Maker (Post-Only) 주문 제출
+                            logger.info(
+                                f"[{symbol}] Chasing {attempt + 1}/{max_retries}: {target_price}에 Post-Only 지정가 {amount_str}개 제출"
+                            )
+                            entry_order = await self.exchange.create_order(
+                                symbol=symbol,
+                                type="limit",
+                                side=side,
+                                amount=float(amount_str),
+                                price=float(price_str),
+                                params={"timeInForce": "GTX"},  # Post-Only 강제
+                            )
                         order_id = entry_order.get("id")
 
                         pass
@@ -665,6 +681,8 @@ class ExecutionEngine:
                     dry_run=settings.DRY_RUN,
                     tp_price=tp_price,
                     sl_price=sl_price,
+                    # [V18.2] ML 파이프라인 학습용 시장 맥락 데이터 추가
+                    market_data=entry_info.get("market_data"),
                     # exit 관련은 NULL 유지
                 )
                 session.add(new_tradelog)
@@ -750,8 +768,8 @@ class ExecutionEngine:
                 except Exception as e:
                     err_msg = str(e)
                     if "-4120" in err_msg or "Algo Order API endpoints" in err_msg:
-                        logger.warning(
-                            f"[{symbol}] 일반 Stop Market 거절됨(-4120). 신규 AlgoOrder 전용 엔드포인트로 SL(손절) 전송을 재시도합니다."
+                        logger.info(
+                            f"ℹ️ [{symbol}] 일반 Stop Market 거절됨(-4120). 신규 AlgoOrder API로 SL(손절) 전송을 시도합니다."
                         )
 
                         formatted_amount = self.exchange.amount_to_precision(
@@ -987,6 +1005,12 @@ class ExecutionEngine:
                                         "is_partial_tp_done"
                                     ] = True
 
+                                    # [V18.2] PortfolioState(샹들리에 추적용) 플래그도 함께 업데이트
+                                    if symbol in self.portfolio.positions:
+                                        self.portfolio.positions[symbol][
+                                            "is_partial_tp_done"
+                                        ] = True
+
                                     # [V18.2] Trade 테이블에 분할 익절 내역 기록 추가 (모의투자와 동기화)
                                     new_trade = Trade(
                                         timestamp=(
@@ -1153,7 +1177,14 @@ class ExecutionEngine:
                             ):
                                 exit_reason = "Stop Loss (자동 손절)"
                             else:
-                                exit_reason = "Manual / External Exit (수동/외부 청산)"
+                                # [V18.2] close_position_market 등을 통해 미리 심어둔 사유가 있다면 최우선 채택
+                                stored_exit_reason = pos_mem.get("exit_reason")
+                                if stored_exit_reason:
+                                    exit_reason = stored_exit_reason
+                                else:
+                                    exit_reason = (
+                                        "Manual / External Exit (수동/외부 청산)"
+                                    )
                     else:
                         exit_reason = "포지션 종료 감지 (개입/자동)"
 
@@ -1303,9 +1334,8 @@ class ExecutionEngine:
                         final_amount = float(p["contracts"])
                         break
 
-            if final_amount <= 0:
-                logger.warning(f"[{symbol}] 청산할 수량이 0입니다. 종료.")
-                return
+            if symbol in self.active_positions:
+                self.active_positions[symbol]["exit_reason"] = reason
 
             # 3. 시장가 주문 (Reduce-Only)
             await self.exchange.create_order(
@@ -1488,15 +1518,18 @@ class ExecutionEngine:
                 if symbol in self.active_positions:
                     del self.active_positions[symbol]
             else:
-                # 1차 익절 완료 시 수량 절반으로 줄이고 플래그 세팅
+                # 1차 익절 완료 시 수량 감소 및 플래그 세팅
                 if symbol in self.active_positions:
-                    self.active_positions[symbol]["amount"] *= (
-                        1 - settings.PARTIAL_TP_RATIO
-                    )
+                    self.active_positions[symbol]["amount"] -= close_qty
                     self.active_positions[symbol]["is_partial_tp_done"] = True
-                    logger.info(
-                        f"🧪 [DRY RUN] {symbol} 1차 익절 완료. 잔량 {self.active_positions[symbol]['amount']} 추적 계속."
-                    )
+
+                # [V18.2] PortfolioState(샹들리에 추적용) 플래그도 가상 업데이트
+                if symbol in self.portfolio.positions:
+                    self.portfolio.positions[symbol]["is_partial_tp_done"] = True
+
+                logger.info(
+                    f"🧪 [DRY RUN] {symbol} 1차 익절 완료. 잔량 {self.active_positions[symbol]['amount']} 추적 계속."
+                )
 
         except Exception as e:
             logger.error(f"[{symbol}] 가상 청산 처리 중 에러: {e}")

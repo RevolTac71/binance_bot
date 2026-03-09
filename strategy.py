@@ -47,6 +47,7 @@ class PortfolioState:
                 "extreme"          : float,       # Long=최고점 / Short=최저점 추적
                 "chandelier_stop"  : float,       # 현재 동적 손절선
                 "atr"              : float,       # 진입 시점 ATR (손절 거리 재계산에 사용)
+                "is_partial_tp_done": bool,       # V18.2: 분할 익절 완료 여부 (True일 때만 Chandelier 가동)
             }
         }
     """
@@ -99,6 +100,7 @@ class PortfolioState:
             "extreme": extreme,
             "chandelier_stop": chandelier_stop,
             "atr": atr,
+            "is_partial_tp_done": False,
         }
         logger.info(
             f"[PortfolioState] {symbol} {direction} 포지션 등록 | "
@@ -384,6 +386,16 @@ class StrategyEngine:
 
         # 2. 돌파 여부 확인
         triggered = portfolio.is_chandelier_triggered(symbol, current_price)
+
+        # [V18.2] Safety Gear: TP1이 체결되기 전에는 Chandelier Exit을 억제 (수익권이 아닐 때 너무 일찍 털리는 현상 방지)
+        pos = portfolio.positions.get(symbol)
+        if pos and not pos.get("is_partial_tp_done", False):
+            # 분할 익절 전이면 샹들리에 손절선은 갱신하되, 실제 청산 신호는 내보내지 않음 (거래소 SL이 담당)
+            return {
+                "exit": False,
+                "chandelier_stop": new_stop,
+                "reason": "TP1 도달 전 샹들리에 트리거 억제",
+            }
 
         return {
             "exit": triggered,

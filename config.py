@@ -105,7 +105,7 @@ class Config:
     # ADX 기준값: 이 이상이면 추세장(모멘텀 추종), 미만이면 횡보장(역추세/평균회귀) (V18에서 백분위수로 대체됨)
     # ── V18 샹들리에 청산(Chandelier Exit / Trailing Stop) 파라미터 ────────
     # 진입 후 최고점(Long) 또는 최저점(Short)에서 ATR × 배수 만큼 후퇴 시 손절
-    CHANDELIER_MULT = float(os.getenv("CHANDELIER_MULT", "2.0"))
+    CHANDELIER_MULT = float(os.getenv("CHANDELIER_MULT", "2.5"))
     CHANDELIER_ATR_LEN = int(os.getenv("CHANDELIER_ATR_LEN", "14"))  # ATR 산출 기간
 
     # ── V18 포트폴리오 동시 진입 제한 ────────────────────────────────────
@@ -258,8 +258,10 @@ class Config:
         os.getenv("KELLY_MAX_FRACTION", "0.05")
     )  # 최대 투입 비율 캡
 
-    # Chasing 지정가 체결 대기 시간 (초)
-    CHASING_WAIT_SEC = float(os.getenv("CHASING_WAIT_SEC", "5.0"))
+    # Chasing 지정가 체결 대기 시간 (초) - BTC 대응을 위해 2.5초로 단축 (V18.2)
+    CHASING_WAIT_SEC = float(os.getenv("CHASING_WAIT_SEC", "2.5"))
+    CHASING_MAX_RETRY = int(os.getenv("CHASING_MAX_RETRY", "10"))
+    CHASING_MARKET_THRESHOLD = int(os.getenv("CHASING_MARKET_THRESHOLD", "2"))
 
     # ── V18 분할 익절 파라미터 ────────────────────────────────────────────
     # TP 도달 시 전체 물량 중 이 비율만 1차 익절, 잔량은 Chandelier 추적
