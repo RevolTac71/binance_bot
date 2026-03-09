@@ -120,6 +120,7 @@ class TradeLog(Base):
         Text, nullable=True
     )  # 'TP', 'SL', 'Chandelier', 'Time', 'Manual' 등
     realized_pnl = Column(Float, nullable=True)
+    last_pnl_at = Column(DateTime, nullable=True)  # [V18.4] PnL 합산 기준 시점 영속화
     roi_pct = Column(Float, nullable=True)
 
     # [V18.1] DRY_RUN 영속화 및 복구를 위한 필드

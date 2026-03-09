@@ -116,15 +116,48 @@ class ExecutionEngine:
             # 1. 활성 포지션 복구
             positions = await self.exchange.fetch_positions()
             active_count = 0
-            for p in positions:
-                symbol = p.get("symbol")
-                contracts = float(p.get("contracts", 0.0))
-                if contracts > 0:
-                    self.active_positions[symbol] = True
-                    active_count += 1
-                    logger.info(
-                        f"✅ [복구 완료] 진행 중인 기존 포지션 감지: {symbol} (계약 수: {contracts})"
-                    )
+
+            async with AsyncSessionLocal() as session:
+                for p in positions:
+                    symbol = p.get("symbol")
+                    contracts = float(p.get("contracts", 0.0))
+                    if contracts > 0:
+                        # [V18.4] DB에서 해당 종목의 마지막 활성(exit_time IS NULL) 로그 조회
+                        stmt = (
+                            select(TradeLog)
+                            .where(
+                                TradeLog.symbol == symbol, TradeLog.exit_time == None
+                            )
+                            .order_by(TradeLog.entry_time.desc())
+                            .limit(1)
+                        )
+                        res = await session.execute(stmt)
+                        log = res.scalars().first()
+
+                        entry_time = (
+                            log.entry_time
+                            if log
+                            else (datetime.now(timezone.utc) + timedelta(hours=9))
+                        )
+                        last_ts = (
+                            int(log.last_pnl_at.timestamp() * 1000)
+                            if (log and log.last_pnl_at)
+                            else int(time.time() * 1000)
+                        )
+
+                        self.active_positions[symbol] = {
+                            "signal": "LONG" if p.get("side") == "long" else "SHORT",
+                            "amount": contracts,
+                            "entry_time": entry_time,
+                            "last_summed_ts": last_ts,
+                            "is_partial_tp_done": False,  # 필요시 DB 컬럼 추가 가능하나 현재는 봇 판단에 맡김
+                            "tp_price": log.tp_price if log else 0.0,
+                            "sl_price": log.sl_price if log else 0.0,
+                        }
+                        active_count += 1
+                        logger.info(
+                            f"✅ [REAL 복구] {symbol} 메타데이터 복원 완료 (진입: {entry_time}, PnL기준: {last_ts})"
+                        )
         except Exception as e:
             logger.error(f"거래소 동기화 중(sync_state_from_exchange) 예외 발생: {e}")
 
@@ -147,8 +180,13 @@ class ExecutionEngine:
                             "limit_price": log.execution_price,
                             "tp_price": log.tp_price,
                             "sl_price": log.sl_price,
+                            "entry_time": log.entry_time,  # [V18.4] 진입시간 복구 (Time-Exit용)
+                            "last_summed_ts": int(
+                                time.time() * 1000
+                            ),  # 가상은 매 하트비트마다 갱계산
+                            "is_partial_tp_done": False,  # TODO: DB 필드 연동 필요 시 확장
                             "reason": log.entry_reason,
-                            "market_data": None,  # 복구된 데이터는 market_data 스냅샷이 없음 (필요 시 JSONB로 저장 가능)
+                            "market_data": None,
                         }
                         logger.info(
                             f"✅ [DRY RUN 복구] 기존 가상 포지션 감지 및 복구: {log.symbol} ({log.direction}, 수량: {log.qty})"
@@ -383,12 +421,28 @@ class ExecutionEngine:
                             logger.info(
                                 f"[{symbol}] Chasing {attempt + 1}/{max_retries}: 지정가 체결 실패로 인한 '시장가' 전환 진입 수행"
                             )
-                            # 시장가 주문은 price와 GTX 파라미터가 필요 없음
+                            # [V18.4] 시장가 전환 시에도 수량 정밀도(BTC 등 0.001 단위) 및 minQty 체크 적용
+                            formatted_remaining = self.exchange.amount_to_precision(
+                                symbol, remaining_amount
+                            )
+                            market = self.exchange.market(symbol)
+                            min_qty = (
+                                market.get("limits", {})
+                                .get("amount", {})
+                                .get("min", 0.0)
+                            )
+
+                            if float(formatted_remaining) < min_qty:
+                                logger.warning(
+                                    f"[{symbol}] 잔여 수량({formatted_remaining})이 최소 주문 수량({min_qty}) 미달로 시장가 진입을 중단합니다."
+                                )
+                                break
+
                             entry_order = await self.exchange.create_order(
                                 symbol=symbol,
                                 type="market",
                                 side=side,
-                                amount=remaining_amount,
+                                amount=float(formatted_remaining),
                             )
                         else:
                             # 1. 호가창(Orderbook) 조회하여 최우선 호가 파악
@@ -516,6 +570,9 @@ class ExecutionEngine:
                 raw_tp = average_price - tp_dist
                 raw_sl = average_price + sl_dist
 
+            # [V18.4] 진입 시점 기록 (Time-Exit 및 복구용)
+            now_kst = datetime.now(timezone.utc) + timedelta(hours=9)
+
             # 호가 단위(precisions) 보정
             tp_price = (
                 float(self.exchange.price_to_precision(symbol, raw_tp))
@@ -544,15 +601,22 @@ class ExecutionEngine:
             }
 
             # --- [HOTFIX] 진입 직후 봇 추적망에 즉각 편입하여 수동진입 감지(오작동) 방지 ---
-            self.active_positions[symbol] = True
+            self.active_positions[symbol] = {
+                "signal": signal_type,
+                "amount": amount,
+                "limit_price": average_price,
+                "tp_price": tp_price,
+                "sl_price": sl_price,
+                "entry_time": now_kst,
+                "last_summed_ts": int(
+                    time.time() * 1000
+                ),  # 진입 시점을 첫 합산 기준으로 설정
+                "is_partial_tp_done": False,
+            }
 
-            # V15: 설정된 시간이 경과하면 제자리에 돌려놓지 않은 포지션을 논리적 시장가 매각 (스캘핑 전용)
-            if getattr(settings, "TIME_EXIT_MINUTES", 0) > 0:
-                asyncio.create_task(
-                    self._time_exit_daemon(
-                        symbol, side, amount, settings.TIME_EXIT_MINUTES
-                    )
-                )
+            # [V18.4] 기존 비동기 데몬 방식 제거 (check_active_positions_state 루프에서 통합 감시)
+            # if getattr(settings, "TIME_EXIT_MINUTES", 0) > 0:
+            #     asyncio.create_task(...)
 
             # 동기적(await)으로 TP/SL 즉시 생성 (대기열 통하지 않음)
             success = await self.place_tp_sl_orders(symbol, entry_info)
@@ -624,6 +688,12 @@ class ExecutionEngine:
         total_amount = entry_info["amount"]
         tp_price = entry_info["tp_price"]
         sl_price = entry_info["sl_price"]
+
+        # [V18.4] 가격 정밀도 선제 적용 (소수점 오차로 인한 주문 거절 방지)
+        tp_price = float(self.exchange.price_to_precision(symbol, tp_price))
+        sl_price = float(self.exchange.price_to_precision(symbol, sl_price))
+
+        # DB 업데이트 (정밀도 보정된 가격으로 덮어씀)
         entry_price = entry_info["limit_price"]
 
         # V18
@@ -1005,9 +1075,19 @@ class ExecutionEngine:
                         for t in trades:
                             t_ts = t["timestamp"]
                             if t_ts > last_ts:
-                                pnl = float(t.get("info", {}).get("realizedPnl", 0.0))
-                                if pnl != 0:
-                                    partial_pnl += pnl
+                                # [V18.4] 수수료(commission) 차감 적용하여 Net PnL 산출
+                                raw_pnl = float(
+                                    t.get("info", {}).get("realizedPnl", 0.0)
+                                )
+                                comm = float(t.get("fee", {}).get("cost", 0.0))
+                                if comm == 0:  # CCXT 구조상 t["fee"]가 없을 경우 대비
+                                    comm = float(
+                                        t.get("info", {}).get("commission", 0.0)
+                                    )
+
+                                net_pnl = raw_pnl - comm
+                                if net_pnl != 0:
+                                    partial_pnl += net_pnl
                                 if t_ts > new_last_ts:
                                     new_last_ts = t_ts
 
@@ -1033,6 +1113,10 @@ class ExecutionEngine:
                                     trade_log.realized_pnl = (
                                         trade_log.realized_pnl or 0.0
                                     ) + partial_pnl
+                                    # [V18.4] PnL 합산 기준시점 DB 업데이트 (영속화)
+                                    trade_log.last_pnl_at = datetime.fromtimestamp(
+                                        new_last_ts / 1000
+                                    )
                                     # 메모리상 수량 업데이트 및 분할 익절 플래그 세팅 (모의투자와 알고리즘 통일)
                                     self.active_positions[symbol]["amount"] = (
                                         current_contracts
@@ -1128,6 +1212,36 @@ class ExecutionEngine:
                                 symbol,
                                 amount=pos_info["amount"],
                                 reason="Fail-safe Full SL",
+                            )
+
+                    # [V18.4] 영구적 Time-Exit 감시 (봇 재시작 시에도 entry_time이 DB에서 복구되어야 작동)
+                    wait_mins = getattr(settings, "TIME_EXIT_MINUTES", 0)
+                    entry_time = pos_info.get("entry_time")
+
+                    if wait_mins > 0 and entry_time:
+                        if isinstance(
+                            entry_time, str
+                        ):  # DB에서 문자열로 넘어올 경우 대비
+                            from datetime import datetime, timezone, timedelta
+
+                            entry_time = datetime.fromisoformat(
+                                entry_time.replace("Z", "+00:00")
+                            )
+
+                        now_kst = datetime.now(timezone.utc) + timedelta(hours=9)
+                        # Naive/Aware 통일 필요 (entry_time이 Naive라고 가정 시)
+                        if entry_time.tzinfo is None:
+                            now_kst = now_kst.replace(tzinfo=None)
+
+                        elapsed_mins = (now_kst - entry_time).total_seconds() / 60
+                        if elapsed_mins >= wait_mins:
+                            logger.warning(
+                                f"⏰ [{symbol}] {wait_mins}분 보유 시간 초과 ({elapsed_mins:.1f}분 경과) → 시장가 강제 탈출 시도."
+                            )
+                            await self.close_position_market(
+                                symbol,
+                                amount=pos_info["amount"],
+                                reason=f"Time Exit ({wait_mins}분 시간 초과)",
                             )
                 except Exception as fs_err:
                     logger.error(f"[{symbol}] REAL Fail-safe 감시 중 에러: {fs_err}")
