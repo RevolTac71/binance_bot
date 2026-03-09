@@ -376,11 +376,9 @@ class ExecutionEngine:
             return False
 
         # 연속 손실 쿨다운 체크
-        from datetime import datetime as _dt
-
         cooldown_until = self.loss_cooldown.get(symbol)
-        if cooldown_until and _dt.utcnow() < cooldown_until:
-            remaining = int((cooldown_until - _dt.utcnow()).total_seconds() / 60)
+        if cooldown_until and datetime.utcnow() < cooldown_until:
+            remaining = int((cooldown_until - datetime.utcnow()).total_seconds() / 60)
             logger.info(f"[{symbol}] 손실 쿨다운 중. {remaining}분 후 진입 가능. 스킵.")
             return False
 
@@ -939,6 +937,8 @@ class ExecutionEngine:
         종료되었다면 잔여 주문(TP/SL 중 미발동분)을 일괄 취소한 뒤 DB에 매도(청산) 기록과 최신 PnL을 남깁니다.
         또한 수동으로 진입한 포지션을 추적 망에 자동으로 끌어옵니다.
         """
+        from datetime import datetime, timezone, timedelta
+
         symbols_to_remove = []
 
         if not settings.DRY_RUN:
@@ -1222,8 +1222,6 @@ class ExecutionEngine:
                         if isinstance(
                             entry_time, str
                         ):  # DB에서 문자열로 넘어올 경우 대비
-                            from datetime import datetime, timezone, timedelta
-
                             entry_time = datetime.fromisoformat(
                                 entry_time.replace("Z", "+00:00")
                             )
