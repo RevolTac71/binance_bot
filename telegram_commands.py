@@ -672,11 +672,11 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• <b>리스크</b>    : {settings.RISK_PERCENTAGE * 100:.1f}%\n"
         f"• <b>MaxTrades</b> : {getattr(settings, 'MAX_TRADES', 3)} (동일방향: {getattr(settings, 'MAX_CONCURRENT_SAME_DIR', 2)})\n"
         f"• <b>캔들/보유</b> : {getattr(settings, 'TIMEFRAME', '3m')} / {getattr(settings, 'TIME_EXIT_MINUTES', 0)}분\n"
-        f"• <b>진입 임계</b> : LONG={settings.MIN_SCORE_LONG} / SHORT={settings.MIN_SCORE_SHORT}\n"
+        f"• <b>진입 임계</b> : LONG={getattr(settings, 'MIN_SCORE_LONG', 18)} / SHORT={getattr(settings, 'MIN_SCORE_SHORT', 17)}\n"
         f"• <b>재진입대기</b>: {getattr(settings, 'LOSS_COOLDOWN_MINUTES', 15)}분\n\n"
         "━━━━━━ <b>기술적 필터 (Hard)</b> ━━━━━━\n"
-        f"• <b>ADX 부스트</b>: {settings.ADX_BOOST_PCTL}%tile (윈도우: {settings.PCTL_WINDOW})\n"
-        f"• <b>ATR 부스트</b>: {settings.ATR_RATIO_MULT}x ({getattr(settings, 'ATR_LONG_LEN', 200)}봉 대비)\n"
+        f"• <b>ADX 부스트</b>: {getattr(settings, 'ADX_BOOST_PCTL', 70.0)}%tile (윈도우: {getattr(settings, 'PCTL_WINDOW', 100)})\n"
+        f"• <b>ATR 부스트</b>: {getattr(settings, 'ATR_RATIO_MULT', 1.2)}x ({getattr(settings, 'ATR_LONG_LEN', 200)}봉 대비)\n"
         f"• <b>Kelly</b>     : {'ON' if getattr(settings, 'KELLY_SIZING', False) else 'OFF'} (MinSample:{getattr(settings, 'KELLY_MIN_TRADES', 20)}, Cap:{getattr(settings, 'KELLY_MAX_FRACTION', 0.05)})\n"
         f"• <b>Chasing</b>   : Wait={getattr(settings, 'CHASING_WAIT_SEC', 2.5)}s, Retry={getattr(settings, 'CHASING_MAX_RETRY', 10)}, Market_At={getattr(settings, 'CHASING_MARKET_THRESHOLD', 2)}\n\n"
         "━━━━━━ <b>지표별 임계치 & 가중치</b> ━━━━━━\n"
@@ -716,10 +716,10 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg += (
         "━━━━━━ <b>청산 & 탈출</b> ━━━━━━\n"
-        f"• <b>LONG SL/TP</b> : {settings.LONG_SL_MULT}x / {settings.LONG_TP_MULT}x\n"
-        f"• <b>SHORT SL/TP</b>: {settings.SHORT_SL_MULT}x / {settings.SHORT_TP_MULT}x\n"
+        f"• <b>LONG SL/TP</b> : {getattr(settings, 'LONG_SL_MULT', 1.5)}x / {getattr(settings, 'LONG_TP_MULT', 5.0)}x\n"
+        f"• <b>SHORT SL/TP</b>: {getattr(settings, 'SHORT_SL_MULT', 1.5)}x / {getattr(settings, 'SHORT_TP_MULT', 5.0)}x\n"
         f"• <b>분할익절</b>   : {getattr(settings, 'PARTIAL_TP_RATIO', 0.5) * 100:.0f}%\n"
-        f"• <b>본절/리프레시</b>: {getattr(settings, 'BREAKEVEN_TRIGGER_MULT', 1.5)}x / {settings.SYMBOL_REFRESH_INTERVAL}h\n\n"
+        f"• <b>본절/리프레시</b>: {getattr(settings, 'BREAKEVEN_TRIGGER_MULT', 1.5)}x / {getattr(settings, 'SYMBOL_REFRESH_INTERVAL', 3)}h\n\n"
         "💡 변경: /setparam [옵션] [값]\n"
         "💡 지표: l_macd_t1, l_tp, s_sl 등"
     )

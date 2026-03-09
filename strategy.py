@@ -23,6 +23,7 @@ from __future__ import annotations
 import pandas as pd
 import numpy as np
 from typing import Optional
+from scipy.stats import percentileofscore
 from schemas import MarketDataSnapshot
 from config import settings, logger
 
@@ -457,10 +458,18 @@ class StrategyEngine:
             df["NOFI"] = 0.0
 
         if hft_features:
-            df["open_interest"] = hft_features.get("open_interest", 0.0)
-            df["tick_count"] = hft_features.get("tick_count", 0)
+            df.iloc[-1, df.columns.get_loc("open_interest")] = hft_features.get(
+                "open_interest", 0.0
+            )
+            df.iloc[-1, df.columns.get_loc("tick_count")] = hft_features.get(
+                "tick_count", 0
+            )
+            if "nofi_1m" in hft_features:
+                df.iloc[-1, df.columns.get_loc("NOFI")] = hft_features["nofi_1m"]
             if "log_volume_zscore" in hft_features:
-                df["Log_Vol_ZScore"] = hft_features["log_volume_zscore"]
+                df.iloc[-1, df.columns.get_loc("Log_Vol_ZScore")] = hft_features[
+                    "log_volume_zscore"
+                ]
         else:
             df["open_interest"] = 0.0
             df["tick_count"] = 0
@@ -468,6 +477,16 @@ class StrategyEngine:
         # 백분위수 산출
         pctl_window = getattr(settings, "PCTL_WINDOW", 100)
         percentiles = compute_live_percentiles(df, window=pctl_window)
+
+        # [V18.4] 상위 봉(15m) MACD_H 백분위 직접 주입 (3m df에는 15m MACD 역사가 없으므로)
+        if df_15m is not None and "MACD_H" in df_15m.columns:
+            recent_macd = df_15m["MACD_H"].tail(pctl_window).dropna()
+            if len(recent_macd) >= 20:
+                curr_macd = recent_macd.iloc[-1]
+                macd_p = float(
+                    percentileofscore(recent_macd.values, float(curr_macd), kind="rank")
+                )
+                percentiles["macd_hist_pctl"] = macd_p
 
         # ATR 부스트 및 HTF/MTF 정보 수집
         atr_ratio_mult = getattr(settings, "ATR_RATIO_MULT", 1.2)

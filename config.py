@@ -212,11 +212,30 @@ class Config:
     SYMBOL_REFRESH_INTERVAL = int(os.getenv("SYMBOL_REFRESH_INTERVAL", "3"))
     CURRENT_TARGET_SYMBOLS = []  # 메인 루프에서 동적으로 채워짐 (AttributeError 방지)
 
+    # ── V18 스코어링 & 필터 파라미터 (V18.3/4 추가분) ───────────────────
+    MIN_SCORE_LONG = int(os.getenv("MIN_SCORE_LONG", "18"))
+    MIN_SCORE_SHORT = int(os.getenv("MIN_SCORE_SHORT", "17"))
+    ADX_BOOST_PCTL = float(os.getenv("ADX_BOOST_PCTL", "70.0"))
+    PCTL_WINDOW = int(os.getenv("PCTL_WINDOW", "100"))
+    ATR_RATIO_MULT = float(os.getenv("ATR_RATIO_MULT", "1.2"))
+    ATR_LONG_LEN = int(os.getenv("ATR_LONG_LEN", "200"))
+
+    # ── V18 리스크 제어 & 동시 포지션 ───────────────────────────────
+    MAX_TRADES = int(os.getenv("MAX_TRADES", "3"))
+    MAX_CONCURRENT_SAME_DIR = int(os.getenv("MAX_CONCURRENT_SAME_DIR", "2"))
+    LOSS_COOLDOWN_MINUTES = int(os.getenv("LOSS_COOLDOWN_MINUTES", "15"))
+    BREAKEVEN_TRIGGER_MULT = float(os.getenv("BREAKEVEN_TRIGGER_MULT", "1.5"))
+    BREAKEVEN_PROFIT_MULT = float(os.getenv("BREAKEVEN_PROFIT_MULT", "0.2"))
+
     # ── V18 방향별 차등 TP/SL 파라미터 ──────────────────────────────
     LONG_TP_MULT = float(os.getenv("L_TP_MULT", "5.0"))
     LONG_SL_MULT = float(os.getenv("L_SL_MULT", "1.5"))
     SHORT_TP_MULT = float(os.getenv("S_TP_MULT", "5.0"))
     SHORT_SL_MULT = float(os.getenv("S_SL_MULT", "1.5"))
+
+    # 청산 관련 기타
+    CHANDELIER_MULT = float(os.getenv("CHANDELIER_MULT", "3.0"))
+    CHANDELIER_ATR_LEN = int(os.getenv("CHANDELIER_ATR_LEN", "14"))
 
     # 하위 호환용 (기존 코드에서 참조할 경우의 Fallback)
     SL_MULT = float(os.getenv("SL_MULT", "1.5"))
