@@ -663,34 +663,32 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• <b>ATR 부스트</b>: {settings.ATR_RATIO_MULT}x ({getattr(settings, 'ATR_LONG_LEN', 200)}봉 대비)\n"
         f"• <b>Kelly</b>     : {'ON' if getattr(settings, 'KELLY_SIZING', False) else 'OFF'} (MinSample:{getattr(settings, 'KELLY_MIN_TRADES', 20)}, Cap:{getattr(settings, 'KELLY_MAX_FRACTION', 0.05)})\n"
         f"• <b>Chasing</b>   : Wait={getattr(settings, 'CHASING_WAIT_SEC', 2.5)}s, Retry={getattr(settings, 'CHASING_MAX_RETRY', 10)}, Market_At={getattr(settings, 'CHASING_MARKET_THRESHOLD', 2)}\n\n"
-    # [V18.4] 숏/롱 분리형 규칙 기반 출력
-    rl = getattr(settings, "SC_RULES_LONG", {})
-    rs = getattr(settings, "SC_RULES_SHORT", {})
+        "━━━━━━ <b>지표별 임계치 & 가중치</b> ━━━━━━\n"
+    )
+
+    t = getattr(settings, "SCORING_THRESHOLDS", {})
     w = getattr(settings, "SCORING_WEIGHTS", {})
 
-    msg += "━━━━━━ <b>[LONG] 진입 규칙</b> ━━━━━━\n"
-    for group_name, sensors in rl.items():
-        msg += f"<i>[{group_name.upper()}]</i>\n"
-        for sensor, rules in sensors.items():
-            rule_str = ", ".join([f"{r[0]}→{r[1]}점" for r in rules]) if rules else "비활성"
-            msg += f" • {sensor}: {rule_str}\n"
-    
-    msg += "\n━━━━━━ <b>[SHORT] 진입 규칙</b> ━━━━━━\n"
-    for group_name, sensors in rs.items():
-        msg += f"<i>[{group_name.upper()}]</i>\n"
-        for sensor, rules in sensors.items():
-            rule_str = ", ".join([f"{r[0]}→{r[1]}점" for r in rules]) if rules else "비활성"
-            msg += f" • {sensor}: {rule_str}\n"
-
-    msg += "\n━━━━━━ <b>거시 & 환경 점수</b> ━━━━━━\n"
-    msg += (
-        f"• <b>HTF Bias</b> (1H): {w['htf_bias']['2']}점\n"
-        f"• <b>MTF Moment</b> (15m): {w['mtf_moment']['2']}점\n"
-        f"• <b>MTF Regime</b> (15m): {w['mtf_regime']['1']}점\n"
-        f"• <b>ATR Boost/ADX</b>: {w['atr']['2']}/{w['adx_boost']['1']}점\n"
-        f"• <b>VWAP Distance</b>: {w['vwap_dist']['2']}점\n"
-        f"• <b>Funding Rate Match</b>: {w['fr_boost']['2']}점\n\n"
-    )
+    if t and w:
+        # 단일 테이블 형식으로 지표별 (임계치 -> 점수) 출력
+        msg += (
+            f"• <b>MACD Hist</b> (+1/+2/+4): {t['macd_pctl']['+1']}/{t['macd_pctl']['+2']}/{t['macd_pctl']['+4']}% → {w['macd']['1']}/{w['macd']['2']}/{w['macd']['4']}점\n"
+            f"• <b>CVD Slope</b> (+1/+2): {t['cvd_pctl']['+1']}/{t['cvd_pctl']['+2']}% → {w['cvd']['1']}/{w['cvd']['2']}점\n"
+            f"• <b>Imbalance</b> (+1/+2): {t['imbalance']['+1']}/{t['imbalance']['+2']}% → {w['imbalance']['1']}/{w['imbalance']['2']}점\n"
+            f"• <b>Norm OFI</b> (+1/+2): {t['nofi_pctl']['+1']}/{t['nofi_pctl']['+2']}% → {w['nofi']['1']}/{w['nofi']['2']}점\n"
+            f"• <b>RSI</b> (+1/+2): {t['rsi']['+1']}/{t['rsi']['+2']} → {w['rsi']['1']}/{w['rsi']['2']}점\n"
+            f"• <b>Buy Ratio</b> (+1/+2): {t['buy_ratio']['+1']}/{t['buy_ratio']['+2']}% → {w['buy_ratio']['1']}/{w['buy_ratio']['2']}점\n"
+            f"• <b>Vol Z-Score</b> (+1/+2): {t['vol_zscore']['+1']}/{t['vol_zscore']['+2']}σ → {w['vol_z']['1']}/{w['vol_z']['2']}점\n"
+            f"• <b>OI Change</b> (+1/+2): {t['oi_pctl']['+1']}/{t['oi_pctl']['+2']}% → {w['oi']['1']}/{w['oi']['2']}점\n"
+            f"• <b>Tick Count</b> (+1/+2): {t['tick_pctl']['+1']}/{t['tick_pctl']['+2']}% → {w['tick']['1']}/{w['tick']['2']}점\n\n"
+            "━━━━━━ <b>거시 & 환경 점수</b> ━━━━━━\n"
+            f"• <b>HTF Bias</b> (1H): {w['htf_bias']['2']}점\n"
+            f"• <b>MTF Moment</b> (15m): {w['mtf_moment']['2']}점\n"
+            f"• <b>MTF Regime</b> (15m): {w['mtf_regime']['1']}점\n"
+            f"• <b>ATR Boost/ADX</b>: {w['atr']['2']}/{w['adx_boost']['1']}점\n"
+            f"• <b>VWAP Distance</b>: {w['vwap_dist']['2']}점\n"
+            f"• <b>Funding Rate Match</b>: {w['fr_boost']['2']}점\n\n"
+        )
 
     msg += (
         "━━━━━━ <b>청산 & 탈출</b> ━━━━━━\n"
