@@ -1,6 +1,42 @@
+# 환경 변수 및 민감 정보
 .env
+*.key
+*.pem
+
+# Python 관련
 __pycache__/
-app.log
+*.pyc
+*.pyo
+*.pyd
+.Python
 venv/
 .venv/
-*.pyc
+pip-log.txt
+pip-delete-this-directory.txt
+
+# 로그 파일
+*.log
+logs/
+
+# IDE 및 편집기
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS 생성 파일
+.DS_Store
+Thumbs.db
+
+# 임시 파일
+*.tmp
+*.temp
+
+# 문서 (배포에는 불필요)
+Bot Workflow Summary
+Implementation Plan
+Walkthrough2
+Workflow Deep Dive
+*.docx
+*.pdf
