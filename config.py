@@ -210,7 +210,8 @@ class Config:
 
     # Telegram Interactive Pause Mode
     IS_PAUSED = False
-
+    HTF_TIMEFRAME_1H=os.getenv("HTF_TIMEFRAME_1H", "1h")
+    HTF_TIMEFRAME_15M=os.getenv("HTF_TIMEFRAME_15M", "15m")
 
 class TelegramLogHandler(logging.Handler):
     """
