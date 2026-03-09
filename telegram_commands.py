@@ -486,11 +486,27 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parts = key.split("_")
                 target_rule_dict = getattr(settings, attr_name)  # SC_RULES_LONG 등
 
+                # [V18.4] 단축어와 실제 지표 키 간의 매핑 시스템
+                INDICATOR_MAP = {
+                    "macd": "macd_hist",
+                    "cvd": "cvd_delta_slope",
+                    "imbal": "bid_ask_imbalance",
+                    "nofi": "nofi_1m",
+                    "oi": "open_interest",
+                    "tick": "tick_count",
+                    "vol": "log_volume_zscore",
+                    "buy": "buy_ratio",
+                    "rsi": "rsi",
+                }
+
                 # 지표그룹(trend/mean_reversion) 찾기
                 found = False
+                short_name = parts[1]
+                real_key = INDICATOR_MAP.get(short_name, short_name)
+
                 for group in target_rule_dict.values():
-                    if parts[1] in group:
-                        rules_list = group[parts[1]]
+                    if real_key in group:
+                        rules_list = group[real_key]
 
                         # t(threshold) 혹은 w(weight) 구분
                         rule_type = parts[2][0]  # 't' or 'w'
