@@ -1218,30 +1218,30 @@ class ExecutionEngine:
                     wait_mins = getattr(settings, "TIME_EXIT_MINUTES", 0)
                     entry_time = pos_info.get("entry_time")
 
-                        # [V18.5] Time-Exit는 실제 거래소에 포지션이 있을 때만 동작 (ReduceOnly Rejection 방지)
-                        if wait_mins > 0 and entry_time and current_contracts > 0:
-                            if isinstance(
-                                entry_time, str
-                            ):  # DB에서 문자열로 넘어올 경우 대비
-                                entry_time = datetime.fromisoformat(
-                                    entry_time.replace("Z", "+00:00")
-                                )
+                    # [V18.5] Time-Exit는 실제 거래소에 포지션이 있을 때만 동작 (ReduceOnly Rejection 방지)
+                    if wait_mins > 0 and entry_time and current_contracts > 0:
+                        if isinstance(
+                            entry_time, str
+                        ):  # DB에서 문자열로 넘어올 경우 대비
+                            entry_time = datetime.fromisoformat(
+                                entry_time.replace("Z", "+00:00")
+                            )
 
-                            now_kst = datetime.now(timezone.utc) + timedelta(hours=9)
-                            # Naive/Aware 통일 필요 (entry_time이 Naive라고 가정 시)
-                            if entry_time.tzinfo is None:
-                                now_kst = now_kst.replace(tzinfo=None)
+                        now_kst = datetime.now(timezone.utc) + timedelta(hours=9)
+                        # Naive/Aware 통일 필요 (entry_time이 Naive라고 가정 시)
+                        if entry_time.tzinfo is None:
+                            now_kst = now_kst.replace(tzinfo=None)
 
-                            elapsed_mins = (now_kst - entry_time).total_seconds() / 60
-                            if elapsed_mins >= wait_mins:
-                                logger.warning(
-                                    f"⏰ [{symbol}] {wait_mins}분 보유 시간 초과 ({elapsed_mins:.1f}분 경과) → 시장가 강제 탈출 시도."
-                                )
-                                await self.close_position_market(
-                                    symbol,
-                                    amount=current_contracts,  # 메모리값 대신 현재 거래소 실수량 사용
-                                    reason=f"Time Exit ({wait_mins}분 시간 초과)",
-                                )
+                        elapsed_mins = (now_kst - entry_time).total_seconds() / 60
+                        if elapsed_mins >= wait_mins:
+                            logger.warning(
+                                f"⏰ [{symbol}] {wait_mins}분 보유 시간 초과 ({elapsed_mins:.1f}분 경과) → 시장가 강제 탈출 시도."
+                            )
+                            await self.close_position_market(
+                                symbol,
+                                amount=current_contracts,  # 메모리값 대신 현재 거래소 실수량 사용
+                                reason=f"Time Exit ({wait_mins}분 시간 초과)",
+                            )
                 except Exception as fs_err:
                     logger.error(f"[{symbol}] REAL Fail-safe 감시 중 에러: {fs_err}")
 
@@ -1510,7 +1510,9 @@ class ExecutionEngine:
                     break
 
             if exchange_qty <= 0:
-                logger.info(f"[{symbol}] 거래소 포지션 수량이 0이므로 청산을 중단합니다.")
+                logger.info(
+                    f"[{symbol}] 거래소 포지션 수량이 0이므로 청산을 중단합니다."
+                )
                 # 메모리상 포지션이 남아있다면 제거 대상에 포함되도록 유도 (다음 루프에서 처리되거나 여기서 직접 처리)
                 return
 
