@@ -1,0 +1,137 @@
+:root {
+  --bg-color: #0d0e12;
+  --card-bg: rgba(23, 25, 35, 0.7);
+  --card-border: rgba(255, 255, 255, 0.08);
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --accent-long: #10b981;
+  --accent-short: #f43f5e;
+  --accent-primary: #3b82f6;
+  --glass-blur: blur(12px);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: "Outfit", "Inter", sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text-primary);
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  display: flex;
+  min-height: 100vh;
+}
+
+.dashboard-container {
+  flex: 1;
+  padding: 2rem;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+.glass-card {
+  background: var(--card-bg);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--card-border);
+  border-radius: 1.25rem;
+  padding: 1.5rem;
+  transition:
+    transform 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.glass-card:hover {
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.metric-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.metric-label {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.5rem;
+}
+
+.metric-value {
+  font-size: 1.875rem;
+  font-weight: 700;
+}
+
+.positive {
+  color: var(--accent-long);
+}
+.negative {
+  color: var(--accent-short);
+}
+
+.chart-section {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.trade-table-container {
+  width: 100%;
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+}
+
+th {
+  text-align: left;
+  padding: 1rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--card-border);
+  text-transform: uppercase;
+}
+
+td {
+  padding: 1rem;
+  font-size: 0.875rem;
+  border-bottom: 1px solid var(--card-border);
+}
+
+tr:hover td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.badge {
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.badge-long {
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--accent-long);
+}
+.badge-short {
+  background: rgba(244, 63, 94, 0.1);
+  color: var(--accent-short);
+}

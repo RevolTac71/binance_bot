@@ -970,7 +970,7 @@ async def main():
     pipeline = DataPipeline()
     strategy = StrategyEngine()
     risk = RiskManager(pipeline)
-    execution = ExecutionEngine(pipeline)
+    execution = ExecutionEngine(pipeline, portfolio)
 
     try:
         await execution.sync_state_from_exchange()

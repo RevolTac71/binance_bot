@@ -7,11 +7,13 @@ from database import Trade, TradeLog, AsyncSessionLocal
 from sqlalchemy.future import select
 from data_pipeline import DataPipeline
 from notification import notifier
+from strategy import PortfolioState
 
 
 class ExecutionEngine:
-    def __init__(self, data_pipeline: DataPipeline):
+    def __init__(self, data_pipeline: DataPipeline, portfolio: PortfolioState):
         self.exchange = data_pipeline.exchange
+        self.portfolio = portfolio
         self.strategy = data_pipeline  # strategy 모듈의 퍼센트를 참조하기 위한 포인터용 설계 대비 (임시)
         # 시스템 문제 검출(DB-서버 간 Mismatch 등) 시 자가 정지 처리를 위한 Flag
         self.is_halted = False
