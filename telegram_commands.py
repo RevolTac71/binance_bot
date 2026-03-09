@@ -73,21 +73,17 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif category == "score":
         msg = (
             "📈 <b>[V18 진입 스코어링 시스템 안내]</b>\n"
-            "점수가 합격점을 넘어야 진입하며, 아래 3단계로 조절합니다.\n\n"
+            "롱/숏이 완전히 분리된 규칙 기반 엔진을 사용합니다.\n\n"
             "<b>1. 진입 합격점 (Min Score)</b>\n"
-            "▫ <code>long_score</code> : 롱 최소 점수 (높을수록 엄격)\n"
-            "▫ <code>short_score</code>: 숏 최소 점수\n\n"
-            "<b>2. 지표별 점수 발생 기준 (Thresholds)</b>\n"
-            "지표가 상위 N%일 때 점수가 발생합니다. (1이 초보, 4가 고점)\n"
-            "▫ <code>macd_1/2/4</code>, <code>cvd_1/2</code>, <code>rsi_1/2</code>\n"
-            "▫ <code>imbal_1/2</code>, <code>nofi_1/2</code>, <code>oi_1/2</code>, <code>tick_1/2</code>\n\n"
-            "<b>3. 지표별 실제 배점 (Weights)</b>\n"
-            "위 기준 통과 시 실제로 합산될 <b>가중치</b>입니다.\n"
-            "▫ <code>w_macd_4</code> : MACD 강한 신호 시 배점\n"
-            "▫ <code>w_htf_2</code>  : 상위 봉 추세 유지 시 배점\n"
-            "▫ <code>w_atr_2</code>  : 필터 확장 시 배점\n\n"
-            "💡 <b>예시:</b> MACD를 아주 중요하게 보고 싶다면?\n"
-            "👉 <code>/setparam w_macd_4 15</code> (가중치 대폭 상향)"
+            "▫ <code>long_score</code> : 롱 최소 합계 점수\n"
+            "▫ <code>short_score</code>: 숏 최소 합계 점수\n\n"
+            "<b>2. 규칙 설정 형식 (Rules)</b>\n"
+            "기본 형식: <code>{l/s}_{지표}_{t/w}{단계}</code>\n"
+            "▫ <code>t</code>: 임계값 (상위 %, σ 등)\n"
+            "▫ <code>w</code>: 부여할 점수 (배점)\n"
+            "예: <code>l_macd_t1 65</code> (롱 MACD 1단계 기준 65%)\n"
+            "예: <code>s_rsi_w2 2</code> (숏 RSI 2단계 달성 시 2점 부여)\n\n"
+            "💡 <b>팁:</b> 특정 방향 진입을 막으려면 <code>min_score</code>를 매우 높게 설정하세요."
         )
     elif category == "trade":
         msg = (
@@ -108,23 +104,22 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif category == "risk":
         msg = (
             "🛡️ [청산 및 리스크 관리]\n"
-            "손실 제한 및 수익 확정 관련 설정입니다.\n\n"
-            "sl          Stop Loss 배수 (ATR 대비)\n"
-            "tp          Take Profit 배수 (ATR 대비)\n"
-            "partial_tp  분할 익절 수량 비율 (0.5)\n"
-            "chandelier  추적 손절(Chandelier) 배수\n"
-            "chan_atr    Chandelier 계산 ATR 기간 (22)\n"
-            "be_trigger  본절가(BE) 전환 트리거 배수\n"
-            "be_profit   BE 전환 시 보존할 수익 배수\n"
-            "cooldown    진입 실패 후 대기 분 (15)\n"
-            "max_trades  최대 동시 포지션 개수 (3)\n"
-            "max_dir     동일 방향 최대 개수 (2)\n"
-            "time_exit   자동 시간 청산 기준 (분)"
+            "방향별 차등 TP/SL 및 리스크 설정입니다.\n\n"
+            "l_sl / l_tp  롱 손절/익절 배수 (ATR 대비)\n"
+            "s_sl / s_tp  숏 손절/익절 배수 (ATR 대비)\n"
+            "partial_tp   분할 익절 수량 비율 (0.5)\n"
+            "chandelier   추적 손절(Chandelier) 배수\n"
+            "chan_atr     Chandelier ATR 기간 (14)\n"
+            "be_trigger   본절가(BE) 전환 트리거 배수\n"
+            "be_profit    BE 전환 시 보존할 수익 배수\n"
+            "cooldown     진입 실패 후 대기 분 (15)\n"
+            "max_trades   최대 동시 포지션 개수 (3)\n"
+            "time_exit    자동 시간 청산 기준 (분)"
         )
     else:
         msg = "❌ 알 수 없는 카테고리입니다. `/help`를 입력해 목록을 확인하세요."
 
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await update.message.reply_text(msg, parse_mode="HTML")
 
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
