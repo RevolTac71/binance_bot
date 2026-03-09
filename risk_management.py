@@ -147,6 +147,13 @@ class RiskManager:
         try:
             sz_str = self.pipeline.exchange.amount_to_precision(symbol, calc_size)
             final_size = float(sz_str)
+
+            # [V18.4] 최소 주문 수량(minQty) 방어 로직 추가
+            market = self.pipeline.exchange.market(symbol)
+            min_qty = market.get("limits", {}).get("amount", {}).get("min", 0.0)
+            if final_size < min_qty:
+                final_size = min_qty
+
         except Exception as e:
             final_size = calc_size
 

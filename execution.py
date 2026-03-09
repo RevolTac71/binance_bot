@@ -697,11 +697,16 @@ class ExecutionEngine:
 
                 await session.commit()
 
-            # 1. Take Profit (LIMIT 방식) — V18: 분할 익절 (partial_ratio만큼만)
-            # TP 수량 정밀도 보정
+            # TP 수량 정밀도 보정 및 최소 수량(minQty) 체크
             try:
                 tp_amount_str = self.exchange.amount_to_precision(symbol, tp_amount)
                 tp_amount_final = float(tp_amount_str)
+
+                # [V18.4] 최소 수량 미달 시 최소값으로 보정 (BNB 등 소수점/수량 엄격한 종목 대응)
+                market = self.exchange.market(symbol)
+                min_qty = market.get("limits", {}).get("amount", {}).get("min", 0.0)
+                if tp_amount_final > 0 and tp_amount_final < min_qty:
+                    tp_amount_final = min_qty
             except Exception:
                 tp_amount_final = tp_amount
 
