@@ -457,8 +457,8 @@ async def process_closed_kline(
         snapshot["short_score"] = decision.get("short_score")
 
         # [V18.4] 신규 파라미터 스냅샷 추가
-        snapshot["min_score_long"] = min_score_long
-        snapshot["min_score_short"] = min_score_short
+        snapshot["min_score_long"] = getattr(settings, "MIN_SCORE_LONG", 16)
+        snapshot["min_score_short"] = getattr(settings, "MIN_SCORE_SHORT", 16)
         snapshot["long_tp_mult"] = getattr(settings, "LONG_TP_MULT", 5.0)
         snapshot["long_sl_mult"] = getattr(settings, "LONG_SL_MULT", 1.5)
         snapshot["short_tp_mult"] = getattr(settings, "SHORT_TP_MULT", 5.0)
