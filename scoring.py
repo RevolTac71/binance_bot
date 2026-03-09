@@ -86,107 +86,73 @@ def compute_live_percentiles(df: pd.DataFrame, window: int = 100) -> dict:
     }
 
 
+def evaluate_rule_score(val: float, rules: list, direction: str = "upper") -> int:
+    """
+    단일 지표에 대해 리스트 규칙을 순차 평가하여 가장 높은 점수를 반환합니다.
+    rules: [(threshold, score), (threshold, score, "val"), ...]
+    direction: "upper" (>= threshold) 또는 "lower" (<= threshold)
+    """
+    if not rules:
+        return 0
+
+    max_score = 0
+    for rule in rules:
+        threshold = rule[0]
+        score = rule[1]
+
+        if direction == "upper":
+            if val >= threshold:
+                max_score = max(max_score, score)
+        else:  # lower
+            if val <= threshold:
+                max_score = max(max_score, score)
+
+    return max_score
+
+
 def calculate_entry_score(indicators: dict, adx_boost_pctl: float = 70.0) -> dict:
     """
-    단일 캔들 시점의 지표 dict로부터 Long/Short 점수를 산출합니다.
-    strategy.py의 check_entry()에서 직접 호출하는 래퍼입니다.
-
-    Parameters
-    ----------
-    indicators : dict
-        compute_live_percentiles()의 반환값 + funding_rate_match + atr_boost_flag
-    adx_boost_pctl : float
-        ADX 부스트 임계 백분위수 (기본 70)
-
-    Returns
-    -------
-    dict : {"long_score": int, "short_score": int, "signal": int, "detail": str}
+    V18.4 리스트 규칙 기반 스코어링 엔진
     """
-    macd = indicators.get("macd_hist_pctl", 50)
-    cvd = indicators.get("cvd_delta_slope_pctl", 50)
-    imbal = indicators.get("bid_ask_imbalance_pctl", 50)
-    nofi = indicators.get("nofi_1m_pctl", 50)
-    rsi = indicators.get("rsi", 50)
-    buy_r = indicators.get("buy_ratio_pctl", 50)
+    # 1. 지표 추출
+    macd_p = indicators.get("macd_hist_pctl", 50)
+    cvd_p = indicators.get("cvd_delta_slope_pctl", 50)
+    imbal_p = indicators.get("bid_ask_imbalance_pctl", 50)
+    nofi_p = indicators.get("nofi_1m_pctl", 50)
+    rsi_val = indicators.get("rsi", 50)
+    buy_p = indicators.get("buy_ratio_pctl", 50)
     adx_p = indicators.get("adx_pctl", 50)
     fr = indicators.get("funding_rate_match", 0)
     vol_z = indicators.get("vol_zscore", 0.0)
     oi_p = indicators.get("oi_pctl", 50)
     tick_p = indicators.get("tick_pctl", 50)
     atr_boost_flag = indicators.get("atr_boost_flag", False)
-    # 신규 항목: HTF/MTF 및 VWAP (기본값 중립)
-    htf_bias = indicators.get("htf_bias", 0)  # 1: BULL, -1: BEAR
-    mtf_moment = indicators.get("mtf_moment", 0)  # 1: BULL, -1: BEAR
-    mtf_reg = indicators.get("mtf_regime", 0)  # 1: TREND, 0: RANGE
-    vwap_dist = indicators.get("vwap_dist", 0.0)  # (+)면 VWAP 위, (-)면 아래
 
-    # ━━━━━ LONG 스코어링 ━━━━━
-    t = settings.SCORING_THRESHOLDS
+    htf_bias = indicators.get("htf_bias", 0)
+    mtf_moment = indicators.get("mtf_moment", 0)
+    mtf_reg = indicators.get("mtf_regime", 0)
+    vwap_dist = indicators.get("vwap_dist", 0.0)
+
+    rl = settings.SC_RULES_LONG
+    rs = settings.SC_RULES_SHORT
     w = settings.SCORING_WEIGHTS
 
-    # MACD 히스토그램
-    l_macd = (
-        w["macd"]["4"]
-        if macd >= t["macd_pctl"].get("+4", 90)
-        else (
-            w["macd"]["2"]
-            if macd >= t["macd_pctl"]["+2"]
-            else (w["macd"]["1"] if macd >= t["macd_pctl"]["+1"] else 0)
-        )
-    )
-    # CVD 델타 기울기
-    l_cvd = (
-        w["cvd"]["2"]
-        if cvd >= t["cvd_pctl"]["+2"]
-        else (w["cvd"]["1"] if cvd >= t["cvd_pctl"]["+1"] else 0)
-    )
-    # 호가 불균형
-    l_imbal = (
-        w["imbalance"]["2"]
-        if imbal >= t["imbalance"]["+2"]
-        else (w["imbalance"]["1"] if imbal >= t["imbalance"]["+1"] else 0)
-    )
-    # 정규화 OFI
-    l_nofi = (
-        w["nofi"]["2"]
-        if nofi >= t["nofi_pctl"]["+2"]
-        else (w["nofi"]["1"] if nofi >= t["nofi_pctl"]["+1"] else 0)
-    )
-    # RSI (과매도 기준)
-    l_rsi = (
-        w["rsi"]["2"]
-        if rsi <= t["rsi"]["+2"]
-        else (w["rsi"]["1"] if rsi <= t["rsi"]["+1"] else 0)
-    )
-    # 매수 비율 (역발상: 하위 백분위수)
-    l_buy = (
-        w["buy_ratio"]["2"]
-        if buy_r <= t["buy_ratio"]["+2"]
-        else (w["buy_ratio"]["1"] if buy_r <= t["buy_ratio"]["+1"] else 0)
-    )
-    # 거래량 Z-Score
-    l_vol = (
-        w["vol_z"]["2"]
-        if vol_z >= t["vol_zscore"]["+2"]
-        else (w["vol_z"]["1"] if vol_z >= t["vol_zscore"]["+1"] else 0)
-    )
-    # 환경 부스트 및 신규 피처
+    # ━━━━━ LONG 스코어링 ━━━━━
+    l_macd = evaluate_rule_score(macd_p, rl["trend"]["macd_pctl"], "upper")
+    l_cvd = evaluate_rule_score(cvd_p, rl["trend"]["cvd_pctl"], "upper")
+    l_imbal = evaluate_rule_score(imbal_p, rl["trend"]["bid_ask_imbalance"], "upper")
+    l_nofi = evaluate_rule_score(nofi_p, rl["trend"]["nofi_pctl"], "upper")
+    l_oi = evaluate_rule_score(oi_p, rl["trend"]["oi_pctl"], "upper")
+    l_tick = evaluate_rule_score(tick_p, rl["trend"]["tick_pctl"], "upper")
+    l_vol = evaluate_rule_score(vol_z, rl["trend"]["vol_zscore"], "upper")
+
+    l_rsi = evaluate_rule_score(rsi_val, rl["mean_reversion"]["rsi"], "lower")
+    l_buy = evaluate_rule_score(buy_p, rl["mean_reversion"]["buy_ratio"], "lower")
+
+    # 가중치 기반 (기존 유지)
     l_adx = w["adx_boost"]["1"] if adx_p >= adx_boost_pctl else 0
     l_fr = w["fr_boost"]["2"] if fr == -1 else 0
-    l_oi = (
-        w["oi"]["2"]
-        if oi_p >= t["oi_pctl"]["+2"]
-        else (w["oi"]["1"] if oi_p >= t["oi_pctl"]["+1"] else 0)
-    )
-    l_tick = (
-        w["tick"]["2"]
-        if tick_p >= t["tick_pctl"]["+2"]
-        else (w["tick"]["1"] if tick_p >= t["tick_pctl"]["+1"] else 0)
-    )
-    # ATR 변동성 필터
     l_atr = w["atr"]["2"] if atr_boost_flag else 0
-
-    # ━━━━━ MTF / HTF / VWAP 추가 점수 ━━━━━
     l_htf = w["htf_bias"]["2"] if htf_bias == 1 else 0
     l_mtf_m = w["mtf_moment"]["2"] if mtf_moment == 1 else 0
     l_mtf_r = w["mtf_regime"]["1"] if mtf_reg == 1 else 0
@@ -211,65 +177,27 @@ def calculate_entry_score(indicators: dict, adx_boost_pctl: float = 70.0) -> dic
         + l_vwap
     )
 
-    # ━━━━━ SHORT 스코어링 (대칭 반전) ━━━━━
+    # ━━━━━ SHORT 스코어링 ━━━━━
+    # 숏은 추세 지표의 경우 100 - pctl (대칭) 기준으로 평가
+    s_macd = evaluate_rule_score(100 - macd_p, rs["trend"]["macd_hist"], "upper")
+    s_cvd = evaluate_rule_score(100 - cvd_p, rs["trend"]["cvd_delta_slope"], "upper")
+    s_imbal = evaluate_rule_score(
+        100 - imbal_p, rs["trend"]["bid_ask_imbalance"], "upper"
+    )
+    s_nofi = evaluate_rule_score(100 - nofi_p, rs["trend"]["nofi_1m"], "upper")
+    s_oi = evaluate_rule_score(
+        oi_p, rs["trend"]["open_interest"], "upper"
+    )  # OI/Tick은 절대 활성도
+    s_tick = evaluate_rule_score(tick_p, rs["trend"]["tick_count"], "upper")
+    s_vol = evaluate_rule_score(vol_z, rs["trend"]["log_volume_zscore"], "upper")
 
-    s_macd = (
-        w["macd"]["4"]
-        if macd <= (100 - t["macd_pctl"].get("+4", 90))
-        else (
-            w["macd"]["2"]
-            if macd <= (100 - t["macd_pctl"]["+2"])
-            else (w["macd"]["1"] if macd <= (100 - t["macd_pctl"]["+1"]) else 0)
-        )
-    )
-    s_cvd = (
-        w["cvd"]["2"]
-        if cvd <= (100 - t["cvd_pctl"]["+2"])
-        else (w["cvd"]["1"] if cvd <= (100 - t["cvd_pctl"]["+1"]) else 0)
-    )
-    s_imbal = (
-        w["imbalance"]["2"]
-        if imbal <= (100 - t["imbalance"]["+2"])
-        else (w["imbalance"]["1"] if imbal <= (100 - t["imbalance"]["+1"]) else 0)
-    )
-    s_nofi = (
-        w["nofi"]["2"]
-        if nofi <= (100 - t["nofi_pctl"]["+2"])
-        else (w["nofi"]["1"] if nofi <= (100 - t["nofi_pctl"]["+1"]) else 0)
-    )
-    # RSI
-    s_rsi = (
-        w["rsi"]["2"]
-        if rsi >= (100 - t["rsi"]["+2"])
-        else (w["rsi"]["1"] if rsi >= (100 - t["rsi"]["+1"]) else 0)
-    )
-    # 매수 비율
-    s_buy = (
-        w["buy_ratio"]["2"]
-        if buy_r >= (100 - t["buy_ratio"]["+2"])
-        else (w["buy_ratio"]["1"] if buy_r >= (100 - t["buy_ratio"]["+1"]) else 0)
-    )
-    # 거래량
-    s_vol = (
-        w["vol_z"]["2"]
-        if vol_z >= t["vol_zscore"]["+2"]
-        else (w["vol_z"]["1"] if vol_z >= t["vol_zscore"]["+1"] else 0)
-    )
+    # 평균 회귀 지표 (숏은 고점에서 하락 반전이므로 Upper 기준 사용)
+    s_rsi = evaluate_rule_score(rsi_val, rs["mean_reversion"]["rsi"], "upper")
+    s_buy = evaluate_rule_score(buy_p, rs["mean_reversion"]["buy_ratio"], "upper")
+
     s_adx = w["adx_boost"]["1"] if adx_p >= adx_boost_pctl else 0
     s_fr = w["fr_boost"]["2"] if fr == 1 else 0
-    s_oi = (
-        w["oi"]["2"]
-        if oi_p >= t["oi_pctl"]["+2"]
-        else (w["oi"]["1"] if oi_p >= t["oi_pctl"]["+1"] else 0)
-    )
-    s_tick = (
-        w["tick"]["2"]
-        if tick_p >= t["tick_pctl"]["+2"]
-        else (w["tick"]["1"] if tick_p >= t["tick_pctl"]["+1"] else 0)
-    )
     s_atr = w["atr"]["2"] if atr_boost_flag else 0
-
-    # ━━━━━ MTF / HTF / VWAP 추가 점수 ━━━━━
     s_htf = w["htf_bias"]["2"] if htf_bias == -1 else 0
     s_mtf_m = w["mtf_moment"]["2"] if mtf_moment == -1 else 0
     s_mtf_r = w["mtf_regime"]["1"] if mtf_reg == 1 else 0
@@ -295,15 +223,15 @@ def calculate_entry_score(indicators: dict, adx_boost_pctl: float = 70.0) -> dic
     )
 
     # 점수 상세 내역 (로그용)
-    if long_score > short_score:
+    if long_score >= short_score:
         detail = (
             f"L[MACD={l_macd} CVD={l_cvd} Imbal={l_imbal} OFI={l_nofi} RSI={l_rsi} Vol={l_vol} "
-            f"HTF={l_htf} MTF={l_mtf_m} Reg={l_mtf_r} VWAP={l_vwap} ATR={l_atr}]={long_score}"
+            f"OI={l_oi} Tick={l_tick} HTF={l_htf} MOM={l_mtf_m} Reg={l_mtf_r} VWAP={l_vwap} ATR={l_atr}]={long_score}"
         )
     else:
         detail = (
             f"S[MACD={s_macd} CVD={s_cvd} Imbal={s_imbal} OFI={s_nofi} RSI={s_rsi} Vol={s_vol} "
-            f"HTF={s_htf} MTF={s_mtf_m} Reg={s_mtf_r} VWAP={s_vwap} ATR={s_atr}]={short_score}"
+            f"OI={s_oi} Tick={s_tick} HTF={s_htf} MOM={s_mtf_m} Reg={l_mtf_r} VWAP={s_vwap} ATR={s_atr}]={short_score}"
         )
 
     return {

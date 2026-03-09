@@ -357,46 +357,71 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "kelly": (None, None, None),
             "kelly_min": ("KELLY_MIN_TRADES", int, "KELLY_MIN_TRADES"),
             "kelly_max": ("KELLY_MAX_FRACTION", float, "KELLY_MAX_FRACTION"),
-            # Scoring Thresholds (Custom 키)
-            "macd_1": ("macd_pctl", int, "SCORE_MACD_1"),
-            "macd_2": ("macd_pctl", int, "SCORE_MACD_2"),
-            "macd_4": ("macd_pctl", int, "SCORE_MACD_4"),
-            "cvd_1": ("cvd_pctl", int, "SCORE_CVD_1"),
-            "cvd_2": ("cvd_pctl", int, "SCORE_CVD_2"),
-            "imbal_1": ("imbalance", int, "SCORE_IMBAL_1"),
-            "imbal_2": ("imbalance", int, "SCORE_IMBAL_2"),
-            "nofi_1": ("nofi_pctl", int, "SCORE_NOFI_1"),
-            "nofi_2": ("nofi_pctl", int, "SCORE_NOFI_2"),
-            "rsi_1": ("rsi", int, "SCORE_RSI_1"),
-            "rsi_2": ("rsi", int, "SCORE_RSI_2"),
-            "buy_1": ("buy_ratio", int, "SCORE_BUY_1"),
-            "buy_2": ("buy_ratio", int, "SCORE_BUY_2"),
-            "vol_1": ("vol_zscore", float, "SCORE_VOL_1"),
-            "vol_2": ("vol_zscore", float, "SCORE_VOL_2"),
-            "oi_1": ("oi_pctl", int, "SCORE_OI_1"),
-            "oi_2": ("oi_pctl", int, "SCORE_OI_2"),
-            "tick_1": ("tick_pctl", int, "SCORE_TICK_1"),
-            "tick_2": ("tick_pctl", int, "SCORE_TICK_2"),
-            # Scoring Weights (Custom 키)
-            "w_macd_1": ("macd", int, "WEIGHT_MACD_1"),
-            "w_macd_2": ("macd", int, "WEIGHT_MACD_2"),
-            "w_macd_4": ("macd", int, "WEIGHT_MACD_4"),
-            "w_cvd_1": ("cvd", int, "WEIGHT_CVD_1"),
-            "w_cvd_2": ("cvd", int, "WEIGHT_CVD_2"),
-            "w_imbal_1": ("imbalance", int, "WEIGHT_IMBAL_1"),
-            "w_imbal_2": ("imbalance", int, "WEIGHT_IMBAL_2"),
-            "w_nofi_1": ("nofi", int, "WEIGHT_NOFI_1"),
-            "w_nofi_2": ("nofi", int, "WEIGHT_NOFI_2"),
-            "w_rsi_1": ("rsi", int, "WEIGHT_RSI_1"),
-            "w_rsi_2": ("rsi", int, "WEIGHT_RSI_2"),
-            "w_buy_1": ("buy_ratio", int, "WEIGHT_BUY_1"),
-            "w_buy_2": ("buy_ratio", int, "WEIGHT_BUY_2"),
-            "w_vol_1": ("vol_z", int, "WEIGHT_VOL_1"),
-            "w_vol_2": ("vol_z", int, "WEIGHT_VOL_2"),
-            "w_oi_1": ("oi", int, "WEIGHT_OI_1"),
-            "w_oi_2": ("oi", int, "WEIGHT_OI_2"),
-            "w_tick_1": ("tick", int, "WEIGHT_TICK_1"),
-            "w_tick_2": ("tick", int, "WEIGHT_TICK_2"),
+            # [V18.4] Long Rules Parameters
+            "l_macd_t1": ("SC_RULES_LONG", int, "L_MACD_T1"),
+            "l_macd_t2": ("SC_RULES_LONG", int, "L_MACD_T2"),
+            "l_macd_t4": ("SC_RULES_LONG", int, "L_MACD_T4"),
+            "l_macd_w1": ("SC_RULES_LONG", int, "L_MACD_W1"),
+            "l_macd_w2": ("SC_RULES_LONG", int, "L_MACD_W2"),
+            "l_macd_w4": ("SC_RULES_LONG", int, "L_MACD_W4"),
+            "l_cvd_t1": ("SC_RULES_LONG", int, "L_CVD_T1"),
+            "l_cvd_t2": ("SC_RULES_LONG", int, "L_CVD_T2"),
+            "l_cvd_w1": ("SC_RULES_LONG", int, "L_CVD_W1"),
+            "l_cvd_w2": ("SC_RULES_LONG", int, "L_CVD_W2"),
+            "l_imbal_t1": ("SC_RULES_LONG", int, "L_IMBAL_T1"),
+            "l_imbal_w1": ("SC_RULES_LONG", int, "L_IMBAL_W1"),
+            "l_nofi_t1": ("SC_RULES_LONG", int, "L_NOFI_T1"),
+            "l_nofi_w1": ("SC_RULES_LONG", int, "L_NOFI_W1"),
+            "l_oi_t1": ("SC_RULES_LONG", int, "L_OI_T1"),
+            "l_oi_t2": ("SC_RULES_LONG", int, "L_OI_T2"),
+            "l_oi_w1": ("SC_RULES_LONG", int, "L_OI_W1"),
+            "l_oi_w2": ("SC_RULES_LONG", int, "L_OI_W2"),
+            "l_tick_t1": ("SC_RULES_LONG", int, "L_TICK_T1"),
+            "l_tick_w1": ("SC_RULES_LONG", int, "L_TICK_W1"),
+            "l_vol_t1": ("SC_RULES_LONG", float, "L_VOL_T1"),
+            "l_vol_w1": ("SC_RULES_LONG", int, "L_VOL_W1"),
+            "l_buy_t1": ("SC_RULES_LONG", int, "L_BUY_T1"),
+            "l_buy_w1": ("SC_RULES_LONG", int, "L_BUY_W1"),
+            # [V18.4] Short Rules Parameters
+            "s_macd_t1": ("SC_RULES_SHORT", int, "S_MACD_T1"),
+            "s_macd_t2": ("SC_RULES_SHORT", int, "S_MACD_T2"),
+            "s_macd_t4": ("SC_RULES_SHORT", int, "S_MACD_T4"),
+            "s_macd_w1": ("SC_RULES_SHORT", int, "S_MACD_W1"),
+            "s_macd_w2": ("SC_RULES_SHORT", int, "S_MACD_W2"),
+            "s_macd_w4": ("SC_RULES_SHORT", int, "S_MACD_W4"),
+            "s_cvd_t1": ("SC_RULES_SHORT", int, "S_CVD_T1"),
+            "s_cvd_t2": ("SC_RULES_SHORT", int, "S_CVD_T2"),
+            "s_cvd_w1": ("SC_RULES_SHORT", int, "S_CVD_W1"),
+            "s_cvd_w2": ("SC_RULES_SHORT", int, "S_CVD_W2"),
+            "s_imbal_t1": ("SC_RULES_SHORT", int, "S_IMBAL_T1"),
+            "s_imbal_t2": ("SC_RULES_SHORT", int, "S_IMBAL_T2"),
+            "s_imbal_w1": ("SC_RULES_SHORT", int, "S_IMBAL_W1"),
+            "s_imbal_w2": ("SC_RULES_SHORT", int, "S_IMBAL_W2"),
+            "s_nofi_t1": ("SC_RULES_SHORT", int, "S_NOFI_T1"),
+            "s_nofi_t2": ("SC_RULES_SHORT", int, "S_NOFI_T2"),
+            "s_nofi_w1": ("SC_RULES_SHORT", int, "S_NOFI_W1"),
+            "s_nofi_w2": ("SC_RULES_SHORT", int, "S_NOFI_W2"),
+            "s_oi_t1": ("SC_RULES_SHORT", int, "S_OI_T1"),
+            "s_oi_t2": ("SC_RULES_SHORT", int, "S_OI_T2"),
+            "s_oi_w1": ("SC_RULES_SHORT", int, "S_OI_W1"),
+            "s_oi_w2": ("SC_RULES_SHORT", int, "S_OI_W2"),
+            "s_tick_t1": ("SC_RULES_SHORT", int, "S_TICK_T1"),
+            "s_tick_t2": ("SC_RULES_SHORT", int, "S_TICK_T2"),
+            "s_tick_w1": ("SC_RULES_SHORT", int, "S_TICK_W1"),
+            "s_tick_w2": ("SC_RULES_SHORT", int, "S_TICK_W2"),
+            "s_vol_t1": ("SC_RULES_SHORT", float, "S_VOL_T1"),
+            "s_vol_t2": ("SC_RULES_SHORT", float, "S_VOL_T2"),
+            "s_vol_w1": ("SC_RULES_SHORT", int, "S_VOL_W1"),
+            "s_vol_w2": ("SC_RULES_SHORT", int, "S_VOL_W2"),
+            "s_rsi_t1": ("SC_RULES_SHORT", int, "S_RSI_T1"),
+            "s_rsi_t2": ("SC_RULES_SHORT", int, "S_RSI_T2"),
+            "s_rsi_w1": ("SC_RULES_SHORT", int, "S_RSI_W1"),
+            "s_rsi_w2": ("SC_RULES_SHORT", int, "S_RSI_W2"),
+            "s_buy_t1": ("SC_RULES_SHORT", int, "S_BUY_T1"),
+            "s_buy_t2": ("SC_RULES_SHORT", int, "S_BUY_T2"),
+            "s_buy_w1": ("SC_RULES_SHORT", int, "S_BUY_W1"),
+            "s_buy_w2": ("SC_RULES_SHORT", int, "S_BUY_W2"),
+            # Weights (Global)
             "w_atr_2": ("atr", int, "WEIGHT_ATR_2"),
             "w_adx_1": ("adx_boost", int, "WEIGHT_ADX_1"),
             "w_fr_2": ("fr_boost", int, "WEIGHT_FR_2"),
@@ -434,61 +459,59 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ Kelly 사이징 → {label} 설정 완료")
             return
 
-        # 스코어링 임계값 딕셔너리 업데이트 처리
-        threshold_keys = (
-            "macd_1",
-            "macd_2",
-            "macd_4",
-            "cvd_1",
-            "cvd_2",
-            "imbal_1",
-            "imbal_2",
-            "nofi_1",
-            "nofi_2",
-            "rsi_1",
-            "rsi_2",
-            "buy_1",
-            "buy_2",
-            "vol_1",
-            "vol_2",
-            "oi_1",
-            "oi_2",
-            "tick_1",
-            "tick_2",
-        )
-        if key in threshold_keys:
-            # sub_key 추출 (+1, +2 등)
-            sub_key = "+" + key.split("_")[1]
-
+        # [V18.4] 규칙 기반(Long/Short Rules) 및 가중치 업데이트 처리
+        if key.startswith(("l_", "s_", "w_")):
             new_val = cast_fn(raw_val)
 
-            # settings.SCORING_THRESHOLDS 직접 업데이트
-            settings.SCORING_THRESHOLDS[attr_name][sub_key] = new_val
-
-            # .env 파일에도 반영 (영구 저장)
+            # .env 저장 (공통)
             update_env_variable(env_key, str(new_val))
 
+            # 1. 가중치(Weights) 처리: w_atr_2, w_htf_2 등
+            if key.startswith("w_"):
+                # attr_name은 mapping에서 가져온 지표 키 (예: 'atr', 'htf_bias')
+                # sub_key는 마지막 숫자 부분 ('2' 등)
+                sub_key = key.split("_")[-1]
+                settings.SCORING_WEIGHTS[attr_name][sub_key] = new_val
+                label = f"가중치 {attr_name}[{sub_key}]"
+
+            # 2. 규칙(Rules) 처리: l_macd_t1, s_rsi_w2 등
+            else:
+                # attr_name: "SC_RULES_LONG" 혹은 "SC_RULES_SHORT"
+                # key 구조: {l/s}_{indicator}_{t/w}{idx}  예: l_macd_t1
+                parts = key.split("_")
+                target_rule_dict = getattr(settings, attr_name)  # SC_RULES_LONG 등
+
+                # 지표그룹(trend/mean_reversion) 찾기
+                found = False
+                for group in target_rule_dict.values():
+                    if parts[1] in group:
+                        rules_list = group[parts[1]]
+
+                        # t(threshold) 혹은 w(weight) 구분
+                        rule_type = parts[2][0]  # 't' or 'w'
+                        rule_idx = int(parts[2][1:]) - 1  # 1-based to 0-based
+
+                        if rule_idx < len(rules_list):
+                            # 기존 튜플 속성 유지 (threshold, weight, [opt_type])
+                            current_rule = list(rules_list[rule_idx])
+                            if rule_type == "t":
+                                current_rule[0] = new_val
+                            else:
+                                current_rule[1] = new_val
+
+                            rules_list[rule_idx] = tuple(current_rule)
+                            found = True
+                            label = f"규칙 {parts[1]}[{rule_idx + 1}] {'임계값' if rule_type == 't' else '가중치'}"
+                            break
+
+                if not found:
+                    await update.message.reply_text(
+                        f"❌ 규칙 구조 내에서 '{parts[1]}' 지표를 찾을 수 없거나 인덱스 초과입니다."
+                    )
+                    return
+
             await update.message.reply_text(
-                f"✅ [스코어 기준] {key}({env_key}) → {new_val} 설정 및 저장 완료"
-            )
-            return
-
-        # 스코어링 가중치(Weights) 업데이트 처리
-        if key.startswith("w_"):
-            # 'w_macd_1' -> 'macd', '1'
-            # 'w_atr_2' -> 'atr', '2'
-            # 'w_adx_1' -> 'adx_boost', '1'
-            # 'w_fr_2' -> 'fr_boost', '2'
-
-            # attr_name은 mapping에서 이미 가져옴 (예: 'macd', 'cvd', 'adx_boost')
-            # sub_key는 마지막 숫자 부분
-            sub_key = key.split("_")[-1]
-
-            new_val = cast_fn(raw_val)
-            settings.SCORING_WEIGHTS[attr_name][sub_key] = new_val
-            update_env_variable(env_key, str(new_val))
-            await update.message.reply_text(
-                f"✅ [가중치] {key}({env_key}) → {new_val} 설정 및 저장 완료"
+                f"✅ [{label}] {key} → {new_val} 설정 및 저장 완료"
             )
             return
 
@@ -640,32 +663,34 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• <b>ATR 부스트</b>: {settings.ATR_RATIO_MULT}x ({getattr(settings, 'ATR_LONG_LEN', 200)}봉 대비)\n"
         f"• <b>Kelly</b>     : {'ON' if getattr(settings, 'KELLY_SIZING', False) else 'OFF'} (MinSample:{getattr(settings, 'KELLY_MIN_TRADES', 20)}, Cap:{getattr(settings, 'KELLY_MAX_FRACTION', 0.05)})\n"
         f"• <b>Chasing</b>   : Wait={getattr(settings, 'CHASING_WAIT_SEC', 2.5)}s, Retry={getattr(settings, 'CHASING_MAX_RETRY', 10)}, Market_At={getattr(settings, 'CHASING_MARKET_THRESHOLD', 2)}\n\n"
-        "━━━━━━ <b>지표별 임계치 & 가중치</b> ━━━━━━\n"
-    )
-
-    t = getattr(settings, "SCORING_THRESHOLDS", {})
+    # [V18.4] 숏/롱 분리형 규칙 기반 출력
+    rl = getattr(settings, "SC_RULES_LONG", {})
+    rs = getattr(settings, "SC_RULES_SHORT", {})
     w = getattr(settings, "SCORING_WEIGHTS", {})
 
-    if t and w:
-        # 단일 테이블 형식으로 지표별 (임계치 -> 점수) 출력
-        msg += (
-            f"• <b>MACD Hist</b> (+1/+2/+4): {t['macd_pctl']['+1']}/{t['macd_pctl']['+2']}/{t['macd_pctl']['+4']}% → {w['macd']['1']}/{w['macd']['2']}/{w['macd']['4']}점\n"
-            f"• <b>CVD Slope</b> (+1/+2): {t['cvd_pctl']['+1']}/{t['cvd_pctl']['+2']}% → {w['cvd']['1']}/{w['cvd']['2']}점\n"
-            f"• <b>Imbalance</b> (+1/+2): {t['imbalance']['+1']}/{t['imbalance']['+2']}% → {w['imbalance']['1']}/{w['imbalance']['2']}점\n"
-            f"• <b>Norm OFI</b> (+1/+2): {t['nofi_pctl']['+1']}/{t['nofi_pctl']['+2']}% → {w['nofi']['1']}/{w['nofi']['2']}점\n"
-            f"• <b>RSI</b> (+1/+2): {t['rsi']['+1']}/{t['rsi']['+2']} → {w['rsi']['1']}/{w['rsi']['2']}점\n"
-            f"• <b>Buy Ratio</b> (+1/+2): {t['buy_ratio']['+1']}/{t['buy_ratio']['+2']}% → {w['buy_ratio']['1']}/{w['buy_ratio']['2']}점\n"
-            f"• <b>Vol Z-Score</b> (+1/+2): {t['vol_zscore']['+1']}/{t['vol_zscore']['+2']}σ → {w['vol_z']['1']}/{w['vol_z']['2']}점\n"
-            f"• <b>OI Change</b> (+1/+2): {t['oi_pctl']['+1']}/{t['oi_pctl']['+2']}% → {w['oi']['1']}/{w['oi']['2']}점\n"
-            f"• <b>Tick Count</b> (+1/+2): {t['tick_pctl']['+1']}/{t['tick_pctl']['+2']}% → {w['tick']['1']}/{w['tick']['2']}점\n\n"
-            "━━━━━━ <b>거시 & 환경 점수</b> ━━━━━━\n"
-            f"• <b>HTF Bias</b> (1H): {w['htf_bias']['2']}점\n"
-            f"• <b>MTF Moment</b> (15m): {w['mtf_moment']['2']}점\n"
-            f"• <b>MTF Regime</b> (15m): {w['mtf_regime']['1']}점\n"
-            f"• <b>ATR Boost/ADX</b>: {w['atr']['2']}/{w['adx_boost']['1']}점\n"
-            f"• <b>VWAP Distance</b>: {w['vwap_dist']['2']}점\n"
-            f"• <b>Funding Rate Match</b>: {w['fr_boost']['2']}점\n\n"
-        )
+    msg += "━━━━━━ <b>[LONG] 진입 규칙</b> ━━━━━━\n"
+    for group_name, sensors in rl.items():
+        msg += f"<i>[{group_name.upper()}]</i>\n"
+        for sensor, rules in sensors.items():
+            rule_str = ", ".join([f"{r[0]}→{r[1]}점" for r in rules]) if rules else "비활성"
+            msg += f" • {sensor}: {rule_str}\n"
+    
+    msg += "\n━━━━━━ <b>[SHORT] 진입 규칙</b> ━━━━━━\n"
+    for group_name, sensors in rs.items():
+        msg += f"<i>[{group_name.upper()}]</i>\n"
+        for sensor, rules in sensors.items():
+            rule_str = ", ".join([f"{r[0]}→{r[1]}점" for r in rules]) if rules else "비활성"
+            msg += f" • {sensor}: {rule_str}\n"
+
+    msg += "\n━━━━━━ <b>거시 & 환경 점수</b> ━━━━━━\n"
+    msg += (
+        f"• <b>HTF Bias</b> (1H): {w['htf_bias']['2']}점\n"
+        f"• <b>MTF Moment</b> (15m): {w['mtf_moment']['2']}점\n"
+        f"• <b>MTF Regime</b> (15m): {w['mtf_regime']['1']}점\n"
+        f"• <b>ATR Boost/ADX</b>: {w['atr']['2']}/{w['adx_boost']['1']}점\n"
+        f"• <b>VWAP Distance</b>: {w['vwap_dist']['2']}점\n"
+        f"• <b>Funding Rate Match</b>: {w['fr_boost']['2']}점\n\n"
+    )
 
     msg += (
         "━━━━━━ <b>청산 & 탈출</b> ━━━━━━\n"

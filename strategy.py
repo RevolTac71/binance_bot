@@ -498,90 +498,40 @@ class StrategyEngine:
         raw_signal = score_result["signal"]
         score_detail = score_result["detail"]
 
-        # [V18.3] 진입 유형(entry_type) 선제적 판별 (필터 분기용)
-        # MACD 점수가 2점 이상(추세적)이면 TREND, 아니면 SCALP로 분류
+        # [V18.3] 진입 유형(entry_type) 선제적 판별 (로그용)
+        # MACD 점수가 1점 이상이면 TREND, 아니면 SCALP로 분류 (V18.4 기준 조정 가능)
         entry_type = (
             "TREND_MACD"
             if (
-                score_result.get("l_macd", 0) >= 2 or score_result.get("s_macd", 0) >= 2
+                score_result.get("l_macd", 0) >= 1 or score_result.get("s_macd", 0) >= 1
             )
             else "SCALP_CVD"
         )
 
-        # ── 4. 진입 조건 필터링 (최종 결정: Hard Filters) ─────────────────
+        # ── 4. 진입 조건 필터링 (Pure Scoring 기반) ───────────────────────
         min_score_long = getattr(settings, "MIN_SCORE_LONG", 12)
         min_score_short = getattr(settings, "MIN_SCORE_SHORT", 9)
         signal_type = None
         reason = ""
 
-        # [V18.2] 필수 관문(Hard Filters) 검증
-        # A. ATR 변동성 필터 (횡보장 차단)
-        min_vol_ratio = 0.7  # 최소 장기 평균의 70%는 되어야 함
-        volatility_ok = atr_14 >= (atr_long * min_vol_ratio)
+        # 롱 진입 검증
+        if raw_signal == 1 and long_score >= min_score_long:
+            signal_type = "LONG"
+            reason = f"[V18 SCORE LONG] {score_detail} (≥{min_score_long}, Type={entry_type})"
 
-        # B. MACD 방향성 필터 (현재 봉 기준 역추세 차단)
-        macd_h = current.get("MACD_H", 0)
-        macd_ok_long = macd_h > 0
-        macd_ok_short = macd_h < 0
+        # 숏 진입 검증
+        elif raw_signal == -1 and short_score >= min_score_short:
+            signal_type = "SHORT"
+            reason = f"[V18 SCORE SHORT] {score_detail} (≥{min_score_short}, Type={entry_type})"
 
-        # C. HTF(1H) 추세 필터 (BULL/BEAR 거시 방향 일치 여부)
-        htf_ok_long = htf_bias_str == "BULL"
-        htf_ok_short = htf_bias_str == "BEAR"
-
-        if not volatility_ok:
-            reason = f"[{entry_type}] 진입 거부: 변동성 부족 (ATR14={atr_14:.4f} < {atr_long * min_vol_ratio:.4f})"
-        else:
-            # 롱 진입 검증
-            if raw_signal == 1 and long_score >= min_score_long:
-                if not htf_ok_long:
-                    reason = (
-                        f"[{entry_type}] 진입 거부: HTF 추세 불일치 ({htf_bias_str})"
-                    )
-                elif not macd_ok_long:
-                    reason = f"[{entry_type}] 진입 거부: MACD 역방향 (H={macd_h:.6f})"
-                else:
-                    # D. 스캘핑 안전 장치 (Scalp Gear Check)
-                    l_macd_score = score_result.get("l_macd", 0)
-                    if l_macd_score < 2:  # 추세 점수가 낮음 (스캘핑성)
-                        has_orderflow = (
-                            score_result.get("l_cvd", 0) >= 1
-                            or score_result.get("l_nofi", 0) >= 1
-                        )
-                        if not has_orderflow:
-                            reason = f"Scalp Gear Reject: No Orderflow in low trend ({score_detail})"
-                        else:
-                            signal_type = "LONG"
-                    else:
-                        signal_type = "LONG"
-
-                if signal_type:
-                    reason = f"[V18 SCORE LONG] {score_detail} (≥{min_score_long}, Type={entry_type})"
-
-            # 숏 진입 검증
-            elif raw_signal == -1 and short_score >= min_score_short:
-                if not htf_ok_short:
-                    reason = (
-                        f"[{entry_type}] 진입 거부: HTF 추세 불일치 ({htf_bias_str})"
-                    )
-                elif not macd_ok_short:
-                    reason = f"[{entry_type}] 진입 거부: MACD 역방향 (H={macd_h:.6f})"
-                else:
-                    # D. 스캘핑 안전 장치 (Scalp Gear Check)
-                    s_macd_score = score_result.get("s_macd", 0)
-                    if s_macd_score < 2:  # 추세 점수가 낮음 (스캘핑성)
-                        has_orderflow = (
-                            score_result.get("s_cvd", 0) >= 1
-                            or score_result.get("s_nofi", 0) >= 1
-                        )
-                        if not has_orderflow:
-                            reason = f"Scalp Gear Reject: No Orderflow in low trend ({score_detail})"
-                        else:
-                            signal_type = "SHORT"
-                    else:
-                        signal_type = "SHORT"
-
-                if signal_type:
-                    reason = f"[V18 SCORE SHORT] {score_detail} (≥{min_score_short}, Type={entry_type})"
+        # 탈락 사유 기록 (조건 미달 시)
+        if not signal_type:
+            if raw_signal == 1:
+                reason = f"[{entry_type}] LONG 점수 미달: {long_score} < {min_score_long} ({score_detail})"
+            elif raw_signal == -1:
+                reason = f"[{entry_type}] SHORT 점수 미달: {short_score} < {min_score_short} ({score_detail})"
+            else:
+                reason = f"[{entry_type}] No Signal ({score_detail})"
 
         # entry_type은 위에서 선제 판별됨
 

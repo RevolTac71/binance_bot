@@ -78,161 +78,114 @@ class Config:
     RISK_PERCENTAGE = float(os.getenv("RISK_PERCENTAGE", "0.005"))
     LEVERAGE = int(os.getenv("LEVERAGE", "5"))
     TIME_EXIT_MINUTES = int(
-        os.getenv("TIME_EXIT_MINUTES", "90")
-    )  # 하위 호환 유지 (Chandelier Exit 전환 후 비활성 예정)
+        os.getenv("TIME_EXIT_MINUTES", "60")
+    )  # 기본값 90 -> 60 수정
 
-    ATR_RATIO_MULT = float(os.getenv("ATR_RATIO_MULT", "1.2"))
-    ATR_LONG_LEN = int(os.getenv("ATR_LONG_LEN", "200"))
-
-    # SL/TP 배율 (ATR 대비) - 기존 1.5/2.5에서 확장
-    # SL을 넓혀 일시적 되돌림에 손절되지 않도록 함
-    SL_MULT = float(
-        os.getenv("SL_MULT", "1.5")
-    )  # ATR × 1.5 = 손절 거리 (V18 스코어링 기준)
-    TP_MULT = float(
-        os.getenv("TP_MULT", "5.0")
-    )  # ATR × 5.0 = 익절 거리 (V18 스코어링 기준) (R:R = 2:1)
-
-    # 동일 종목 연속 손실 시 쿨다운 (분)
-    LOSS_COOLDOWN_MINUTES = int(os.getenv("LOSS_COOLDOWN_MINUTES", "15"))
-
-    # ── V18 필터 파라미터 ─────────────────────────────────────────────
-    # 상위 타임프레임 설정 (CCXT 포맷)
-    HTF_TIMEFRAME_1H = os.getenv("HTF_TIMEFRAME_1H", "1h")  # 1시간봉 (거시 추세)
-    HTF_TIMEFRAME_15M = os.getenv(
-        "HTF_TIMEFRAME_15M", "15m"
-    )  # 15분봉 (추세 강도·모멘텀)
-    # ADX 기준값: 이 이상이면 추세장(모멘텀 추종), 미만이면 횡보장(역추세/평균회귀) (V18에서 백분위수로 대체됨)
-    # ── V18 샹들리에 청산(Chandelier Exit / Trailing Stop) 파라미터 ────────
-    # 진입 후 최고점(Long) 또는 최저점(Short)에서 ATR × 배수 만큼 후퇴 시 손절
-    CHANDELIER_MULT = float(os.getenv("CHANDELIER_MULT", "2.5"))
-    CHANDELIER_ATR_LEN = int(os.getenv("CHANDELIER_ATR_LEN", "14"))  # ATR 산출 기간
-
-    # ── V18 포트폴리오 동시 진입 제한 ────────────────────────────────────
-    # 동일 방향(롱 또는 숏) 포지션이 이 개수 이상이면 추가 진입 차단
-    MAX_CONCURRENT_SAME_DIR = int(os.getenv("MAX_CONCURRENT_SAME_DIR", "2"))
-
-    # 전체 최대 동시 진입 허용 개수 (알트코인 연쇄 손절 방지용)
-    MAX_TRADES = int(os.getenv("MAX_TRADES", "3"))
-
-    # 종목 리프레시 주기 (시간 단위, 기본 3시간)
-    SYMBOL_REFRESH_INTERVAL = int(os.getenv("SYMBOL_REFRESH_INTERVAL", "3"))
-
-    # 본절(Breakeven) 추적 로직 (V18)
-    BREAKEVEN_TRIGGER_MULT = float(os.getenv("BREAKEVEN_TRIGGER_MULT", "1.5"))
-    BREAKEVEN_PROFIT_MULT = float(os.getenv("BREAKEVEN_PROFIT_MULT", "0.2"))
-
-    # ── V18 스코어링 진입 엔진 파라미터 ────────────────────────────────
-    MIN_SCORE_LONG = int(os.getenv("MIN_SCORE_LONG", "12"))
-    MIN_SCORE_SHORT = int(os.getenv("MIN_SCORE_SHORT", "9"))
-    PCTL_WINDOW = int(os.getenv("PCTL_WINDOW", "100"))  # 백분위수 산출 윈도우
-    ADX_BOOST_PCTL = float(
-        os.getenv("ADX_BOOST_PCTL", "70")
-    )  # 추세 부스트 임계 백분위수 (ADX > 35~40 수준)
-
-    # [V18] 세부 지표 스코어링 기준 (전역 파라미터화)
-    # 각 지표에 대해 +1점, +2점을 부여하는 임계값 기준 (dict)
-    # [V18] 세부 지표 스코어링 기준 (전역 파라미터화 및 영속화)
-    SCORING_THRESHOLDS = {
-        "macd_pctl": {
-            "+1": int(os.getenv("SCORE_MACD_1", "70")),
-            "+2": int(os.getenv("SCORE_MACD_2", "80")),
-            "+4": int(os.getenv("SCORE_MACD_4", "90")),
+    # [V18.4] 숏/롱 분리형 규칙 기반 스코어링 시스템
+    # (임계값, 부여점수, "pctl"| "val")
+    # pctl: 백분위수 기준 (0~100)
+    # val: 실제 값 (Log_Vol_ZScore 등)
+    SC_RULES_LONG = {
+        "trend": {
+            "macd_pctl": [
+                (int(os.getenv("L_MACD_T1", "65")), int(os.getenv("L_MACD_W1", "1"))),
+                (int(os.getenv("L_MACD_T2", "75")), int(os.getenv("L_MACD_W2", "2"))),
+                (int(os.getenv("L_MACD_T4", "85")), int(os.getenv("L_MACD_W4", "4"))),
+            ],
+            "cvd_pctl": [
+                (int(os.getenv("L_CVD_T1", "70")), int(os.getenv("L_CVD_W1", "1"))),
+                (int(os.getenv("L_CVD_T2", "85")), int(os.getenv("L_CVD_W2", "2"))),
+            ],
+            "imbalance": [
+                (int(os.getenv("L_IMBAL_T1", "80")), int(os.getenv("L_IMBAL_W1", "1")))
+            ],
+            "nofi_pctl": [
+                (int(os.getenv("L_NOFI_T1", "85")), int(os.getenv("L_NOFI_W1", "1")))
+            ],
+            "oi_pctl": [
+                (int(os.getenv("L_OI_T1", "70")), int(os.getenv("L_OI_W1", "2"))),
+                (int(os.getenv("L_OI_T2", "85")), int(os.getenv("L_OI_W2", "4"))),
+            ],
+            "tick_pctl": [
+                (int(os.getenv("L_TICK_T1", "85")), int(os.getenv("L_TICK_W1", "1")))
+            ],
+            "vol_zscore": [
+                (
+                    float(os.getenv("L_VOL_T1", "1.9")),
+                    int(os.getenv("L_VOL_W1", "1")),
+                    "val",
+                )
+            ],
         },
-        "cvd_pctl": {
-            "+1": int(os.getenv("SCORE_CVD_1", "70")),
-            "+2": int(os.getenv("SCORE_CVD_2", "85")),
-        },
-        "imbalance": {
-            "+1": int(os.getenv("SCORE_IMBAL_1", "65")),
-            "+2": int(os.getenv("SCORE_IMBAL_2", "80")),
-        },
-        "nofi_pctl": {
-            "+1": int(os.getenv("SCORE_NOFI_1", "70")),
-            "+2": int(os.getenv("SCORE_NOFI_2", "85")),
-        },
-        "rsi": {
-            "+1": int(os.getenv("SCORE_RSI_1", "30")),
-            "+2": int(os.getenv("SCORE_RSI_2", "15")),
-        },
-        "buy_ratio": {
-            "+1": int(os.getenv("SCORE_BUY_1", "25")),
-            "+2": int(os.getenv("SCORE_BUY_2", "10")),
-        },
-        "vol_zscore": {
-            "+1": float(os.getenv("SCORE_VOL_1", "1.5")),
-            "+2": float(os.getenv("SCORE_VOL_2", "2.5")),
-        },
-        "oi_pctl": {
-            "+1": int(os.getenv("SCORE_OI_1", "70")),
-            "+2": int(os.getenv("SCORE_OI_2", "85")),
-        },
-        "tick_pctl": {
-            "+1": int(os.getenv("SCORE_TICK_1", "70")),
-            "+2": int(os.getenv("SCORE_TICK_2", "85")),
+        "mean_reversion": {
+            "rsi": [],
+            "buy_ratio": [
+                (int(os.getenv("L_BUY_T1", "15")), int(os.getenv("L_BUY_W1", "1")))
+            ],
         },
     }
 
-    # [V18] 지표별 부여 점수 (Weights) - 텔레그램에서 실시간 수정 가능
+    SC_RULES_SHORT = {
+        "trend": {
+            "macd_hist": [  # Scoring 시 내부적으로 symm 처리
+                (int(os.getenv("S_MACD_T1", "65")), int(os.getenv("S_MACD_W1", "1"))),
+                (int(os.getenv("S_MACD_T2", "75")), int(os.getenv("S_MACD_W2", "2"))),
+                (int(os.getenv("S_MACD_T4", "85")), int(os.getenv("S_MACD_W4", "4"))),
+            ],
+            "cvd_delta_slope": [
+                (int(os.getenv("S_CVD_T1", "70")), int(os.getenv("S_CVD_W1", "1"))),
+                (int(os.getenv("S_CVD_T2", "85")), int(os.getenv("S_CVD_W2", "2"))),
+            ],
+            "bid_ask_imbalance": [
+                (int(os.getenv("S_IMBAL_T1", "65")), int(os.getenv("S_IMBAL_W1", "1"))),
+                (int(os.getenv("S_IMBAL_T2", "80")), int(os.getenv("S_IMBAL_W2", "2"))),
+            ],
+            "nofi_1m": [
+                (int(os.getenv("S_NOFI_T1", "70")), int(os.getenv("S_NOFI_W1", "1"))),
+                (int(os.getenv("S_NOFI_T2", "85")), int(os.getenv("S_NOFI_W2", "2"))),
+            ],
+            "open_interest": [
+                (int(os.getenv("S_OI_T1", "70")), int(os.getenv("S_OI_W1", "1"))),
+                (int(os.getenv("S_OI_T2", "85")), int(os.getenv("S_OI_W2", "2"))),
+            ],
+            "tick_count": [
+                (int(os.getenv("S_TICK_T1", "70")), int(os.getenv("S_TICK_W1", "1"))),
+                (int(os.getenv("S_TICK_T2", "85")), int(os.getenv("S_TICK_W2", "2"))),
+            ],
+            "log_volume_zscore": [
+                (
+                    float(os.getenv("S_VOL_T1", "1.4")),
+                    int(os.getenv("S_VOL_W1", "1")),
+                    "val",
+                ),
+                (
+                    float(os.getenv("S_VOL_T2", "1.9")),
+                    int(os.getenv("S_VOL_W2", "2")),
+                    "val",
+                ),
+            ],
+        },
+        "mean_reversion": {
+            "rsi": [
+                (int(os.getenv("S_RSI_T1", "35")), int(os.getenv("S_RSI_W1", "1"))),
+                (int(os.getenv("S_RSI_T2", "25")), int(os.getenv("S_RSI_W2", "2"))),
+            ],
+            "buy_ratio": [
+                (int(os.getenv("S_BUY_T1", "25")), int(os.getenv("S_BUY_W1", "1"))),
+                (int(os.getenv("S_BUY_T2", "10")), int(os.getenv("S_BUY_W2", "2"))),
+            ],
+        },
+    }
+
+    # 하위 호환 및 환경 부스트/거시 가중치 유지 (규칙 엔진으로 미통합된 항목들)
     SCORING_WEIGHTS = {
-        "macd": {
-            "1": int(os.getenv("WEIGHT_MACD_1", "1")),
-            "2": int(os.getenv("WEIGHT_MACD_2", "2")),
-            "4": int(os.getenv("WEIGHT_MACD_4", "4")),
-        },
-        "cvd": {
-            "1": int(os.getenv("WEIGHT_CVD_1", "1")),
-            "2": int(os.getenv("WEIGHT_CVD_2", "2")),
-        },
-        "imbalance": {
-            "1": int(os.getenv("WEIGHT_IMBAL_1", "1")),
-            "2": int(os.getenv("WEIGHT_IMBAL_2", "2")),
-        },
-        "nofi": {
-            "1": int(os.getenv("WEIGHT_NOFI_1", "1")),
-            "2": int(os.getenv("WEIGHT_NOFI_2", "2")),
-        },
-        "rsi": {
-            "1": int(os.getenv("WEIGHT_RSI_1", "1")),
-            "2": int(os.getenv("WEIGHT_RSI_2", "2")),
-        },
-        "buy_ratio": {
-            "1": int(os.getenv("WEIGHT_BUY_1", "1")),
-            "2": int(os.getenv("WEIGHT_BUY_2", "2")),
-        },
-        "vol_z": {
-            "1": int(os.getenv("WEIGHT_VOL_1", "1")),
-            "2": int(os.getenv("WEIGHT_VOL_2", "2")),
-        },
-        "oi": {
-            "1": int(os.getenv("WEIGHT_OI_1", "1")),
-            "2": int(os.getenv("WEIGHT_OI_2", "2")),
-        },
-        "tick": {
-            "1": int(os.getenv("WEIGHT_TICK_1", "1")),
-            "2": int(os.getenv("WEIGHT_TICK_2", "2")),
-        },
-        "atr": {
-            "2": int(os.getenv("WEIGHT_ATR_2", "2")),
-        },
-        "adx_boost": {
-            "1": int(os.getenv("WEIGHT_ADX_1", "1")),
-        },
-        "fr_boost": {
-            "2": int(os.getenv("WEIGHT_FR_2", "2")),
-        },
-        "htf_bias": {
-            "2": int(os.getenv("WEIGHT_HTF_BIAS", "2")),
-        },
-        "mtf_moment": {
-            "2": int(os.getenv("WEIGHT_MTF_MOMENT", "2")),
-        },
-        "mtf_regime": {
-            "1": int(os.getenv("WEIGHT_MTF_REGIME", "1")),
-        },
-        "vwap_dist": {
-            "2": int(os.getenv("WEIGHT_VWAP_DIST", "2")),
-        },
+        "atr": {"2": int(os.getenv("WEIGHT_ATR_2", "2"))},
+        "adx_boost": {"1": int(os.getenv("WEIGHT_ADX_1", "1"))},
+        "fr_boost": {"2": int(os.getenv("WEIGHT_FR_2", "2"))},
+        "htf_bias": {"2": int(os.getenv("WEIGHT_HTF_BIAS", "2"))},
+        "mtf_moment": {"2": int(os.getenv("WEIGHT_MTF_MOMENT", "2"))},
+        "mtf_regime": {"1": int(os.getenv("WEIGHT_MTF_REGIME", "1"))},
+        "vwap_dist": {"2": int(os.getenv("WEIGHT_VWAP_DIST", "2"))},
     }
 
     # ── V18 체결 & 사이징 파라미터 ────────────────────────────────────────
