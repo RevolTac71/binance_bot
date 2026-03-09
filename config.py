@@ -247,12 +247,8 @@ class Config:
     HTF_TIMEFRAME_1H = os.getenv("HTF_TIMEFRAME_1H", "1h")
     HTF_TIMEFRAME_15M = os.getenv("HTF_TIMEFRAME_15M", "15m")
 
-
-class TelegramLogHandler(logging.Handler):
-    """
-    에러 발생 시 텔레그램으로 메세지를 전송하는 커스텀 로깅 핸들러입니다.
-    비동기 웹소켓 충돌 방지를 위해 별도 스레드(threading)를 사용하여 requests로 전송합니다.
-    """
+    _last_sent_at = 0
+    _lock = threading.Lock()
 
     def emit(self, record):
         if record.levelno < logging.ERROR:
@@ -263,6 +259,15 @@ class TelegramLogHandler(logging.Handler):
 
         if not bot_token or not chat_id:
             return
+
+        # [V18.5] 텔레그램 429 방지를 위한 1초 쿨다운 로직 추가
+        import time
+
+        with self._lock:
+            now = time.time()
+            if now - self._last_sent_at < 1.0:
+                return
+            self._last_sent_at = now
 
         try:
             msg = self.format(record)
