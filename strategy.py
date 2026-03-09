@@ -509,8 +509,8 @@ class StrategyEngine:
         )
 
         # ── 4. 진입 조건 필터링 (Pure Scoring 기반) ───────────────────────
-        min_score_long = getattr(settings, "MIN_SCORE_LONG", 12)
-        min_score_short = getattr(settings, "MIN_SCORE_SHORT", 9)
+        min_score_long = getattr(settings, "MIN_SCORE_LONG", 18)
+        min_score_short = getattr(settings, "MIN_SCORE_SHORT", 17)
         signal_type = None
         reason = ""
 
