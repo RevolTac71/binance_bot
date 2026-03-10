@@ -392,8 +392,14 @@ async def process_closed_kline(
                             [target_returns, active_returns], axis=1, join="inner"
                         ).dropna()
                         if len(aligned) >= 50:
-                            corr = abs(aligned.iloc[:, 0].corr(aligned.iloc[:, 1]))
-                            max_corr = max(max_corr, corr)
+                            # [V18.5] 0으로 나누기 방지: 변동성(std)이 있을 때만 상관관계 산출
+                            if (
+                                aligned.iloc[:, 0].std() > 1e-9
+                                and aligned.iloc[:, 1].std() > 1e-9
+                            ):
+                                corr = abs(aligned.iloc[:, 0].corr(aligned.iloc[:, 1]))
+                                if not pd.isna(corr):
+                                    max_corr = max(max_corr, corr)
 
         # [V18] HFT 파이프라인에서 최신 미시구조 피처(OI, Tick Count 등) 조회
         hft_feats = {"open_interest": 0.0, "funding_rate": 0.0, "tick_count": 0}

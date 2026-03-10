@@ -347,17 +347,23 @@ class ExecutionEngine:
         바이낸스 선물에서 해당 코인의 레버리지를 1배로, 마진 모드를 격리(Isolated)로 확실하게 고정합니다.
         (CROSS로 포지션 진입 시 전체 계좌가 청산되는 것을 방지하기 위함)
         """
-        # DRY_RUN 여부와 관계없이 실계좌의 안전장치인 마진 모드와 레버리지는 필수로 세팅합니다.
+        # [V18.5] DRY_RUN 모드에서는 실계좌 설정을 건드리지 않고 즉시 반환합니다. (안전 및 에러 방지)
+        if settings.DRY_RUN:
+            # logger.info(f"[{symbol}] DRY_RUN 모드이므로 마진/레버리지 설정을 생략합니다.")
+            return
+
         try:
             # 1. 격리 마진(Isolated) 강제 설정
             await self.exchange.set_margin_mode("isolated", symbol)
             logger.info(f"[{symbol}] 마진 모드: 격리(ISOLATED) 강제 설정 완료.")
         except Exception as e:
             error_msg = str(e).lower()
-            # 이미 격리로 설정되어 있는 경우 나는 에러 (무시)
+            # 이미 격리로 설정되어 있는 경우 또는 오픈 주문이 있어 변경이 불가능한 경우 (무시)
             if (
                 "no need to change margin type" in error_msg
                 or "margin type already" in error_msg
+                or "-4067" in error_msg
+                or "position side cannot be changed" in error_msg
             ):
                 pass
             else:
