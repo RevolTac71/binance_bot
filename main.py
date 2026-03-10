@@ -173,6 +173,10 @@ async def warm_up_data(symbols: list, pipeline: DataPipeline):
         1500 * 60 * 1000
     )  # ATR200 등 장기 지표 계산을 위해 최소 과거 500봉(1500분) 이상 여유있게 가져옴
 
+    logger.info(
+        f"[WarmUp] TIMEFRAME='{settings.TIMEFRAME}', HTF_1H='{settings.HTF_TIMEFRAME_1H}', HTF_15M='{settings.HTF_TIMEFRAME_15M}'"
+    )
+
     # 3분봉 로드 태스크
     tasks_3m = [
         pipeline.fetch_ohlcv_since(sym, timeframe=settings.TIMEFRAME, since=since_ts)

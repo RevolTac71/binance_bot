@@ -298,7 +298,7 @@ class ExecutionEngine:
 
         # [V18.5] 15분 손실 쿨다운 복구 로직 추가 (영속화)
         try:
-            now_kst = datetime.now(timezone.utc) + timedelta(hours=9)
+            now_kst = datetime.utcnow() + timedelta(hours=9)
             cooldown_min = getattr(settings, "LOSS_COOLDOWN_MINUTES", 15)
 
             async with AsyncSessionLocal() as session:
@@ -407,7 +407,7 @@ class ExecutionEngine:
             return False
 
         # 연속 손실 쿨다운 체크
-        now_kst = datetime.now(timezone.utc) + timedelta(hours=9)
+        now_kst = datetime.utcnow() + timedelta(hours=9)
         cooldown_until = self.loss_cooldown.get(symbol)
         if cooldown_until and now_kst < cooldown_until:
             remaining = int((cooldown_until - now_kst).total_seconds() / 60)
@@ -1470,7 +1470,7 @@ class ExecutionEngine:
 
                     # 손실이면 해당 종목 쿨다운 설정 (연속 SL 방지)
                     if realized_pnl < 0:
-                        now_kst = datetime.now(timezone.utc) + timedelta(hours=9)
+                        now_kst = datetime.utcnow() + timedelta(hours=9)
                         cooldown_min = getattr(settings, "LOSS_COOLDOWN_MINUTES", 15)
                         self.loss_cooldown[symbol] = now_kst + timedelta(
                             minutes=cooldown_min
