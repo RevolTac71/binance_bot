@@ -129,8 +129,8 @@ class DataPipeline:
             df["vol_hlc3_sq"].rolling(window=window_size, min_periods=min_periods).sum()
         )
 
-        # VWAP 계산
-        df["VWAP"] = rolling_vol_hlc3 / rolling_vol
+        # VWAP 계산 (0으로 나누기 방지 적용)
+        df["VWAP"] = rolling_vol_hlc3 / rolling_vol.replace(0, 1)
 
         # V18: VWAP 밴드 상하단(StdDev 기반) 계산 제거 (개별 지표 스코어링으로 대체됨)
 
