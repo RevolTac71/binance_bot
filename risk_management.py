@@ -100,13 +100,15 @@ class RiskManager:
 
         # 1. 진입 방향별 익손절 모드 및 배율 결정
         if direction == 1:  # LONG
-            exit_mode = getattr(settings, "LONG_EXIT_MODE", "ATR")
+            tp_mode = getattr(settings, "LONG_TP_MODE", "ATR")
+            sl_mode = getattr(settings, "LONG_SL_MODE", "ATR")
             tp_mult = getattr(settings, "LONG_TP_MULT", 5.0)
             sl_mult = getattr(settings, "LONG_SL_MULT", 1.5)
             tp_pct = getattr(settings, "LONG_TP_PCT", 0.05)
             sl_pct = getattr(settings, "LONG_SL_PCT", 0.02)
         else:  # SHORT
-            exit_mode = getattr(settings, "SHORT_EXIT_MODE", "PERCENT")
+            tp_mode = getattr(settings, "SHORT_TP_MODE", "PERCENT")
+            sl_mode = getattr(settings, "SHORT_SL_MODE", "ATR")
             tp_mult = getattr(settings, "SHORT_TP_MULT", 5.0)
             sl_mult = getattr(settings, "SHORT_SL_MULT", 1.5)
             tp_pct = getattr(settings, "SHORT_TP_PCT", 0.03)
@@ -129,19 +131,20 @@ class RiskManager:
         # 2. 1회 투입 증거금 액수 산출
         margin_invest = capital * risk_pct
 
-        # 3. 거래당 스탑폭/익절폭 거리 산출 (모드에 따라 분등)
-        if exit_mode == "PERCENT":
-            # 고정 비율 모드
+        # 3. 거래당 스탑폭/익절폭 거리 산출 (모드에 따라 분리)
+        # 3-1. TP 거리 계산
+        if tp_mode == "PERCENT":
             tp_distance = entry_price * tp_pct
-            sl_distance = entry_price * sl_pct
-            reason_str = f"FIXED_PCT({tp_pct * 100:.1f}%)"
         else:
-            # ATR 배율 모드 (기본)
             tp_distance = atr_val * tp_mult
-            sl_distance = atr_val * sl_mult
-            reason_str = f"ATR_MULT({tp_mult:.1f}x)"
 
-        # 3-1. 최소 익절 거리 방어 (수수료 대비 최소 수익 확보)
+        # 3-2. SL 거리 계산
+        if sl_mode == "PERCENT":
+            sl_distance = entry_price * sl_pct
+        else:
+            sl_distance = atr_val * sl_mult
+
+        # 3-3. 최소 익절 거리 방어 (수수료 대비 최소 수익 확보)
         # (진입+청산 수수료 * 2.5배 수준의 최소 변동폭 확보 권장)
         min_tp_dist = entry_price * (getattr(settings, "FEE_RATE", 0.00045) * 2.5)
         if tp_distance < min_tp_dist:

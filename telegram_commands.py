@@ -103,22 +103,25 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     elif category == "risk":
         msg = (
-            "🛡️ [청산 및 리스크 관리]\n"
-            "방향별 차등 TP/SL 및 리스크 설정입니다.\n\n"
-            "l_sl / l_tp    롱 손절/익절 배수 (ATR)\n"
-            "s_sl / s_tp    숏 손절/익절 배수 (ATR)\n"
-            "l_exit / s_exit 익절 모드 (ATR / PERCENT)\n"
-            "l_tp_pct (5%)  롱 고정 수익률 (0.05)\n"
-            "s_tp_pct (3%)  숏 고정 수익률 (0.03)\n"
-            "fee_rate       수수료율 기초값 (0.00045)\n"
-            "partial_tp     분할 익절 수량 비율 (0.5)\n"
-            "chandelier     추적 손절(Chandelier) 배수\n"
-            "chan_atr       Chandelier ATR 기간 (14)\n"
-            "be_trigger     본절가(BE) 전환 트리거 배수\n"
-            "be_profit      BE 전환 시 보존할 수익 배수\n"
-            "cooldown       진입 실패 후 대기 분 (15)\n"
-            "max_trades     최대 동시 포지션 개수 (3)\n"
-            "time_exit      자동 시간 청산 기준 (분)"
+            "🛡️ <b>[청산 및 리스크 관리 설정]</b>\n"
+            "포지션 종료(Exit) 전략을 세밀하게 제어합니다.\n\n"
+            "<b>1. 익절/손절 모드 (Exit Mode)</b>\n"
+            "▫ <code>l_tp_mode</code> / <code>l_sl_mode</code> : 롱 익절/손절 방식\n"
+            "▫ <code>s_tp_mode</code> / <code>s_sl_mode</code> : 숏 익절/손절 방식\n"
+            "   (값: <code>ATR</code> 또는 <code>PERCENT</code>)\n\n"
+            "<b>2. 목표가 설정 파라미터</b>\n"
+            "▫ <b>ATR 기반 (Mult)</b>\n"
+            "   - <code>l_tp</code>, <code>l_sl</code>, <code>s_tp</code>, <code>s_sl</code> (배수)\n"
+            "▫ <b>비율 기반 (Pct)</b>\n"
+            "   - <code>l_tp_pct</code>, <code>l_sl_pct</code>\n"
+            "   - <code>s_tp_pct</code>, <code>s_sl_pct</code> (예: 0.03 = 3%)\n\n"
+            "<b>3. 기타 안전장치</b>\n"
+            "▫ <code>fee_rate</code>   : 기본 수수료율 (0.00045)\n"
+            "▫ <code>partial_tp</code> : 분할 익절 비율 (0.5)\n"
+            "▫ <code>chandelier</code> : 추적 손절 배수\n"
+            "▫ <code>cooldown</code>   : 손절 후 진입 제한 (분)\n\n"
+            "💡 <b>예시:</b> 숏 익절만 퍼센트로 바꾸려면?\n"
+            "<code>/setparam s_tp_mode PERCENT</code>"
         )
     else:
         msg = "❌ 알 수 없는 카테고리입니다. `/help`를 입력해 목록을 확인하세요."
@@ -435,8 +438,10 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "w_vwap_2": ("vwap_dist", int, "WEIGHT_VWAP_DIST"),
             "macd_filter": ("MACD_FILTER_ENABLED", bool, "MACD_FILTER_ENABLED"),
             "fee_rate": ("FEE_RATE", float, "FEE_RATE"),
-            "l_exit": ("LONG_EXIT_MODE", str, "LONG_EXIT_MODE"),
-            "s_exit": ("SHORT_EXIT_MODE", str, "SHORT_EXIT_MODE"),
+            "l_tp_mode": ("LONG_TP_MODE", str, "LONG_TP_MODE"),
+            "l_sl_mode": ("LONG_SL_MODE", str, "LONG_SL_MODE"),
+            "s_tp_mode": ("SHORT_TP_MODE", str, "SHORT_TP_MODE"),
+            "s_sl_mode": ("SHORT_SL_MODE", str, "SHORT_SL_MODE"),
             "l_tp_pct": ("LONG_TP_PCT", float, "L_TP_PCT"),
             "l_sl_pct": ("LONG_SL_PCT", float, "L_SL_PCT"),
             "s_tp_pct": ("SHORT_TP_PCT", float, "S_TP_PCT"),
@@ -751,13 +756,15 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     msg += (
-        "━━━━━━ <b>청산 & 탈출</b> ━━━━━━\n"
-        f"• <b>LONG Exit</b>  : {getattr(settings, 'LONG_EXIT_MODE', 'ATR')} ({getattr(settings, 'LONG_SL_MULT', 1.5)}x / {getattr(settings, 'LONG_TP_MULT', 5.0)}x / {getattr(settings, 'LONG_TP_PCT', 0.05) * 100:.1f}%)\n"
-        f"• <b>SHORT Exit</b> : {getattr(settings, 'SHORT_EXIT_MODE', 'PERCENT')} ({getattr(settings, 'SHORT_SL_MULT', 1.5)}x / {getattr(settings, 'SHORT_TP_MULT', 5.0)}x / {getattr(settings, 'SHORT_TP_PCT', 0.03) * 100:.1f}%)\n"
-        f"• <b>분할익절</b>   : {getattr(settings, 'PARTIAL_TP_RATIO', 0.5) * 100:.0f}%\n"
-        f"• <b>본절/리프레시</b>: {getattr(settings, 'BREAKEVEN_TRIGGER_MULT', 1.5)}x / {getattr(settings, 'SYMBOL_REFRESH_INTERVAL', 3)}h\n\n"
+        "━━━━━━ <b>청산 & 탈출 전략</b> ━━━━━━\n"
+        f"• <b>LONG TP</b> : {getattr(settings, 'LONG_TP_MODE', 'ATR')} ({getattr(settings, 'LONG_TP_MULT', 5.0)}x / {getattr(settings, 'LONG_TP_PCT', 0.05) * 100:.1f}%)\n"
+        f"• <b>LONG SL</b> : {getattr(settings, 'LONG_SL_MODE', 'ATR')} ({getattr(settings, 'LONG_SL_MULT', 1.5)}x / {getattr(settings, 'LONG_SL_PCT', 0.02) * 100:.1f}%)\n"
+        f"• <b>SHORT TP</b>: {getattr(settings, 'SHORT_TP_MODE', 'PERCENT')} ({getattr(settings, 'SHORT_TP_MULT', 5.0)}x / {getattr(settings, 'SHORT_TP_PCT', 0.03) * 100:.1f}%)\n"
+        f"• <b>SHORT SL</b>: {getattr(settings, 'SHORT_SL_MODE', 'ATR')} ({getattr(settings, 'SHORT_SL_MULT', 1.5)}x / {getattr(settings, 'SHORT_SL_PCT', 0.015) * 100:.1f}%)\n"
+        f"• <b>분할익절</b> : {getattr(settings, 'PARTIAL_TP_RATIO', 0.5) * 100:.0f}%\n"
+        f"• <b>본절전환</b> : {getattr(settings, 'BREAKEVEN_TRIGGER_MULT', 1.5)}x (보존: {getattr(settings, 'BREAKEVEN_PROFIT_MULT', 0.2)}x)\n\n"
         "💡 변경: /setparam [옵션] [값]\n"
-        "💡 지표: l_exit, s_exit, l_tp_pct, fee_rate 등"
+        "💡 예시: s_tp_mode, s_tp_pct, fee_rate"
     )
 
     await update.message.reply_text(msg, parse_mode="HTML")

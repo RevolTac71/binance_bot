@@ -73,9 +73,11 @@ class ExecutionEngine:
                 "pctl_window": getattr(settings, "PCTL_WINDOW", None),
                 "adx_boost_pctl": getattr(settings, "ADX_BOOST_PCTL", None),
                 "scoring_thresholds": getattr(settings, "SCORING_THRESHOLDS", {}),
-                # V18.4 방향별 익절 모드 및 배율
-                "long_exit_mode": getattr(settings, "LONG_EXIT_MODE", "ATR"),
-                "short_exit_mode": getattr(settings, "SHORT_EXIT_MODE", "PERCENT"),
+                # V18.5 방향별/익손절별 세분화 모드
+                "long_tp_mode": getattr(settings, "LONG_TP_MODE", "ATR"),
+                "long_sl_mode": getattr(settings, "LONG_SL_MODE", "ATR"),
+                "short_tp_mode": getattr(settings, "SHORT_TP_MODE", "PERCENT"),
+                "short_sl_mode": getattr(settings, "SHORT_SL_MODE", "ATR"),
                 "long_tp_mult": getattr(settings, "LONG_TP_MULT", 5.0),
                 "long_sl_mult": getattr(settings, "LONG_SL_MULT", 1.5),
                 "short_tp_mult": getattr(settings, "SHORT_TP_MULT", 5.0),

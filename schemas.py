@@ -41,14 +41,28 @@ class MarketDataSnapshot(BaseModel):
     excess_score: Optional[int] = None  # [V18.2] 임계치 대비 여유 점수 (actual - min)
     entry_type: Optional[str] = None
 
-    # [V18.4] Settings Snapshot
+    # [V18.5] Settings Snapshot
     timeframe: Optional[str] = None
+    fee_rate: Optional[float] = None
+
+    long_tp_mode: Optional[str] = None
+    long_sl_mode: Optional[str] = None
+    short_tp_mode: Optional[str] = None
+    short_sl_mode: Optional[str] = None
+
     min_score_long: Optional[int] = None
     min_score_short: Optional[int] = None
+
     long_tp_mult: Optional[float] = None
     long_sl_mult: Optional[float] = None
     short_tp_mult: Optional[float] = None
     short_sl_mult: Optional[float] = None
+
+    long_tp_pct: Optional[float] = None
+    long_sl_pct: Optional[float] = None
+    short_tp_pct: Optional[float] = None
+    short_sl_pct: Optional[float] = None
+
     macd_filter_enabled: Optional[bool] = None
 
 

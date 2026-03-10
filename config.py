@@ -228,9 +228,11 @@ class Config:
     BREAKEVEN_TRIGGER_MULT = float(os.getenv("BREAKEVEN_TRIGGER_MULT", "1.5"))
     BREAKEVEN_PROFIT_MULT = float(os.getenv("BREAKEVEN_PROFIT_MULT", "0.2"))
 
-    # ── V18 방향별 차등 TP/SL 파라미터 ──────────────────────────────
-    LONG_EXIT_MODE = os.getenv("LONG_EXIT_MODE", "ATR")  # 'ATR' or 'PERCENT'
-    SHORT_EXIT_MODE = os.getenv("SHORT_EXIT_MODE", "PERCENT")  # 'ATR' or 'PERCENT'
+    # ── V18.5 방향별/익손절별 세분화 모드 ──────────────────────────────
+    LONG_TP_MODE = os.getenv("LONG_TP_MODE", "ATR")  # 'ATR' or 'PERCENT'
+    LONG_SL_MODE = os.getenv("LONG_SL_MODE", "ATR")  # 'ATR' or 'PERCENT'
+    SHORT_TP_MODE = os.getenv("SHORT_TP_MODE", "PERCENT")  # 'ATR' or 'PERCENT'
+    SHORT_SL_MODE = os.getenv("SHORT_SL_MODE", "ATR")  # 'ATR' or 'PERCENT'
 
     LONG_TP_MULT = float(os.getenv("L_TP_MULT", "5.0"))
     LONG_SL_MULT = float(os.getenv("L_SL_MULT", "1.5"))
