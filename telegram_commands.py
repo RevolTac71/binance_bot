@@ -105,16 +105,20 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = (
             "🛡️ [청산 및 리스크 관리]\n"
             "방향별 차등 TP/SL 및 리스크 설정입니다.\n\n"
-            "l_sl / l_tp  롱 손절/익절 배수 (ATR 대비)\n"
-            "s_sl / s_tp  숏 손절/익절 배수 (ATR 대비)\n"
-            "partial_tp   분할 익절 수량 비율 (0.5)\n"
-            "chandelier   추적 손절(Chandelier) 배수\n"
-            "chan_atr     Chandelier ATR 기간 (14)\n"
-            "be_trigger   본절가(BE) 전환 트리거 배수\n"
-            "be_profit    BE 전환 시 보존할 수익 배수\n"
-            "cooldown     진입 실패 후 대기 분 (15)\n"
-            "max_trades   최대 동시 포지션 개수 (3)\n"
-            "time_exit    자동 시간 청산 기준 (분)"
+            "l_sl / l_tp    롱 손절/익절 배수 (ATR)\n"
+            "s_sl / s_tp    숏 손절/익절 배수 (ATR)\n"
+            "l_exit / s_exit 익절 모드 (ATR / PERCENT)\n"
+            "l_tp_pct (5%)  롱 고정 수익률 (0.05)\n"
+            "s_tp_pct (3%)  숏 고정 수익률 (0.03)\n"
+            "fee_rate       수수료율 기초값 (0.00045)\n"
+            "partial_tp     분할 익절 수량 비율 (0.5)\n"
+            "chandelier     추적 손절(Chandelier) 배수\n"
+            "chan_atr       Chandelier ATR 기간 (14)\n"
+            "be_trigger     본절가(BE) 전환 트리거 배수\n"
+            "be_profit      BE 전환 시 보존할 수익 배수\n"
+            "cooldown       진입 실패 후 대기 분 (15)\n"
+            "max_trades     최대 동시 포지션 개수 (3)\n"
+            "time_exit      자동 시간 청산 기준 (분)"
         )
     else:
         msg = "❌ 알 수 없는 카테고리입니다. `/help`를 입력해 목록을 확인하세요."
@@ -700,7 +704,7 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "━━━━━━ <b>시스템 & 리스크</b> ━━━━━━\n"
         f"• <b>매매 모드</b>  : {mode}\n"
         f"• <b>레버리지</b>  : {settings.LEVERAGE}x\n"
-        f"• <b>리스크</b>    : {settings.RISK_PERCENTAGE * 100:.1f}%\n"
+        f"• <b>리스크/수수료</b>: {settings.RISK_PERCENTAGE * 100:.1f}% / {getattr(settings, 'FEE_RATE', 0.00045) * 100:.3f}%\n"
         f"• <b>MaxTrades</b> : {getattr(settings, 'MAX_TRADES', 3)} (동일방향: {getattr(settings, 'MAX_CONCURRENT_SAME_DIR', 2)})\n"
         f"• <b>캔들/보유</b> : {getattr(settings, 'TIMEFRAME', '3m')} / {getattr(settings, 'TIME_EXIT_MINUTES', 0)}분\n"
         f"• <b>진입 임계</b> : LONG={getattr(settings, 'MIN_SCORE_LONG', 18)} / SHORT={getattr(settings, 'MIN_SCORE_SHORT', 17)}\n"
@@ -748,12 +752,12 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg += (
         "━━━━━━ <b>청산 & 탈출</b> ━━━━━━\n"
-        f"• <b>LONG SL/TP</b> : {getattr(settings, 'LONG_SL_MULT', 1.5)}x / {getattr(settings, 'LONG_TP_MULT', 5.0)}x\n"
-        f"• <b>SHORT SL/TP</b>: {getattr(settings, 'SHORT_SL_MULT', 1.5)}x / {getattr(settings, 'SHORT_TP_MULT', 5.0)}x\n"
+        f"• <b>LONG Exit</b>  : {getattr(settings, 'LONG_EXIT_MODE', 'ATR')} ({getattr(settings, 'LONG_SL_MULT', 1.5)}x / {getattr(settings, 'LONG_TP_MULT', 5.0)}x / {getattr(settings, 'LONG_TP_PCT', 0.05) * 100:.1f}%)\n"
+        f"• <b>SHORT Exit</b> : {getattr(settings, 'SHORT_EXIT_MODE', 'PERCENT')} ({getattr(settings, 'SHORT_SL_MULT', 1.5)}x / {getattr(settings, 'SHORT_TP_MULT', 5.0)}x / {getattr(settings, 'SHORT_TP_PCT', 0.03) * 100:.1f}%)\n"
         f"• <b>분할익절</b>   : {getattr(settings, 'PARTIAL_TP_RATIO', 0.5) * 100:.0f}%\n"
         f"• <b>본절/리프레시</b>: {getattr(settings, 'BREAKEVEN_TRIGGER_MULT', 1.5)}x / {getattr(settings, 'SYMBOL_REFRESH_INTERVAL', 3)}h\n\n"
         "💡 변경: /setparam [옵션] [값]\n"
-        "💡 지표: l_macd_t1, l_tp, s_sl 등"
+        "💡 지표: l_exit, s_exit, l_tp_pct, fee_rate 등"
     )
 
     await update.message.reply_text(msg, parse_mode="HTML")
