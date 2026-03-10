@@ -191,17 +191,9 @@ class PortfolioState:
         direction = pos["direction"]
 
         if direction == "LONG" and current_price <= stop:
-            logger.info(
-                f"[Chandelier] {symbol} LONG 손절선 돌파! "
-                f"현재가={current_price:.4f} ≤ 손절선={stop:.4f}"
-            )
             return True
 
         if direction == "SHORT" and current_price >= stop:
-            logger.info(
-                f"[Chandelier] {symbol} SHORT 손절선 돌파! "
-                f"현재가={current_price:.4f} ≥ 손절선={stop:.4f}"
-            )
             return True
 
         return False
@@ -391,6 +383,12 @@ class StrategyEngine:
         # [V18.2] Safety Gear: TP1이 체결되기 전에는 Chandelier Exit을 억제 (수익권이 아닐 때 너무 일찍 털리는 현상 방지)
         pos = portfolio.positions.get(symbol)
         if pos and not pos.get("is_partial_tp_done", False):
+            if triggered:
+                # 30초마다 스팸 방지를 위해 로깅은 하되 청산은 보류 (사용자 인지용)
+                logger.info(
+                    f"🔍 [Chandelier] {symbol} 손절선 돌파 감지 (단, 1차 익절 도달 전이므로 청산 보류)"
+                )
+
             # 분할 익절 전이면 샹들리에 손절선은 갱신하되, 실제 청산 신호는 내보내지 않음 (거래소 SL이 담당)
             return {
                 "exit": False,
@@ -610,6 +608,7 @@ class StrategyEngine:
                 excess_score=int(excess_score),
                 entry_type=str(entry_type),
                 # [V18.4] Settings Snapshot
+                timeframe=str(getattr(settings, "TIMEFRAME", "3m")),
                 min_score_long=int(min_score_long),
                 min_score_short=int(min_score_short),
                 long_tp_mult=float(getattr(settings, "LONG_TP_MULT", 5.0)),

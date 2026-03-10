@@ -42,6 +42,7 @@ class MarketDataSnapshot(BaseModel):
     entry_type: Optional[str] = None
 
     # [V18.4] Settings Snapshot
+    timeframe: Optional[str] = None
     min_score_long: Optional[int] = None
     min_score_short: Optional[int] = None
     long_tp_mult: Optional[float] = None

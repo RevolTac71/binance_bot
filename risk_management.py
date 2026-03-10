@@ -98,13 +98,19 @@ class RiskManager:
         if capital <= 0 or entry_price <= 0 or atr_val <= 0:
             return {"size": 0.0, "invest_usdt": 0.0, "tp_dist": 0.0, "sl_dist": 0.0}
 
-        # 1. 진입 방향별 TP/SL 배율 결정
+        # 1. 진입 방향별 익손절 모드 및 배율 결정
         if direction == 1:  # LONG
+            exit_mode = getattr(settings, "LONG_EXIT_MODE", "ATR")
             tp_mult = getattr(settings, "LONG_TP_MULT", 5.0)
             sl_mult = getattr(settings, "LONG_SL_MULT", 1.5)
+            tp_pct = getattr(settings, "LONG_TP_PCT", 0.05)
+            sl_pct = getattr(settings, "LONG_SL_PCT", 0.02)
         else:  # SHORT
+            exit_mode = getattr(settings, "SHORT_EXIT_MODE", "PERCENT")
             tp_mult = getattr(settings, "SHORT_TP_MULT", 5.0)
             sl_mult = getattr(settings, "SHORT_SL_MULT", 1.5)
+            tp_pct = getattr(settings, "SHORT_TP_PCT", 0.03)
+            sl_pct = getattr(settings, "SHORT_SL_PCT", 0.015)
 
         # entry_type 기반의 기존 v18 추천 로직 (하위 호환 또는 추가 보정 필요 시 사용)
         # 여기서는 방향별 설정을 우선순위로 두고, 설정이 없을 때만 entry_type을 고려하거나
@@ -123,9 +129,24 @@ class RiskManager:
         # 2. 1회 투입 증거금 액수 산출
         margin_invest = capital * risk_pct
 
-        # 3. 거래당 스탑폭/익절폭 금액 산출
-        sl_distance = atr_val * sl_mult
-        tp_distance = atr_val * tp_mult
+        # 3. 거래당 스탑폭/익절폭 거리 산출 (모드에 따라 분등)
+        if exit_mode == "PERCENT":
+            # 고정 비율 모드
+            tp_distance = entry_price * tp_pct
+            sl_distance = entry_price * sl_pct
+            reason_str = f"FIXED_PCT({tp_pct * 100:.1f}%)"
+        else:
+            # ATR 배율 모드 (기본)
+            tp_distance = atr_val * tp_mult
+            sl_distance = atr_val * sl_mult
+            reason_str = f"ATR_MULT({tp_mult:.1f}x)"
+
+        # 3-1. 최소 익절 거리 방어 (수수료 대비 최소 수익 확보)
+        # (진입+청산 수수료 * 2.5배 수준의 최소 변동폭 확보 권장)
+        min_tp_dist = entry_price * (getattr(settings, "FEE_RATE", 0.00045) * 2.5)
+        if tp_distance < min_tp_dist:
+            # logger.warning(f"[{symbol}] TP 거리가 너무 짧아 수수료 방어를 위해 조정됨: {tp_distance:.4f} -> {min_tp_dist:.4f}")
+            tp_distance = min_tp_dist
 
         # 4. 최대 레버리지를 곱한 명목 진입 금액 (Notional Value)
         notional_value = margin_invest * self.leverage

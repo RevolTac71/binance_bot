@@ -461,12 +461,25 @@ async def process_closed_kline(
         snapshot["short_score"] = decision.get("short_score")
 
         # [V18.4] 신규 파라미터 스냅샷 추가
+        snapshot["timeframe"] = getattr(settings, "TIMEFRAME", "3m")
         snapshot["min_score_long"] = getattr(settings, "MIN_SCORE_LONG", 16)
         snapshot["min_score_short"] = getattr(settings, "MIN_SCORE_SHORT", 16)
+
+        # 방향별 익절 모드
+        snapshot["long_exit_mode"] = getattr(settings, "LONG_EXIT_MODE", "ATR")
+        snapshot["short_exit_mode"] = getattr(settings, "SHORT_EXIT_MODE", "PERCENT")
+
         snapshot["long_tp_mult"] = getattr(settings, "LONG_TP_MULT", 5.0)
         snapshot["long_sl_mult"] = getattr(settings, "LONG_SL_MULT", 1.5)
         snapshot["short_tp_mult"] = getattr(settings, "SHORT_TP_MULT", 5.0)
         snapshot["short_sl_mult"] = getattr(settings, "SHORT_SL_MULT", 1.5)
+
+        # 퍼센트 기반 설정
+        snapshot["long_tp_pct"] = getattr(settings, "LONG_TP_PCT", 0.05)
+        snapshot["long_sl_pct"] = getattr(settings, "LONG_SL_PCT", 0.02)
+        snapshot["short_tp_pct"] = getattr(settings, "SHORT_TP_PCT", 0.03)
+        snapshot["short_sl_pct"] = getattr(settings, "SHORT_SL_PCT", 0.015)
+
         snapshot["macd_filter_enabled"] = getattr(settings, "MACD_FILTER_ENABLED", True)
 
         snapshot_queue.append(snapshot)

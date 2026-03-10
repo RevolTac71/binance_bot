@@ -81,6 +81,7 @@ class MarketSnapshot(Base):
     tick_count = Column(Integer, nullable=True)
 
     # 8. V18.4 전략 파라미터 스냅샷 (추가)
+    timeframe = Column(String(10), index=True)  # '3m', '5m' 등
     min_score_long = Column(Integer, nullable=True)
     min_score_short = Column(Integer, nullable=True)
     long_tp_mult = Column(Float, nullable=True)

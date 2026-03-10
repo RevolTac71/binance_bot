@@ -229,10 +229,22 @@ class Config:
     BREAKEVEN_PROFIT_MULT = float(os.getenv("BREAKEVEN_PROFIT_MULT", "0.2"))
 
     # ── V18 방향별 차등 TP/SL 파라미터 ──────────────────────────────
+    LONG_EXIT_MODE = os.getenv("LONG_EXIT_MODE", "ATR")  # 'ATR' or 'PERCENT'
+    SHORT_EXIT_MODE = os.getenv("SHORT_EXIT_MODE", "PERCENT")  # 'ATR' or 'PERCENT'
+
     LONG_TP_MULT = float(os.getenv("L_TP_MULT", "5.0"))
     LONG_SL_MULT = float(os.getenv("L_SL_MULT", "1.5"))
     SHORT_TP_MULT = float(os.getenv("S_TP_MULT", "5.0"))
     SHORT_SL_MULT = float(os.getenv("S_SL_MULT", "1.5"))
+
+    # [V18.4] 고정 수익 비율(%) 기반 설정 (EXIT_MODE='PERCENT' 시 사용)
+    LONG_TP_PCT = float(os.getenv("L_TP_PCT", "0.05"))  # 5%
+    LONG_SL_PCT = float(os.getenv("L_SL_PCT", "0.02"))  # 2%
+    SHORT_TP_PCT = float(os.getenv("S_TP_PCT", "0.03"))  # 3%
+    SHORT_SL_PCT = float(os.getenv("S_SL_PCT", "0.015"))  # 1.5%
+
+    # [V18.4] 수수료율 설정 (사용자 요청 반영: 0.045% = 0.00045)
+    FEE_RATE = float(os.getenv("FEE_RATE", "0.00045"))
 
     # 청산 관련 기타
     CHANDELIER_MULT = float(os.getenv("CHANDELIER_MULT", "3.0"))

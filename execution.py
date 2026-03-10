@@ -73,11 +73,18 @@ class ExecutionEngine:
                 "pctl_window": getattr(settings, "PCTL_WINDOW", None),
                 "adx_boost_pctl": getattr(settings, "ADX_BOOST_PCTL", None),
                 "scoring_thresholds": getattr(settings, "SCORING_THRESHOLDS", {}),
-                # V18 방향별 차등 TP/SL 파라미터
+                # V18.4 방향별 익절 모드 및 배율
+                "long_exit_mode": getattr(settings, "LONG_EXIT_MODE", "ATR"),
+                "short_exit_mode": getattr(settings, "SHORT_EXIT_MODE", "PERCENT"),
                 "long_tp_mult": getattr(settings, "LONG_TP_MULT", 5.0),
                 "long_sl_mult": getattr(settings, "LONG_SL_MULT", 1.5),
                 "short_tp_mult": getattr(settings, "SHORT_TP_MULT", 5.0),
                 "short_sl_mult": getattr(settings, "SHORT_SL_MULT", 1.5),
+                "long_tp_pct": getattr(settings, "LONG_TP_PCT", 0.05),
+                "long_sl_pct": getattr(settings, "LONG_SL_PCT", 0.02),
+                "short_tp_pct": getattr(settings, "SHORT_TP_PCT", 0.03),
+                "short_sl_pct": getattr(settings, "SHORT_SL_PCT", 0.015),
+                "fee_rate": getattr(settings, "FEE_RATE", 0.00045),
                 # 포트폴리오 관리 파라미터
                 "max_concurrent_same_dir": getattr(
                     settings, "MAX_CONCURRENT_SAME_DIR", None
@@ -155,8 +162,14 @@ class ExecutionEngine:
                             "sl_price": log.sl_price if log else 0.0,
                         }
                         active_count += 1
+
+                        # [V18.4] 밀리초 Timestamp 대신 읽기 쉬운 시간과 누적 PnL 표시
+                        readable_time = datetime.fromtimestamp(last_ts / 1000).strftime(
+                            "%Y-%m-%d %H:%M:%S"
+                        )
+                        last_pnl = log.realized_pnl if log else 0.0
                         logger.info(
-                            f"✅ [REAL 복구] {symbol} 메타데이터 복원 완료 (진입: {entry_time}, PnL기준: {last_ts})"
+                            f"✅ [REAL 복구] {symbol} 메타데이터 복원 완료 (진입: {entry_time}, 누적PnL: {last_pnl:.2f} USDT, 기준시막: {readable_time})"
                         )
         except Exception as e:
             logger.error(f"거래소 동기화 중(sync_state_from_exchange) 예외 발생: {e}")
@@ -734,9 +747,9 @@ class ExecutionEngine:
         # Long이면 매도(Sell)로 청산, Short이면 매수(Buy)로 청산
         exit_side = "sell" if signal_type == "LONG" else "buy"
 
-        # SL 설정 시 Taker 수수료(0.045%)가 발생함을 로깅 (V11 Feedback)
-        maker_fee = 0.00018
-        taker_fee = 0.00045
+        # [V18.4] settings.FEE_RATE 사용 (수치화)
+        taker_fee = getattr(settings, "FEE_RATE", 0.00045)
+        maker_fee = taker_fee * 0.4  # 일반적인 메이커 비율 (0.018 / 0.045 = 0.4)
 
         # Pnl = (exit - entry) / entry  * 레버리지(1)
         if signal_type == "LONG":
@@ -1629,8 +1642,8 @@ class ExecutionEngine:
                 signal = pos_info.get("signal", "LONG")
                 close_qty = amount
 
-                maker_fee = 0.0002
-                taker_fee = 0.0005
+                # [V18.4] settings.FEE_RATE 사용
+                taker_fee = getattr(settings, "FEE_RATE", 0.00045)
                 # 가상 청산이므로 보수적으로 Taker fee 2회(진입/청산) 부과 가정
                 fees = (entry_price * amount * taker_fee) + (
                     close_price * amount * taker_fee

@@ -430,6 +430,13 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "w_reg_1": ("mtf_regime", int, "WEIGHT_MTF_REGIME"),
             "w_vwap_2": ("vwap_dist", int, "WEIGHT_VWAP_DIST"),
             "macd_filter": ("MACD_FILTER_ENABLED", bool, "MACD_FILTER_ENABLED"),
+            "fee_rate": ("FEE_RATE", float, "FEE_RATE"),
+            "l_exit": ("LONG_EXIT_MODE", str, "LONG_EXIT_MODE"),
+            "s_exit": ("SHORT_EXIT_MODE", str, "SHORT_EXIT_MODE"),
+            "l_tp_pct": ("LONG_TP_PCT", float, "L_TP_PCT"),
+            "l_sl_pct": ("LONG_SL_PCT", float, "L_SL_PCT"),
+            "s_tp_pct": ("SHORT_TP_PCT", float, "S_TP_PCT"),
+            "s_sl_pct": ("SHORT_SL_PCT", float, "S_SL_PCT"),
             # Aliases for easier typing
             "weight_adx": ("adx_boost", int, "WEIGHT_ADX_1"),
             "weight_adx_1": ("adx_boost", int, "WEIGHT_ADX_1"),
@@ -439,6 +446,8 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "weight_atr": ("atr", int, "WEIGHT_ATR_2"),
             "weight_fr": ("fr_boost", int, "WEIGHT_FR_2"),
             "weight_vwap": ("vwap_dist", int, "WEIGHT_VWAP_DIST"),
+            "l_tp_p": ("LONG_TP_PCT", float, "L_TP_PCT"),
+            "s_tp_p": ("SHORT_TP_PCT", float, "S_TP_PCT"),
         }
 
         if key not in mapping:
