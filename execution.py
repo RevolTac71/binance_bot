@@ -702,9 +702,9 @@ class ExecutionEngine:
         # Long이면 매도(Sell)로 청산, Short이면 매수(Buy)로 청산
         exit_side = "sell" if signal_type == "LONG" else "buy"
 
-        # SL 설정 시 Taker 수수료(0.05%)가 발생함을 로깅 (V11 Feedback)
-        maker_fee = 0.0002
-        taker_fee = 0.0005
+        # SL 설정 시 Taker 수수료(0.045%)가 발생함을 로깅 (V11 Feedback)
+        maker_fee = 0.00018
+        taker_fee = 0.00045
 
         # Pnl = (exit - entry) / entry  * 레버리지(1)
         if signal_type == "LONG":
@@ -720,7 +720,7 @@ class ExecutionEngine:
         logger.info(
             f"[{symbol}] TP/SL Orders. "
             f"실제 익절률(수수료 차감 후): {real_tp_pct * 100:.2f}%, "
-            f"실제 손절률(수수료 차감 후): {real_sl_pct * 100:.2f}% (Taker 수수료 0.05% 포함. R:R={abs(real_tp_pct / real_sl_pct) if real_sl_pct != 0 else 0:.2f})"
+            f"실제 손절률(수수료 차감 후): {real_sl_pct * 100:.2f}% (Taker 수수료 0.045% 포함. R:R={abs(real_tp_pct / real_sl_pct) if real_sl_pct != 0 else 0:.2f})"
         )
 
         try:

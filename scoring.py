@@ -196,7 +196,7 @@ def calculate_entry_score(indicators: dict, adx_boost_pctl: float = 70.0) -> dic
     s_buy = evaluate_rule_score(buy_p, rs["mean_reversion"]["buy_ratio"], "upper")
 
     s_adx = w["adx_boost"]["1"] if adx_p >= adx_boost_pctl else 0
-    s_fr = w["fr_boost"]["2"] if fr == 1 else 0
+    s_fr = w["fr_boost"]["2"] if fr == -1 else 0
     s_atr = w["atr"]["2"] if atr_boost_flag else 0
     s_htf = w["htf_bias"]["2"] if htf_bias == -1 else 0
     s_mtf_m = w["mtf_moment"]["2"] if mtf_moment == -1 else 0
