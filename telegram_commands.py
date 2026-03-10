@@ -430,6 +430,15 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "w_reg_1": ("mtf_regime", int, "WEIGHT_MTF_REGIME"),
             "w_vwap_2": ("vwap_dist", int, "WEIGHT_VWAP_DIST"),
             "macd_filter": ("MACD_FILTER_ENABLED", bool, "MACD_FILTER_ENABLED"),
+            # Aliases for easier typing
+            "weight_adx": ("adx_boost", int, "WEIGHT_ADX_1"),
+            "weight_adx_1": ("adx_boost", int, "WEIGHT_ADX_1"),
+            "weight_mtf_regime": ("mtf_regime", int, "WEIGHT_MTF_REGIME"),
+            "weight_htf_bias": ("htf_bias", int, "WEIGHT_HTF_BIAS"),
+            "weight_mtf_moment": ("mtf_moment", int, "WEIGHT_MTF_MOMENT"),
+            "weight_atr": ("atr", int, "WEIGHT_ATR_2"),
+            "weight_fr": ("fr_boost", int, "WEIGHT_FR_2"),
+            "weight_vwap": ("vwap_dist", int, "WEIGHT_VWAP_DIST"),
         }
 
         if key not in mapping:
