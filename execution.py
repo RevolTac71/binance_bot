@@ -296,6 +296,37 @@ class ExecutionEngine:
                     f"거래소 동기화 중(sync_state_from_exchange) 예외 발생: {e}"
                 )
 
+        # [V18.5] 15분 손실 쿨다운 복구 로직 추가 (영속화)
+        try:
+            now_kst = datetime.now(timezone.utc) + timedelta(hours=9)
+            cooldown_min = getattr(settings, "LOSS_COOLDOWN_MINUTES", 15)
+
+            async with AsyncSessionLocal() as session:
+                # 최근 쿨다운 기간 이내의 손실 기록(realized_pnl < 0) 조회
+                cooldown_limit = now_kst - timedelta(minutes=cooldown_min)
+                stmt = (
+                    select(TradeLog)
+                    .where(
+                        TradeLog.realized_pnl < 0, TradeLog.exit_time >= cooldown_limit
+                    )
+                    .order_by(TradeLog.exit_time.desc())
+                )
+
+                res = await session.execute(stmt)
+                logs = res.scalars().all()
+
+                # 심볼별 최신 손실 기록 기준으로 쿨다운 복원
+                for log in logs:
+                    if log.symbol not in self.loss_cooldown:
+                        expiry = log.exit_time + timedelta(minutes=cooldown_min)
+                        if expiry > now_kst:
+                            self.loss_cooldown[log.symbol] = expiry
+                            logger.info(
+                                f"✅ [Cooldown 복구] {log.symbol} 손실 쿨다운 복원 완료 (만료: {expiry})"
+                            )
+        except Exception as e:
+            logger.error(f"쿨다운 상태 복구 중 에러: {e}")
+
     async def setup_margin_and_leverage(self, symbol: str):
         """
         바이낸스 선물에서 해당 코인의 레버리지를 1배로, 마진 모드를 격리(Isolated)로 확실하게 고정합니다.
@@ -376,9 +407,10 @@ class ExecutionEngine:
             return False
 
         # 연속 손실 쿨다운 체크
+        now_kst = datetime.now(timezone.utc) + timedelta(hours=9)
         cooldown_until = self.loss_cooldown.get(symbol)
-        if cooldown_until and datetime.utcnow() < cooldown_until:
-            remaining = int((cooldown_until - datetime.utcnow()).total_seconds() / 60)
+        if cooldown_until and now_kst < cooldown_until:
+            remaining = int((cooldown_until - now_kst).total_seconds() / 60)
             logger.info(f"[{symbol}] 손실 쿨다운 중. {remaining}분 후 진입 가능. 스킵.")
             return False
 
@@ -1438,12 +1470,13 @@ class ExecutionEngine:
 
                     # 손실이면 해당 종목 쿨다운 설정 (연속 SL 방지)
                     if realized_pnl < 0:
+                        now_kst = datetime.now(timezone.utc) + timedelta(hours=9)
                         cooldown_min = getattr(settings, "LOSS_COOLDOWN_MINUTES", 15)
-                        self.loss_cooldown[symbol] = datetime.utcnow() + timedelta(
+                        self.loss_cooldown[symbol] = now_kst + timedelta(
                             minutes=cooldown_min
                         )
                         logger.info(
-                            f"[{symbol}] 손실 청산 → {cooldown_min}분 쿨다운 적용. "
+                            f"[{symbol}] 손실 청산 → {cooldown_min}분 쿨다운 적용. (만료: {self.loss_cooldown[symbol]}) "
                             f"PnL: {realized_pnl:.4f} USDT"
                         )
 
