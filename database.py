@@ -83,6 +83,8 @@ class MarketSnapshot(Base):
     # 8. V18.5 전략 파라미터 스냅샷 (추가 및 통합)
     timeframe = Column(String(10), index=True)
     fee_rate = Column(Float, nullable=True)
+    min_score_long = Column(Integer, nullable=True)
+    min_score_short = Column(Integer, nullable=True)
 
     # 익절/손절 개별 모드 (ATR or PERCENT)
     long_tp_mode = Column(String(20), nullable=True)
