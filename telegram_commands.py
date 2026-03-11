@@ -114,20 +114,6 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "▫ <code>be_trigger</code> : 본절 추적 트리거 (ATR배수)\n"
             "▫ <code>be_profit</code> : 본절 확보 수익 (ATR배수)"
         )
-    elif category == "trade":
-        msg = (
-            "💰 <b>[체결 및 사이징 설정]</b>\n\n"
-            "<b>주요 파라미터 변수명 (Key):</b>\n"
-            "▫ <code>risk</code> : 베팅 비중 (0.01 = 1%)\n"
-            "▫ <code>leverage</code> : 레버리지 배수 (int)\n"
-            "▫ <code>kelly</code> : 켈리 사이징 (on/off)\n"
-            "▫ <code>chasing</code> : 지정가 대기 시간 (초)\n"
-            "▫ <code>max_trades</code> : 최대 동시 진입 종목 수\n"
-            "▫ <code>max_same_dir</code> : 동일 방향 최대 종목 수\n"
-            "▫ <code>refresh</code> : 종목 갱신 주기 (시간)\n"
-            "▫ <code>timeframe</code> : 기준 봉 (예: 3m)\n"
-            "▫ <code>fee_rate</code> : 수수료율 (0.00045 = 0.045%)"
-        )
     else:
         msg = "❌ 알 수 없는 카테고리입니다. `/help`를 입력해 목록을 확인하세요."
 
@@ -409,99 +395,100 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
     
-    args = context.args
-    category = args[0].lower() if args else "main"
+    try:
+        args = context.args
+        category = args[0].lower() if args else "main"
 
-    if category == "main":
-        mode = "모의투자(DRY_RUN)" if settings.DRY_RUN else "실전매매(REAL)"
-        msg = (
-            "⚙️ <b>[V18 시스템 주요 설정 요약]</b>\n"
-            f"▪ <b>운영 모드</b>: {mode}\n"
-            f"▪ <b>베팅 비중</b>: {settings.RISK_PERCENTAGE*100:.1f}% (Leverage: {settings.LEVERAGE}x)\n"
-            f"▪ <b>기준 봉</b>: {settings.TIMEFRAME} / <b>갱신 주기</b>: {settings.SYMBOL_REFRESH_INTERVAL}시간\n"
-            f"▪ <b>포지션 한도</b>: 총 {settings.MAX_TRADES}개 (단방향 {settings.MAX_CONCURRENT_SAME_DIR}개)\n"
-            f"▪ <b>최소 스코어</b>: 🟢L:{settings.MIN_SCORE_LONG} / 🔴S:{settings.MIN_SCORE_SHORT}\n"
-            f"▪ <b>MACD 필터</b>: {'✅ ON' if getattr(settings, 'MACD_FILTER_ENABLED', False) else '❌ OFF'}\n"
-            f"▪ <b>블랙리스트</b>: {', '.join(settings.BLACKLIST_SYMBOLS) if settings.BLACKLIST_SYMBOLS else '없음'}\n\n"
-            "💡 <b>상세 조회:</b> <code>/params [risk|trade|score|weight]</code>"
-        )
-    elif category == "risk":
-        msg = (
-            "🛡️ <b>[청산 및 리스크 상세 설정]</b>\n\n"
-            "🟢 <b>LONG Positions</b>:\n"
-            f" ▫ <b>TP 모드</b>: {settings.LONG_TP_MODE}\n"
-            f"   - ATR배수: {settings.LONG_TP_MULT}x\n"
-            f"   - 고정비율: {settings.LONG_TP_PCT*100:.1f}%\n"
-            f" ▫ <b>SL 모드</b>: {settings.LONG_SL_MODE}\n"
-            f"   - ATR배수: {settings.LONG_SL_MULT}x\n"
-            f"   - 고정비율: {settings.LONG_SL_PCT*100:.1f}%\n\n"
-            "🔴 <b>SHORT Positions</b>:\n"
-            f" ▫ <b>TP 모드</b>: {settings.SHORT_TP_MODE}\n"
-            f"   - ATR배수: {settings.SHORT_TP_MULT}x\n"
-            f"   - 고정비율: {settings.SHORT_TP_PCT*100:.1f}%\n"
-            f" ▫ <b>SL 모드</b>: {settings.SHORT_SL_MODE}\n"
-            f"   - ATR배수: {settings.SHORT_SL_MULT}x\n"
-            f"   - 고정비율: {settings.SHORT_SL_PCT*100:.1f}%\n\n"
-            "⚙️ <b>공통 리스크 제어</b>:\n"
-            f" ▪ <b>Chandelier</b>: {settings.CHANDELIER_MULT}x (ATR:{settings.CHANDELIER_ATR_LEN})\n"
-            f" ▪ <b>Partial TP</b>: {settings.PARTIAL_TP_RATIO*100:.0f}% 물량 청산\n"
-            f" ▪ <b>Breakeven</b>: 트리거 {settings.BREAKEVEN_TRIGGER_MULT}x / 확보 {settings.BREAKEVEN_PROFIT_MULT}x\n"
-            f" ▪ <b>Exit Timeout</b>: {settings.TIME_EXIT_MINUTES}분 강제청산\n"
-            f" ▪ <b>Cooldown</b>: 손절 후 {settings.LOSS_COOLDOWN_MINUTES}분 입구컷"
-        )
-    elif category == "trade":
-        kelly_status = "✅ ACTIVE" if settings.KELLY_SIZING else "❌ DISABLED"
-        msg = (
-            "💰 <b>[체결 및 사이징 상세 설정]</b>\n\n"
-            f"▪ <b>Kelly Sizing</b>: {kelly_status}\n"
-            f"  - 최소표본: {settings.KELLY_MIN_TRADES} / 최대캡: {settings.KELLY_MAX_FRACTION*100:.1f}%\n"
-            f"▪ <b>Chasing (Limit)</b>: {settings.CHASING_WAIT_SEC}초 대기\n"
-            f"  - 최대재시도: {settings.CHASING_MAX_RETRY}회\n"
-            f"  - 시장가전환점: {settings.CHASING_MARKET_THRESHOLD}회\n"
-            f"▪ <b>Fee Rate</b>: {settings.FEE_RATE*100:.3f}% (계산용)\n"
-            f"▪ <b>ATR Length</b>: Long {settings.ATR_LONG_LEN} / Multiplier {settings.ATR_RATIO_MULT}x"
-        )
-    elif category == "score":
-        # 롱 규칙 요약
-        l = settings.SC_RULES_LONG["trend"]
-        s = settings.SC_RULES_SHORT["trend"]
-        msg = (
-            "📊 <b>[세부 스코어링 규칙 (Threshold/Weight)]</b>\n\n"
-            "🟢 <b>LONG Rules</b>:\n"
-            f" ▫ CVD: {settings.L_CVD_T1}/{settings.L_CVD_W1}, {settings.L_CVD_T2}/{settings.L_CVD_W2}\n"
-            f" ▫ MACD: {settings.L_MACD_T1}/{settings.L_MACD_W1}, {settings.L_MACD_T2}/{settings.L_MACD_W2}, {settings.L_MACD_T4}/{settings.L_MACD_W4}\n"
-            f" ▫ OI: {settings.L_OI_T1}/{settings.L_OI_W1}, {settings.L_OI_T2}/{settings.L_OI_W2}\n"
-            f" ▫ IMBAL/NOFI: {settings.L_IMBAL_T1}/{settings.L_IMBAL_W1} | {settings.L_NOFI_T1}/{settings.L_NOFI_W1}\n"
-            f" ▫ VOL/TICK: {settings.L_VOL_T1}/{settings.L_VOL_W1} | {settings.L_TICK_T1}/{settings.L_TICK_W1}\n"
-            f" ▫ BUY Ratio: {settings.L_BUY_T1}/{settings.L_BUY_W1}\n\n"
-            "🔴 <b>SHORT Rules</b>:\n"
-            f" ▫ CVD: {settings.S_CVD_T1}/{settings.S_CVD_W1}, {settings.S_CVD_T2}/{settings.S_CVD_W2}\n"
-            f" ▫ MACD: {settings.S_MACD_T1}/{settings.S_MACD_W1}, {settings.S_MACD_T2}/{settings.S_MACD_W2}, {settings.S_MACD_T4}/{settings.S_MACD_W4}\n"
-            f" ▫ OI: {settings.S_OI_T1}/{settings.S_OI_W1}, {settings.S_OI_T2}/{settings.S_OI_W2}\n"
-            f" ▫ IMBAL: {settings.S_IMBAL_T1}/{settings.S_IMBAL_W1}, {settings.S_IMBAL_T2}/{settings.S_IMBAL_W2}\n"
-            f" ▫ NOFI: {settings.S_NOFI_T1}/{settings.S_NOFI_W1}, {settings.S_NOFI_T2}/{settings.S_NOFI_W2}\n"
-            f" ▫ VOL: {settings.S_VOL_T1}/{settings.S_VOL_W1}, {settings.S_VOL_T2}/{settings.S_VOL_W2}\n"
-            f" ▫ TICK: {settings.S_TICK_T1}/{settings.S_TICK_W1}, {settings.S_TICK_T2}/{settings.S_TICK_W2}\n"
-            f" ▫ RSI: {settings.S_RSI_T1}/{settings.S_RSI_W1}, {settings.S_RSI_T2}/{settings.S_RSI_W2}\n"
-            f" ▫ BUY Ratio: {settings.S_BUY_T1}/{settings.S_BUY_W1}, {settings.S_BUY_T2}/{settings.S_BUY_W2}"
-        )
-    elif category == "weight":
-        w = settings.SCORING_WEIGHTS
-        msg = (
-            "⚖️ <b>[글로벌 가중치 및 필터 설정]</b>\n\n"
-            f"▫ <b>ADX Boost</b>: {w.get('adx_boost', {}).get('1', 'N/A')} (Pctl: {settings.ADX_BOOST_PCTL}%)\n"
-            f"▫ <b>HTF Bias</b>: {w.get('htf_bias', {}).get('2', 'N/A')} ({settings.HTF_TIMEFRAME_1H})\n"
-            f"▫ <b>MTF Regime</b>: {w.get('mtf_regime', {}).get('1', 'N/A')}\n"
-            f"▫ <b>MTF Moment</b>: {w.get('mtf_moment', {}).get('2', 'N/A')}\n"
-            f"▫ <b>ATR Vol</b>: {w.get('atr', {}).get('2', 'N/A')}\n"
-            f"▫ <b>Funding Rate</b>: {w.get('fr_boost', {}).get('2', 'N/A')}\n"
-            f"▫ <b>VWAP Distance</b>: {w.get('vwap_dist', {}).get('2', 'N/A')}\n"
-            f"▫ <b>PCTL Window</b>: {settings.PCTL_WINDOW}봉"
-        )
-    else:
-        msg = "❌ 알 수 없는 카테고리입니다. <code>/params [risk|trade|score|weight]</code>를 확인하세요."
+        if category == "main":
+            mode = "모의투자(DRY_RUN)" if settings.DRY_RUN else "실전매매(REAL)"
+            msg = (
+                "⚙️ <b>[V18 시스템 주요 설정 요약]</b>\n"
+                f"▪ <b>운영 모드</b>: {mode}\n"
+                f"▪ <b>베팅 비중</b>: {settings.RISK_PERCENTAGE*100:.1f}% (Leverage: {settings.LEVERAGE}x)\n"
+                f"▪ <b>기준 봉</b>: {settings.TIMEFRAME} / <b>갱신 주기</b>: {settings.SYMBOL_REFRESH_INTERVAL}시간\n"
+                f"▪ <b>포지션 한도</b>: 총 {settings.MAX_TRADES}개 (단방향 {settings.MAX_CONCURRENT_SAME_DIR}개)\n"
+                f"▪ <b>최소 스코어</b>: 🟢L:{settings.MIN_SCORE_LONG} / 🔴S:{settings.MIN_SCORE_SHORT}\n"
+                f"▪ <b>MACD 필터</b>: {'✅ ON' if getattr(settings, 'MACD_FILTER_ENABLED', False) else '❌ OFF'}\n"
+                f"▪ <b>블랙리스트</b>: {', '.join(settings.BLACKLIST_SYMBOLS) if settings.BLACKLIST_SYMBOLS else '없음'}\n\n"
+                "💡 <b>상세 조회:</b> <code>/params [risk|trade|score|weight]</code>"
+            )
+        elif category == "risk":
+            msg = (
+                "🛡️ <b>[청산 및 리스크 상세 설정]</b>\n\n"
+                "🟢 <b>LONG Positions</b>:\n"
+                f" ▫ <b>TP 모드</b>: {settings.LONG_TP_MODE}\n"
+                f"   - ATR배수: {settings.LONG_TP_MULT}x\n"
+                f"   - 고정비율: {settings.LONG_TP_PCT*100:.1f}%\n"
+                f" ▫ <b>SL 모드</b>: {settings.LONG_SL_MODE}\n"
+                f"   - ATR배수: {settings.LONG_SL_MULT}x\n"
+                f"   - 고정비율: {settings.LONG_SL_PCT*100:.1f}%\n\n"
+                "🔴 <b>SHORT Positions</b>:\n"
+                f" ▫ <b>TP 모드</b>: {settings.SHORT_TP_MODE}\n"
+                f"   - ATR배수: {settings.SHORT_TP_MULT}x\n"
+                f"   - 고정비율: {settings.SHORT_TP_PCT*100:.1f}%\n"
+                f" ▫ <b>SL 모드</b>: {settings.SHORT_SL_MODE}\n"
+                f"   - ATR배수: {settings.SHORT_SL_MULT}x\n"
+                f"   - 고정비율: {settings.SHORT_SL_PCT*100:.1f}%\n\n"
+                "⚙️ <b>공통 리스크 제어</b>:\n"
+                f" ▪ <b>Chandelier</b>: {settings.CHANDELIER_MULT}x (ATR:{settings.CHANDELIER_ATR_LEN})\n"
+                f" ▪ <b>Partial TP</b>: {settings.PARTIAL_TP_RATIO*100:.0f}% 물량 청산\n"
+                f" ▪ <b>Breakeven</b>: 트리거 {settings.BREAKEVEN_TRIGGER_MULT}x / 확보 {settings.BREAKEVEN_PROFIT_MULT}x\n"
+                f" ▪ <b>Exit Timeout</b>: {settings.TIME_EXIT_MINUTES}분 강제청산\n"
+                f" ▪ <b>Cooldown</b>: 손절 후 {settings.LOSS_COOLDOWN_MINUTES}분 입구컷"
+            )
+        elif category == "trade":
+            kelly_status = "✅ ACTIVE" if settings.KELLY_SIZING else "❌ DISABLED"
+            msg = (
+                "💰 <b>[체결 및 사이징 상세 설정]</b>\n\n"
+                f"▪ <b>Kelly Sizing</b>: {kelly_status}\n"
+                f"  - 최소표본: {settings.KELLY_MIN_TRADES} / 최대캡: {settings.KELLY_MAX_FRACTION*100:.1f}%\n"
+                f"▪ <b>Chasing (Limit)</b>: {settings.CHASING_WAIT_SEC}초 대기\n"
+                f"  - 최대재시도: {settings.CHASING_MAX_RETRY}회\n"
+                f"  - 시장가전환점: {settings.CHASING_MARKET_THRESHOLD}회\n"
+                f"▪ <b>Fee Rate</b>: {settings.FEE_RATE*100:.3f}% (계산용)\n"
+                f"▪ <b>ATR Length</b>: Long {settings.ATR_LONG_LEN} / Multiplier {settings.ATR_RATIO_MULT}x"
+            )
+        elif category == "score":
+            msg = (
+                "📊 <b>[세부 스코어링 규칙 (Threshold/Weight)]</b>\n\n"
+                "🟢 <b>LONG Rules</b>:\n"
+                f" ▫ CVD: {settings.L_CVD_T1}/{settings.L_CVD_W1}, {settings.L_CVD_T2}/{settings.L_CVD_W2}\n"
+                f" ▫ MACD: {settings.L_MACD_T1}/{settings.L_MACD_W1}, {settings.L_MACD_T2}/{settings.L_MACD_W2}, {settings.L_MACD_T4}/{settings.L_MACD_W4}\n"
+                f" ▫ OI: {settings.L_OI_T1}/{settings.L_OI_W1}, {settings.L_OI_T2}/{settings.L_OI_W2}\n"
+                f" ▫ IMBAL/NOFI: {settings.L_IMBAL_T1}/{settings.L_IMBAL_W1} | {settings.L_NOFI_T1}/{settings.L_NOFI_W1}\n"
+                f" ▫ VOL/TICK: {settings.L_VOL_T1}/{settings.L_VOL_W1} | {settings.L_TICK_T1}/{settings.L_TICK_W1}\n"
+                f" ▫ BUY Ratio: {settings.L_BUY_T1}/{settings.L_BUY_W1}\n\n"
+                "🔴 <b>SHORT Rules</b>:\n"
+                f" ▫ CVD: {settings.S_CVD_T1}/{settings.S_CVD_W1}, {settings.S_CVD_T2}/{settings.S_CVD_W2}\n"
+                f" ▫ MACD: {settings.S_MACD_T1}/{settings.S_MACD_W1}, {settings.S_MACD_T2}/{settings.S_MACD_W2}, {settings.S_MACD_T4}/{settings.S_MACD_W4}\n"
+                f" ▫ OI: {settings.S_OI_T1}/{settings.S_OI_W1}, {settings.S_OI_T2}/{settings.S_OI_W2}\n"
+                f" ▫ IMBAL: {settings.S_IMBAL_T1}/{settings.S_IMBAL_W1}, {settings.S_IMBAL_T2}/{settings.S_IMBAL_W2}\n"
+                f" ▫ NOFI: {settings.S_NOFI_T1}/{settings.S_NOFI_W1}, {settings.S_NOFI_T2}/{settings.S_NOFI_W2}\n"
+                f" ▫ VOL: {settings.S_VOL_T1}/{settings.S_VOL_W1}, {settings.S_VOL_T2}/{settings.S_VOL_W2}\n"
+                f" ▫ TICK: {settings.S_TICK_T1}/{settings.S_TICK_W1}, {settings.S_TICK_T2}/{settings.S_TICK_W2}\n"
+                f" ▫ RSI: {settings.S_RSI_T1}/{settings.S_RSI_W1}, {settings.S_RSI_T2}/{settings.S_RSI_W2}\n"
+                f" ▫ BUY Ratio: {settings.S_BUY_T1}/{settings.S_BUY_W1}, {settings.S_BUY_T2}/{settings.S_BUY_W2}"
+            )
+        elif category == "weight":
+            w = settings.SCORING_WEIGHTS
+            msg = (
+                "⚖️ <b>[글로벌 가중치 및 필터 설정]</b>\n\n"
+                f"▫ <b>ADX Boost</b>: {w.get('adx_boost', {}).get('1', 'N/A')} (Pctl: {settings.ADX_BOOST_PCTL}%)\n"
+                f"▫ <b>HTF Bias</b>: {w.get('htf_bias', {}).get('2', 'N/A')} ({settings.HTF_TIMEFRAME_1H})\n"
+                f"▫ <b>MTF Regime</b>: {w.get('mtf_regime', {}).get('1', 'N/A')}\n"
+                f"▫ <b>MTF Moment</b>: {w.get('mtf_moment', {}).get('2', 'N/A')}\n"
+                f"▫ <b>ATR Vol</b>: {w.get('atr', {}).get('2', 'N/A')}\n"
+                f"▫ <b>Funding Rate</b>: {w.get('fr_boost', {}).get('2', 'N/A')}\n"
+                f"▫ <b>VWAP Distance</b>: {w.get('vwap_dist', {}).get('2', 'N/A')}\n"
+                f"▫ <b>PCTL Window</b>: {settings.PCTL_WINDOW}봉"
+            )
+        else:
+            msg = "❌ 알 수 없는 카테고리입니다. <code>/params [risk|trade|score|weight]</code>를 확인하세요."
 
-    await update.message.reply_text(msg, parse_mode="HTML")
+        await update.message.reply_text(msg, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Error in params_cmd: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ 설정 조회 중 오류가 발생했습니다: {e}")
 
 
 async def refresh_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
