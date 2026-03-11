@@ -78,30 +78,36 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "<b>1. 기본 형식:</b> <code>[L/S]_[지표]_[T/W][단계]</code>\n"
             "▫ <code>T</code>: 임계값(Threshold), <code>W</code>: 점수(Weight)\n"
             "▫ <b>지표 키워드:</b> CVD, MACD, IMBAL, NOFI, OI, TICK, VOL, BUY, RSI\n\n"
-            "<b>2. 주요 파라미터 예시:</b>\n"
-            "▫ <code>l_cvd_t1 70</code> : 롱 CVD 1단계 임계치를 70%로 설정\n"
-            "▫ <code>l_cvd_w1 2</code> : 1단계 달성 시 2점 부여\n"
-            "▫ <code>s_macd_t2 75</code> : 숏 MACD 2단계 임계치를 75%로 설정\n"
-            "▫ <code>min_score_long 18</code> : 롱 진입 최소 합계 점수\n\n"
-            "<b>3. 특수 필터:</b>\n"
-            "▫ <code>macd_filter on/off</code> : MACD 방향성 필터 활성화"
+            "<b>2. 주요 파라미터 변수명 (Key):</b>\n"
+            "▫ <code>min_score_long</code>, <code>min_score_short</code>\n"
+            "▫ <code>macd_filter</code> (on/off)\n"
+            "▫ <code>l_cvd_t1</code>, <code>l_cvd_w1</code>, <code>s_macd_t2</code> 등\n\n"
+            "<b>3. 가중치(Weight) 변수명:</b>\n"
+            "▫ <code>weight_adx</code>, <code>weight_mtf_moment</code>\n"
+            "▫ <code>weight_atr</code>, <code>weight_fr</code>, <code>weight_htf</code>\n"
+            "▫ <code>weight_mtf_regime</code>, <code>weight_vwap</code>"
         )
     elif category == "trade":
         msg = (
             "💰 <b>[체결 및 사이징 설정]</b>\n\n"
+            "<b>주요 파라미터 변수명 (Key):</b>\n"
             "▫ <code>risk</code> : 베팅 비중 (0.01 = 1%)\n"
-            "▫ <code>leverage</code> : 레버리지 배수\n"
-            "▫ <code>kelly on/off</code> : 켈리 사이징 사용 여부\n"
+            "▫ <code>leverage</code> : 레버리지 배수 (int)\n"
+            "▫ <code>kelly</code> : 켈리 사이징 (on/off)\n"
             "▫ <code>chasing</code> : 지정가 대기 시간 (초)\n"
-            "▫ <code>refresh</code> : 종목 갱시 주기 (시간)\n"
+            "▫ <code>refresh</code> : 종목 갱신 주기 (시간)\n"
             "▫ <code>timeframe</code> : 기준 봉 (예: 3m)"
         )
     elif category == "risk":
         msg = (
             "🛡️ <b>[청산 및 리스크 관리]</b>\n\n"
-            "▫ <code>l_tp_mode</code> / <code>l_sl_mode</code> : 롱 익절/손절 방식(ATR/PERCENT)\n"
-            "▫ <code>l_tp</code> / <code>l_sl</code> : ATR 기반 배수\n"
-            "▫ <code>l_tp_pct</code> / <code>l_sl_pct</code> : 비율 기반 (0.05 = 5%)\n"
+            "<b>주요 파라미터 변수명 (Key):</b>\n"
+            "▫ <code>l_tp_mode</code> / <code>s_tp_mode</code> : 익절 방식 (ATR/PERCENT)\n"
+            "▫ <code>l_sl_mode</code> / <code>s_sl_mode</code> : 손절 방식 (ATR/PERCENT)\n"
+            "▫ <code>l_tp</code> / <code>s_tp</code> : ATR 기반 익절 배수\n"
+            "▫ <code>l_sl</code> / <code>s_sl</code> : ATR 기반 손절 배수\n"
+            "▫ <code>l_tp_pct</code> / <code>s_tp_pct</code> : 비율 기반 (0.05 = 5%)\n"
+            "▫ <code>l_sl_pct</code> / <code>s_sl_pct</code> : 비율 기반 (0.02 = 2%)\n"
             "▫ <code>chandelier</code> : 샹들리에 추적 손절 배수\n"
             "▫ <code>cooldown</code> : 손절 후 재진입 제한(분)\n"
             "▫ <code>partial_tp</code> : 1차 익절 비중 (0.5 = 50%)"
@@ -379,19 +385,59 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
     
-    mode = "모의투자(DRY_RUN)" if settings.DRY_RUN else "실전매매(REAL)"
-    msg = (
-        "⚙️ <b>[현재 전략 파라미터 요약]</b>\n"
-        f"▪ <b>Mode</b>: {mode}\n"
-        f"▪ <b>Risk</b>: {settings.RISK_PERCENTAGE*100:.1f}%\n"
-        f"▪ <b>Leverage</b>: {settings.LEVERAGE}x\n"
-        f"▪ <b>Candle</b>: {settings.TIMEFRAME} / Exit={settings.TIME_EXIT_MINUTES}min\n"
-        f"▪ <b>Score</b>: L={settings.MIN_SCORE_LONG} / S={settings.MIN_SCORE_SHORT}\n"
-        f"▪ <b>MACD Filter</b>: {'ON' if getattr(settings, 'MACD_FILTER_ENABLED', False) else 'OFF'}\n\n"
-        "── <b>방향별 청산 전략</b> ──\n"
-        f"<b>LONG</b>: {settings.LONG_TP_MODE}({settings.LONG_TP_MULT}x / {settings.LONG_TP_PCT*100}%) | {settings.LONG_SL_MODE}({settings.LONG_SL_MULT}x / {settings.LONG_SL_PCT*100}%)\n"
-        f"<b>SHORT</b>: {settings.SHORT_TP_MODE}({settings.SHORT_TP_MULT}x / {settings.SHORT_TP_PCT*100}%) | {settings.SHORT_SL_MODE}({settings.SHORT_SL_MULT}x / {settings.SHORT_SL_PCT*100}%)\n"
-    )
+    args = context.args
+    category = args[0].lower() if args else "main"
+
+    if category == "main":
+        mode = "모의투자(DRY_RUN)" if settings.DRY_RUN else "실전매매(REAL)"
+        msg = (
+            "⚙️ <b>[현재 주요 설정 요약]</b>\n"
+            f"▪ <b>Mode</b>: {mode}\n"
+            f"▪ <b>Risk</b>: {settings.RISK_PERCENTAGE*100:.1f}%\n"
+            f"▪ <b>Leverage</b>: {settings.LEVERAGE}x\n"
+            f"▪ <b>Candle</b>: {settings.TIMEFRAME}\n"
+            f"▪ <b>Cooldown</b>: {settings.LOSS_COOLDOWN_MINUTES}분\n"
+            f"▪ <b>Min Score</b>: L={settings.MIN_SCORE_LONG} / S={settings.MIN_SCORE_SHORT}\n"
+            f"▪ <b>MACD Filter</b>: {'ON' if getattr(settings, 'MACD_FILTER_ENABLED', False) else 'OFF'}\n"
+            f"▪ <b>Blacklist</b>: {', '.join(settings.BLACKLIST_SYMBOLS) if settings.BLACKLIST_SYMBOLS else '없음'}\n\n"
+            "💡 <b>상세 조회:</b> `/params [risk|weight|score]`"
+        )
+    elif category == "risk":
+        msg = (
+            "🛡️ <b>[현재 청산 및 리스크 상세]</b>\n\n"
+            "<b>LONG</b>:\n"
+            f"▫ TP: {settings.LONG_TP_MODE} (ATR:{settings.LONG_TP_MULT}x / PCT:{settings.LONG_TP_PCT*100}%)\n"
+            f"▫ SL: {settings.LONG_SL_MODE} (ATR:{settings.LONG_SL_MULT}x / PCT:{settings.LONG_SL_PCT*100}%)\n\n"
+            "<b>SHORT</b>:\n"
+            f"▫ TP: {settings.SHORT_TP_MODE} (ATR:{settings.SHORT_TP_MULT}x / PCT:{settings.SHORT_TP_PCT*100}%)\n"
+            f"▫ SL: {settings.SHORT_SL_MODE} (ATR:{settings.SHORT_SL_MULT}x / PCT:{settings.SHORT_SL_PCT*100}%)\n\n"
+            f"▫ <b>Chandelier</b>: {settings.CHANDELIER_MULT}x\n"
+            f"▫ <b>Partial TP</b>: {settings.PARTIAL_TP_RATIO*100}%"
+        )
+    elif category == "weight":
+        w = settings.SCORING_WEIGHTS
+        msg = (
+            "⚖️ <b>[현재 스코어링 가중치 설정]</b>\n\n"
+            f"▫ <b>ADX Boost</b>: {w.get('adx_boost', {}).get('1', 'N/A')}\n"
+            f"▫ <b>MTF Moment</b>: {w.get('mtf_moment', {}).get('2', 'N/A')}\n"
+            f"▫ <b>ATR Vol</b>: {w.get('atr', {}).get('2', 'N/A')}\n"
+            f"▫ <b>Funding Rate</b>: {w.get('fr_boost', {}).get('2', 'N/A')}\n"
+            f"▫ <b>HTF Bias</b>: {w.get('htf_bias', {}).get('2', 'N/A')}\n"
+            f"▫ <b>MTF Regime</b>: {w.get('mtf_regime', {}).get('1', 'N/A')}\n"
+            f"▫ <b>VWAP Distance</b>: {w.get('vwap_dist', {}).get('2', 'N/A')}"
+        )
+    elif category == "score":
+        msg = (
+            "📊 <b>[주요 스코어링 임계치 현황]</b>\n\n"
+            "<b>LONG (1단계 T)</b>:\n"
+            f"▫ CVD={settings.L_CVD_T1}% / MACD={settings.L_MACD_T1} / IMBAL={settings.L_IMBAL_T1}%\n\n"
+            "<b>SHORT (1단계 T)</b>:\n"
+            f"▫ CVD={settings.S_CVD_T1}% / MACD={settings.S_MACD_T1} / IMBAL={settings.S_IMBAL_T1}%\n\n"
+            "💡 상세 임계치 수정은 `/help score` 가이드를 참조하세요."
+        )
+    else:
+        msg = "❌ 알 수 없는 카테고리입니다. `/params [risk|weight|score]` 를 확인하세요."
+
     await update.message.reply_text(msg, parse_mode="HTML")
 
 
