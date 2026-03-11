@@ -48,78 +48,63 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not category:
         msg = (
-            "📖 [V18 텔레그램 도움말 센터]\n"
+            "📖 <b>[V18 텔레그램 도움말 센터]</b>\n"
             "원하시는 카테고리를 선택해 상세 정보를 확인하세요.\n\n"
-            "── 기본 명령어 ──\n"
-            "👉 `/help cmd` : 봇 제어 및 상태 확인 명령어\n"
-            "👉 `/help score` : V18 스코어링 및 임계값 설정\n"
+            "── <b>명령어 카테고리</b> ──\n"
+            "👉 `/help cmd` : 봇 제어 및 상태 확인 관련\n"
+            "👉 `/help score` : V18 스코어링 규칙 및 임계치 설정\n"
             "👉 `/help risk` : 손절/익절 및 리스크 관리 설정\n"
             "👉 `/help trade` : 체결, 사이징, 레버리지 설정\n\n"
-            "💡 팁: `/setparam [키] [값]` 으로 즉시 수정 가능합니다."
+            "💡 <b>사용법:</b> `/setparam [키] [값]` 으로 즉시 수정 가능"
         )
     elif category == "cmd":
         msg = (
-            "🤖 [봇 제어 명령어 목록]\n\n"
-            "/status — 현재 상태, 포지션, 잔고 요약\n"
-            "/params — 현재 봇에 설정된 모든 파라미터 값 조회\n"
-            "/pause  — 새로운 진입을 일시 중단\n"
-            "/resume — 일시 중단된 진입을 다시 시작\n"
-            "/panic  — 모든 포지션 시장가 정리 후 봇 정지\n"
-            "/restart — 봇 프로세스 강제 재시작 (업데이트 적용 등)\n"
-            "/refresh — 즉시 상위 거래량 종목 새로고침 수행\n"
-            "/ignore [코인] — 해당 종목 진입 타겟에서 제외\n"
-            "/allow  [코인] — 블랙리스트에서 종목 제거\n"
-            "/close  [코인] — 해당 종목만 시장가 즉시 청산"
+            "🤖 <b>[봇 제어 명령어 목록]</b>\n\n"
+            "▫ `/status` — 현재 상태, 포지션, 잔고 요약\n"
+            "▫ `/params` — 현재 설정된 모든 파라미터 조회\n"
+            "▫ `/pause`  — 새로운 진입 일시 중단\n"
+            "▫ `/resume` — 중단된 진입 다시 시작\n"
+            "▫ `/refresh` — 즉시 상위 거래량 종목 갱신\n"
+            "▫ `/ignore [코인]` — 해당 종목 감시 제외\n"
+            "▫ `/allow [코인]` — 종목 제외 해제\n"
+            "▫ `/close [코인]` — 특정 종목 시장가 청산\n"
+            "▫ `/panic`  — 전량 청산 후 봇 종료\n"
+            "▫ `/restart` — 봇 강제 재시작"
         )
     elif category == "score":
         msg = (
-            "📈 <b>[V18 진입 스코어링 시스템 안내]</b>\n"
-            "롱/숏이 완전히 분리된 규칙 기반 엔진을 사용합니다.\n\n"
-            "<b>1. 진입 합격점 (Min Score)</b>\n"
-            "▫ <code>long_score</code> : 롱 최소 합계 점수\n"
-            "▫ <code>short_score</code>: 숏 최소 합계 점수\n\n"
-            "<b>2. 규칙 설정 형식 (Rules)</b>\n"
-            "기본 형식: <code>{l/s}_{지표}_{t/w}{단계}</code>\n"
-            "▫ <code>t</code>: 임계값 (상위 %, σ 등)\n"
-            "▫ <code>w</code>: 부여할 점수 (배점)\n"
-            "예: <code>s_rsi_w2 2</code> (숏 RSI 2단계 달성 시 2점 부여)\n\n"
-            "▫ <code>macd_filter</code>: ON 설정 시 MACD 방향 불일치 시 스코어 무관 진입 차단\n\n"
-            "💡 <b>팁:</b> 특정 방향 진입을 막으려면 <code>min_score</code>를 매우 높게 설정하세요."
+            "📈 <b>[스코어링 규칙 설정 가이드]</b>\n"
+            "롱(L)과 숏(S) 규칙을 개별 설정할 수 있습니다.\n\n"
+            "<b>1. 기본 형식:</b> <code>[L/S]_[지표]_[T/W][단계]</code>\n"
+            "▫ <code>T</code>: 임계값(Threshold), <code>W</code>: 점수(Weight)\n"
+            "▫ <b>지표 키워드:</b> CVD, MACD, IMBAL, NOFI, OI, TICK, VOL, BUY, RSI\n\n"
+            "<b>2. 주요 파라미터 예시:</b>\n"
+            "▫ <code>l_cvd_t1 70</code> : 롱 CVD 1단계 임계치를 70%로 설정\n"
+            "▫ <code>l_cvd_w1 2</code> : 1단계 달성 시 2점 부여\n"
+            "▫ <code>s_macd_t2 75</code> : 숏 MACD 2단계 임계치를 75%로 설정\n"
+            "▫ <code>min_score_long 18</code> : 롱 진입 최소 합계 점수\n\n"
+            "<b>3. 특수 필터:</b>\n"
+            "▫ <code>macd_filter on/off</code> : MACD 방향성 필터 활성화"
         )
     elif category == "trade":
         msg = (
-            "💰 <b>[체결 및 사이징 설정]</b>\n"
-            "베팅 비중과 체결 방식에 관한 설정입니다.\n\n"
-            "▫ <code>risk</code> : 베팅 비중 (계좌 대비 %, 0.01 = 1%)\n"
+            "💰 <b>[체결 및 사이징 설정]</b>\n\n"
+            "▫ <code>risk</code> : 베팅 비중 (0.01 = 1%)\n"
             "▫ <code>leverage</code> : 레버리지 배수\n"
-            "▫ <code>mode</code> : dry(모의) 또는 real(실전)\n"
-            "▫ <code>kelly</code> : 켈리 사이징 사용 (on/off)\n"
-            "▫ <code>chasing</code> : 지정가 체결 대기 시간 (초)\n"
-            "▫ <code>refresh</code> : 종목 리프레시 주기 (시간 단위)\n"
-            "▫ <code>timeframe</code> : 메인 분석 봉 (예: 3m)\n"
-            "▫ <code>htf_1h</code> / <code>htf_15m</code> : 중장기 분석 봉"
+            "▫ <code>kelly on/off</code> : 켈리 사이징 사용 여부\n"
+            "▫ <code>chasing</code> : 지정가 대기 시간 (초)\n"
+            "▫ <code>refresh</code> : 종목 갱시 주기 (시간)\n"
+            "▫ <code>timeframe</code> : 기준 봉 (예: 3m)"
         )
     elif category == "risk":
         msg = (
-            "🛡️ <b>[청산 및 리스크 관리 설정]</b>\n"
-            "포지션 종료(Exit) 전략을 세밀하게 제어합니다.\n\n"
-            "<b>1. 익절/손절 모드 (Exit Mode)</b>\n"
-            "▫ <code>l_tp_mode</code> / <code>l_sl_mode</code> : 롱 익절/손절 방식\n"
-            "▫ <code>s_tp_mode</code> / <code>s_sl_mode</code> : 숏 익절/손절 방식\n"
-            "   (값: <code>ATR</code> 또는 <code>PERCENT</code>)\n\n"
-            "<b>2. 목표가 설정 파라미터</b>\n"
-            "▫ <b>ATR 기반 (Mult)</b>\n"
-            "   - <code>l_tp</code>, <code>l_sl</code>, <code>s_tp</code>, <code>s_sl</code> (배수)\n"
-            "▫ <b>비율 기반 (Pct)</b>\n"
-            "   - <code>l_tp_pct</code>, <code>l_sl_pct</code>\n"
-            "   - <code>s_tp_pct</code>, <code>s_sl_pct</code> (예: 0.03 = 3%)\n\n"
-            "<b>3. 기타 안전장치</b>\n"
-            "▫ <code>fee_rate</code>   : 기본 수수료율 (0.00045)\n"
-            "▫ <code>partial_tp</code> : 분할 익절 비율 (0.5)\n"
-            "▫ <code>chandelier</code> : 추적 손절 배수\n"
-            "▫ <code>cooldown</code>   : 손절 후 진입 제한 (분)\n\n"
-            "💡 <b>예시:</b> 숏 익절만 퍼센트로 바꾸려면?\n"
-            "<code>/setparam s_tp_mode PERCENT</code>"
+            "🛡️ <b>[청산 및 리스크 관리]</b>\n\n"
+            "▫ <code>l_tp_mode</code> / <code>l_sl_mode</code> : 롱 익절/손절 방식(ATR/PERCENT)\n"
+            "▫ <code>l_tp</code> / <code>l_sl</code> : ATR 기반 배수\n"
+            "▫ <code>l_tp_pct</code> / <code>l_sl_pct</code> : 비율 기반 (0.05 = 5%)\n"
+            "▫ <code>chandelier</code> : 샹들리에 추적 손절 배수\n"
+            "▫ <code>cooldown</code> : 손절 후 재진입 제한(분)\n"
+            "▫ <code>partial_tp</code> : 1차 익절 비중 (0.5 = 50%)"
         )
     else:
         msg = "❌ 알 수 없는 카테고리입니다. `/help`를 입력해 목록을 확인하세요."
@@ -243,8 +228,6 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     param_map = {
         "risk": ("RISK_PERCENTAGE", float),
         "leverage": ("LEVERAGE", int),
-        "sl": ("STOP_LOSS_MULT", float),
-        "tp": ("TAKE_PROFIT_MULT", float),
         "l_tp": ("LONG_TP_MULT", float),
         "l_sl": ("LONG_SL_MULT", float),
         "s_tp": ("SHORT_TP_MULT", float),
@@ -266,6 +249,32 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "macd_filter": ("MACD_FILTER_ENABLED", lambda v: v.lower() == "on")
     }
 
+    # [V18.4] 스코어링 세부 규칙 동적 지원 (자동 생성)
+    scoring_keys = [
+        "L_MACD_T1", "L_MACD_W1", "L_MACD_T2", "L_MACD_W2", "L_MACD_T4", "L_MACD_W4",
+        "L_CVD_T1", "L_CVD_W1", "L_CVD_T2", "L_CVD_W2",
+        "L_IMBAL_T1", "L_IMBAL_W1", "L_NOFI_T1", "L_NOFI_W1",
+        "L_OI_T1", "L_OI_W1", "L_OI_T2", "L_OI_W2",
+        "L_TICK_T1", "L_TICK_W1", "L_VOL_T1", "L_VOL_W1",
+        "L_BUY_T1", "L_BUY_W1",
+        "S_MACD_T1", "S_MACD_W1", "S_MACD_T2", "S_MACD_W2", "S_MACD_T4", "S_MACD_W4",
+        "S_CVD_T1", "S_CVD_W1", "S_CVD_T2", "S_CVD_W2",
+        "S_IMBAL_T1", "S_IMBAL_W1", "S_IMBAL_T2", "S_IMBAL_W2",
+        "S_NOFI_T1", "S_NOFI_W1", "S_NOFI_T2", "S_NOFI_W2",
+        "S_OI_T1", "S_OI_W1", "S_OI_T2", "S_OI_W2",
+        "S_TICK_T1", "S_TICK_W1", "S_TICK_T2", "S_TICK_W2",
+        "S_VOL_T1", "S_VOL_W1", "S_VOL_T2", "S_VOL_W2",
+        "S_RSI_T1", "S_RSI_W1", "S_RSI_T2", "S_RSI_W2",
+        "S_BUY_T1", "S_BUY_W1", "S_BUY_T2", "S_BUY_W2"
+    ]
+
+    for skey in scoring_keys:
+        k_lower = skey.lower()
+        # 점수(W)는 int, 임계치(T) 중 VOL은 float, 나머지는 int 가정
+        if "_W" in skey or "_T" in skey:
+            t_func = float if "_VOL_T" in skey else int
+            param_map[k_lower] = (skey, t_func)
+
     if key not in param_map:
         await update.message.reply_text(f"❌ 설정 불가능한 키입니다: {key}")
         return
@@ -274,8 +283,16 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         typed_val = type_func(value_str)
         setattr(settings, env_key, typed_val)
-        update_env_variable(env_key, str(typed_val))
-        await update.message.reply_text(f"✅ 설정 변경 완료: {key} -> {typed_val}")
+        
+        # [V18.4] 스코어링 규칙 관련이면 엔진 리빌드
+        is_scoring_rule = env_key in scoring_keys
+        update_env_variable(env_key, str(typed_val), silent=is_scoring_rule)
+        
+        if is_scoring_rule:
+            settings.rebuild_scoring_rules()
+            await update.message.reply_text(f"🎯 [Engine Rebuild] 스코어링 규칙 '{key}'가 {typed_val}로 즉시 업데이트되었습니다.")
+        else:
+            await update.message.reply_text(f"✅ 설정 변경 완료: {key} -> {typed_val}")
     except Exception as e:
         await update.message.reply_text(f"❌ 변환 오류: {e}")
 

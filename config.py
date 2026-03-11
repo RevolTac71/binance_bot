@@ -13,29 +13,22 @@ dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
 load_dotenv(dotenv_path, override=True)
 
 
-def update_env_variable(key: str, value: str):
+def update_env_variable(key: str, value: str, silent: bool = False):
     """
     실행 중 메모리의 환경변수를 갱신하고 동시에 .env 파일에도 덮어씁니다.
     """
     os.environ[key] = str(value)
     try:
-        # .env 파일이 없으면 빈 파일로 자동 생성하여 영구 저장 보장
         if not os.path.exists(dotenv_path):
             with open(dotenv_path, "a", encoding="utf-8") as f:
                 pass
 
-        # set_key를 사용하여 .env 파일 업데이트
         success = set_key(dotenv_path, key, str(value))
 
-        if success:
+        if success and not silent:
             logger.info(
                 f"💾 [Persistence] 환경변수 '{key}' 가 {value}로 영구 저장되었습니다."
             )
-        else:
-            logger.warning(
-                f"⚠️ [Persistence] '{key}' 저장 중 경고가 발생했을 수 있습니다 (파일 경로: {dotenv_path})"
-            )
-
     except Exception as e:
         logger.error(f"❌ [Persistence] .env 파일 갱신 실패 ({key}): {e}")
 
@@ -45,6 +38,9 @@ KST = ZoneInfo("Asia/Seoul")
 
 
 class Config:
+    def __init__(self):
+        self.rebuild_scoring_rules()
+
     # Binance API Settings
     BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
     BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
@@ -82,100 +78,143 @@ class Config:
     )  # 기본값 90 -> 60 수정
 
     # [V18.4] 숏/롱 분리형 규칙 기반 스코어링 시스템
-    # (임계값, 부여점수, "pctl"| "val")
-    # pctl: 백분위수 기준 (0~100)
-    # val: 실제 값 (Log_Vol_ZScore 등)
-    SC_RULES_LONG = {
-        "trend": {
-            "macd_hist": [
-                (int(os.getenv("L_MACD_T1", "65")), int(os.getenv("L_MACD_W1", "1"))),
-                (int(os.getenv("L_MACD_T2", "75")), int(os.getenv("L_MACD_W2", "2"))),
-                (int(os.getenv("L_MACD_T4", "85")), int(os.getenv("L_MACD_W4", "4"))),
-            ],
-            "cvd_delta_slope": [
-                (int(os.getenv("L_CVD_T1", "70")), int(os.getenv("L_CVD_W1", "1"))),
-                (int(os.getenv("L_CVD_T2", "85")), int(os.getenv("L_CVD_W2", "2"))),
-            ],
-            "bid_ask_imbalance": [
-                (int(os.getenv("L_IMBAL_T1", "80")), int(os.getenv("L_IMBAL_W1", "1")))
-            ],
-            "nofi_1m": [
-                (int(os.getenv("L_NOFI_T1", "85")), int(os.getenv("L_NOFI_W1", "1")))
-            ],
-            "open_interest": [
-                (int(os.getenv("L_OI_T1", "70")), int(os.getenv("L_OI_W1", "2"))),
-                (int(os.getenv("L_OI_T2", "85")), int(os.getenv("L_OI_W2", "4"))),
-            ],
-            "tick_count": [
-                (int(os.getenv("L_TICK_T1", "85")), int(os.getenv("L_TICK_W1", "1")))
-            ],
-            "log_volume_zscore": [
-                (
-                    float(os.getenv("L_VOL_T1", "1.9")),
-                    int(os.getenv("L_VOL_W1", "1")),
-                    "val",
-                )
-            ],
-        },
-        "mean_reversion": {
-            "rsi": [],
-            "buy_ratio": [
-                (int(os.getenv("L_BUY_T1", "15")), int(os.getenv("L_BUY_W1", "1")))
-            ],
-        },
-    }
+    def rebuild_scoring_rules(self):
+        """
+        환경변수로부터 스코어링 규칙(Threshold, Weight)을 다시 빌드합니다.
+        /setparam 명령어로 특정 파라미터가 바뀐 뒤 이 메서드를 호출하면 즉시 반영됩니다.
+        """
+        # 개별 파라미터 로드
+        self.L_MACD_T1 = int(os.getenv("L_MACD_T1", "65"))
+        self.L_MACD_W1 = int(os.getenv("L_MACD_W1", "1"))
+        self.L_MACD_T2 = int(os.getenv("L_MACD_T2", "75"))
+        self.L_MACD_W2 = int(os.getenv("L_MACD_W2", "2"))
+        self.L_MACD_T4 = int(os.getenv("L_MACD_T4", "85"))
+        self.L_MACD_W4 = int(os.getenv("L_MACD_W4", "4"))
 
-    SC_RULES_SHORT = {
-        "trend": {
-            "macd_hist": [  # Scoring 시 내부적으로 symm 처리
-                (int(os.getenv("S_MACD_T1", "65")), int(os.getenv("S_MACD_W1", "1"))),
-                (int(os.getenv("S_MACD_T2", "75")), int(os.getenv("S_MACD_W2", "2"))),
-                (int(os.getenv("S_MACD_T4", "85")), int(os.getenv("S_MACD_W4", "4"))),
-            ],
-            "cvd_delta_slope": [
-                (int(os.getenv("S_CVD_T1", "70")), int(os.getenv("S_CVD_W1", "1"))),
-                (int(os.getenv("S_CVD_T2", "85")), int(os.getenv("S_CVD_W2", "2"))),
-            ],
-            "bid_ask_imbalance": [
-                (int(os.getenv("S_IMBAL_T1", "65")), int(os.getenv("S_IMBAL_W1", "1"))),
-                (int(os.getenv("S_IMBAL_T2", "80")), int(os.getenv("S_IMBAL_W2", "2"))),
-            ],
-            "nofi_1m": [
-                (int(os.getenv("S_NOFI_T1", "70")), int(os.getenv("S_NOFI_W1", "1"))),
-                (int(os.getenv("S_NOFI_T2", "85")), int(os.getenv("S_NOFI_W2", "2"))),
-            ],
-            "open_interest": [
-                (int(os.getenv("S_OI_T1", "70")), int(os.getenv("S_OI_W1", "1"))),
-                (int(os.getenv("S_OI_T2", "85")), int(os.getenv("S_OI_W2", "2"))),
-            ],
-            "tick_count": [
-                (int(os.getenv("S_TICK_T1", "70")), int(os.getenv("S_TICK_W1", "1"))),
-                (int(os.getenv("S_TICK_T2", "85")), int(os.getenv("S_TICK_W2", "2"))),
-            ],
-            "log_volume_zscore": [
-                (
-                    float(os.getenv("S_VOL_T1", "1.4")),
-                    int(os.getenv("S_VOL_W1", "1")),
-                    "val",
-                ),
-                (
-                    float(os.getenv("S_VOL_T2", "1.9")),
-                    int(os.getenv("S_VOL_W2", "2")),
-                    "val",
-                ),
-            ],
-        },
-        "mean_reversion": {
-            "rsi": [
-                (int(os.getenv("S_RSI_T1", "35")), int(os.getenv("S_RSI_W1", "1"))),
-                (int(os.getenv("S_RSI_T2", "25")), int(os.getenv("S_RSI_W2", "2"))),
-            ],
-            "buy_ratio": [
-                (int(os.getenv("S_BUY_T1", "25")), int(os.getenv("S_BUY_W1", "1"))),
-                (int(os.getenv("S_BUY_T2", "10")), int(os.getenv("S_BUY_W2", "2"))),
-            ],
-        },
-    }
+        self.L_CVD_T1 = int(os.getenv("L_CVD_T1", "70"))
+        self.L_CVD_W1 = int(os.getenv("L_CVD_W1", "1"))
+        self.L_CVD_T2 = int(os.getenv("L_CVD_T2", "85"))
+        self.L_CVD_W2 = int(os.getenv("L_CVD_W2", "2"))
+
+        self.L_IMBAL_T1 = int(os.getenv("L_IMBAL_T1", "80"))
+        self.L_IMBAL_W1 = int(os.getenv("L_IMBAL_W1", "1"))
+
+        self.L_NOFI_T1 = int(os.getenv("L_NOFI_T1", "85"))
+        self.L_NOFI_W1 = int(os.getenv("L_NOFI_W1", "1"))
+
+        self.L_OI_T1 = int(os.getenv("L_OI_T1", "70"))
+        self.L_OI_W1 = int(os.getenv("L_OI_W1", "2"))
+        self.L_OI_T2 = int(os.getenv("L_OI_T2", "85"))
+        self.L_OI_W2 = int(os.getenv("L_OI_W2", "4"))
+
+        self.L_TICK_T1 = int(os.getenv("L_TICK_T1", "85"))
+        self.L_TICK_W1 = int(os.getenv("L_TICK_W1", "1"))
+
+        self.L_VOL_T1 = float(os.getenv("L_VOL_T1", "1.9"))
+        self.L_VOL_W1 = int(os.getenv("L_VOL_W1", "1"))
+
+        self.L_BUY_T1 = int(os.getenv("L_BUY_T1", "15"))
+        self.L_BUY_W1 = int(os.getenv("L_BUY_W1", "1"))
+
+        # SHORT
+        self.S_MACD_T1 = int(os.getenv("S_MACD_T1", "65"))
+        self.S_MACD_W1 = int(os.getenv("S_MACD_W1", "1"))
+        self.S_MACD_T2 = int(os.getenv("S_MACD_T2", "75"))
+        self.S_MACD_W2 = int(os.getenv("S_MACD_W2", "2"))
+        self.S_MACD_T4 = int(os.getenv("S_MACD_T4", "85"))
+        self.S_MACD_W4 = int(os.getenv("S_MACD_W4", "4"))
+
+        self.S_CVD_T1 = int(os.getenv("S_CVD_T1", "70"))
+        self.S_CVD_W1 = int(os.getenv("S_CVD_W1", "1"))
+        self.S_CVD_T2 = int(os.getenv("S_CVD_T2", "85"))
+        self.S_CVD_W2 = int(os.getenv("S_CVD_W2", "2"))
+
+        self.S_IMBAL_T1 = int(os.getenv("S_IMBAL_T1", "65"))
+        self.S_IMBAL_W1 = int(os.getenv("S_IMBAL_W1", "1"))
+        self.S_IMBAL_T2 = int(os.getenv("S_IMBAL_T2", "80"))
+        self.S_IMBAL_W2 = int(os.getenv("S_IMBAL_W2", "2"))
+
+        self.S_NOFI_T1 = int(os.getenv("S_NOFI_T1", "70"))
+        self.S_NOFI_W1 = int(os.getenv("S_NOFI_W1", "1"))
+        self.S_NOFI_T2 = int(os.getenv("S_NOFI_T2", "85"))
+        self.S_NOFI_W2 = int(os.getenv("S_NOFI_W2", "2"))
+
+        self.S_OI_T1 = int(os.getenv("S_OI_T1", "70"))
+        self.S_OI_W1 = int(os.getenv("S_OI_W1", "1"))
+        self.S_OI_T2 = int(os.getenv("S_OI_T2", "85"))
+        self.S_OI_W2 = int(os.getenv("S_OI_W2", "2"))
+
+        self.S_TICK_T1 = int(os.getenv("S_TICK_T1", "70"))
+        self.S_TICK_W1 = int(os.getenv("S_TICK_W1", "1"))
+        self.S_TICK_T2 = int(os.getenv("S_TICK_T2", "85"))
+        self.S_TICK_W2 = int(os.getenv("S_TICK_W2", "2"))
+
+        self.S_VOL_T1 = float(os.getenv("S_VOL_T1", "1.4"))
+        self.S_VOL_W1 = int(os.getenv("S_VOL_W1", "1"))
+        self.S_VOL_T2 = float(os.getenv("S_VOL_T2", "1.9"))
+        self.S_VOL_W2 = int(os.getenv("S_VOL_W2", "2"))
+
+        self.S_RSI_T1 = int(os.getenv("S_RSI_T1", "35"))
+        self.S_RSI_W1 = int(os.getenv("S_RSI_W1", "1"))
+        self.S_RSI_T2 = int(os.getenv("S_RSI_T2", "25"))
+        self.S_RSI_W2 = int(os.getenv("S_RSI_W2", "2"))
+
+        self.S_BUY_T1 = int(os.getenv("S_BUY_T1", "25"))
+        self.S_BUY_W1 = int(os.getenv("S_BUY_W1", "1"))
+        self.S_BUY_T2 = int(os.getenv("S_BUY_T2", "10"))
+        self.S_BUY_W2 = int(os.getenv("S_BUY_W2", "2"))
+
+        self.SC_RULES_LONG = {
+            "trend": {
+                "macd_hist": [
+                    (self.L_MACD_T1, self.L_MACD_W1),
+                    (self.L_MACD_T2, self.L_MACD_W2),
+                    (self.L_MACD_T4, self.L_MACD_W4),
+                ],
+                "cvd_delta_slope": [
+                    (self.L_CVD_T1, self.L_CVD_W1),
+                    (self.L_CVD_T2, self.L_CVD_W2),
+                ],
+                "bid_ask_imbalance": [(self.L_IMBAL_T1, self.L_IMBAL_W1)],
+                "nofi_1m": [(self.L_NOFI_T1, self.L_NOFI_W1)],
+                "open_interest": [(self.L_OI_T1, self.L_OI_W1), (self.L_OI_T2, self.L_OI_W2)],
+                "tick_count": [(self.L_TICK_T1, self.L_TICK_W1)],
+                "log_volume_zscore": [(self.L_VOL_T1, self.L_VOL_W1, "val")],
+            },
+            "mean_reversion": {
+                "rsi": [],
+                "buy_ratio": [(self.L_BUY_T1, self.L_BUY_W1)],
+            },
+        }
+
+        self.SC_RULES_SHORT = {
+            "trend": {
+                "macd_hist": [
+                    (self.S_MACD_T1, self.S_MACD_W1),
+                    (self.S_MACD_T2, self.S_MACD_W2),
+                    (self.S_MACD_T4, self.S_MACD_W4),
+                ],
+                "cvd_delta_slope": [
+                    (self.S_CVD_T1, self.S_CVD_W1),
+                    (self.S_CVD_T2, self.S_CVD_W2),
+                ],
+                "bid_ask_imbalance": [
+                    (self.S_IMBAL_T1, self.S_IMBAL_W1),
+                    (self.S_IMBAL_T2, self.S_IMBAL_W2),
+                ],
+                "nofi_1m": [(self.S_NOFI_T1, self.S_NOFI_W1), (self.S_NOFI_T2, self.S_NOFI_W2)],
+                "open_interest": [(self.S_OI_T1, self.S_OI_W1), (self.S_OI_T2, self.S_OI_W2)],
+                "tick_count": [(self.S_TICK_T1, self.S_TICK_W1), (self.S_TICK_T2, self.S_TICK_W2)],
+                "log_volume_zscore": [
+                    (self.S_VOL_T1, self.S_VOL_W1, "val"),
+                    (self.S_VOL_T2, self.S_VOL_W2, "val"),
+                ],
+            },
+            "mean_reversion": {
+                "rsi": [(self.S_RSI_T1, self.S_RSI_W1), (self.S_RSI_T2, self.S_RSI_W2)],
+                "buy_ratio": [(self.S_BUY_T1, self.S_BUY_W1), (self.S_BUY_T2, self.S_BUY_W2)],
+            },
+        }
 
     # 하위 호환 및 환경 부스트/거시 가중치 유지 (규칙 엔진으로 미통합된 항목들)
     SCORING_WEIGHTS = {
