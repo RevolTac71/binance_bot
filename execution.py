@@ -1816,8 +1816,8 @@ class ExecutionEngine:
             return
 
         try:
-            # 바이낸스 선물 계좌 조회
-            balance_info = await self.exchange.fetch_balance()
+            # [V19] 명시적으로 선물(future) 계좌만 조회하여 Margin API 호출 및 타임아웃 방지
+            balance_info = await self.exchange.fetch_balance({"type": "future"})
             usdt_total = balance_info.get("total", {}).get("USDT", 0.0)
 
             # 보유 선물 포지션 조회 (CCXT fetch_positions)

@@ -5,6 +5,7 @@ import psutil
 from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.request import HTTPXRequest
 from config import settings, logger, update_env_variable
 
 START_TIME = datetime.utcnow() + timedelta(hours=9)
@@ -141,7 +142,8 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     minutes = (seconds % 3600) // 60
 
     try:
-        balance_info = await execution.exchange.fetch_balance()
+        # [V19] 명시적으로 선물(future) 계좌만 조회하여 Margin API 호출 및 타임아웃 방지
+        balance_info = await execution.exchange.fetch_balance({"type": "future"})
         capital = balance_info.get("total", {}).get("USDT", 0.0)
     except Exception as e:
         capital = "조회 실패"
@@ -797,7 +799,9 @@ def setup_telegram_bot(execution_engine, refresh_event=None):
         )
         return None
 
-    application = ApplicationBuilder().token(token).build()
+    # [V19] 네트워크 불안정 및 RemoteProtocolError 대응을 위한 타임아웃 연장 (기본 5s -> 20s)
+    request = HTTPXRequest(connect_timeout=20, read_timeout=20)
+    application = ApplicationBuilder().token(token).request(request).build()
     application.bot_data["execution"] = execution_engine
     application.bot_data["refresh_event"] = refresh_event
 

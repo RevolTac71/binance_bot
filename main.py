@@ -469,7 +469,8 @@ async def process_closed_kline(
         snapshot_queue.append(snapshot)
 
         if decision["signal"]:
-            balance_info = await pipeline.exchange.fetch_balance()
+            # [V19] 명시적으로 선물(future) 계좌만 조회하여 Margin API 호출 및 타임아웃 방지
+            balance_info = await pipeline.exchange.fetch_balance({"type": "future"})
             capital = balance_info.get("total", {}).get("USDT", 0.0)
 
             if settings.DRY_RUN:
