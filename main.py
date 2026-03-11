@@ -11,7 +11,7 @@ import gc
 
 # [V18.5.1] 데이터 부족/정적 데이터로 인한 Numpy 경고(0나누기 등) 전역 억제
 np.seterr(divide="ignore", invalid="ignore")
-from database import check_db_connection, Trade, MarketSnapshot, AsyncSessionLocal
+from database import check_db_connection, TradeLog, MarketSnapshot, AsyncSessionLocal
 from data_pipeline import DataPipeline
 from strategy import StrategyEngine, PortfolioState
 from risk_management import RiskManager
@@ -158,8 +158,6 @@ cvd_data: dict[str, float] = {}
 # 캔들 마감 시점의 CVD 스냅샷 저장 (추세 판단용)
 cvd_history: dict[str, list] = {}
 
-import gc  # [V18] RAM 최적화용 가비지 컬렉터
-
 # [V18 ML] 호가창 불균형(Imbalance) TWAP 내역 및 스냅샷 큐
 imbalance_history: dict[str, list] = {}
 snapshot_queue: list[dict] = []
@@ -240,7 +238,6 @@ async def warm_up_data(symbols: list, pipeline: DataPipeline):
                 )
                 logger.info(f"[{sym}] HTF(1H/15m) 지표 웜업 완료.")
             except Exception as e:
-                import traceback
 
                 logger.error(f"[{sym}] HTF(1H/15m) 지표 웜업 중 치명적 예외 발생: {e}")
                 logger.error(traceback.format_exc())
