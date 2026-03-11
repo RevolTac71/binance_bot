@@ -1096,8 +1096,8 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except SystemExit as e:
-        # sys.exit() 호출 시 발생하는 SystemExit를 조용히 처리 (watchdog이 exit code를 읽음)
-        pass
+        # sys.exit()의 상태 코드를 상위 프로세스로 전달
+        sys.exit(e.code)
     except Exception as e:
         logger.critical(f"봇이 치명적 오류로 종료되었습니다: {e}")
         sys.exit(1)
