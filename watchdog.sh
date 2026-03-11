@@ -4,7 +4,9 @@
 # 경로 및 환경 설정
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 export PATH=$PATH:/usr/local/bin:/usr/bin:/bin
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] ℹ️ Watchdog script started in $SCRIPT_DIR" | tee -a watchdog.log
+exec 2>> "$SCRIPT_DIR/watchdog_error.log"
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] Watchdog script started in $SCRIPT_DIR" | tee -a watchdog.log
 
 source "$SCRIPT_DIR/.env"
 
@@ -23,35 +25,35 @@ RESTART_COUNT=0
 
 while true; do
     TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[$TIMESTAMP] 🚀 봇 시작 시도 (재시작 횟수: $RESTART_COUNT)" | tee -a watchdog.log
+    echo "[$TIMESTAMP] [START] Starting Bot (Restart count: $RESTART_COUNT)" | tee -a watchdog.log
 
     # 봇 실행 (콘솔 출력은 console.log로, 에러 포함)
     python3 main.py >> console.log 2>&1
     EXIT_CODE=$?
 
     TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[$TIMESTAMP] ⚠️ 봇 프로세스 종료 (Exit Code: $EXIT_CODE)" | tee -a watchdog.log
+    echo "[$TIMESTAMP] [EXIT] Bot process finished (Exit Code: $EXIT_CODE)" | tee -a watchdog.log
 
     if [ $EXIT_CODE -eq 0 ]; then
         # 정상 종료 (예: /stop 명령어)
-        MSG="🛑 <b>[봇 정상 종료]</b>&#10;${TIMESTAMP}&#10;Exit Code: 0&#10;자동 재시작을 중지합니다."
+        MSG="<b>[BOT EXIT]</b>&#10;${TIMESTAMP}&#10;Exit Code: 0&#10;Stopping watchdog."
         send_telegram "$MSG"
-        echo "[$TIMESTAMP] ✅ 정상 종료 감지. Watchdog을 종료합니다." | tee -a watchdog.log
+        echo "[$TIMESTAMP] [INFO] Normal exit detected. Stopping watchdog." | tee -a watchdog.log
         break
     elif [ $EXIT_CODE -eq 42 ]; then
         # 의도된 재시작 (텔레그램 /restart 커맨드)
-        echo "[$TIMESTAMP] 🔄 사용자의 /restart 명령어 감지. 3초 후 재기동합니다..." | tee -a watchdog.log
+        echo "[$TIMESTAMP] [RESTART] /restart command detected. Restarting in 3 sec..." | tee -a watchdog.log
         sleep 3
     elif [ $EXIT_CODE -eq 143 ]; then
         # 외부 요인에 의한 강제 종료 (SIGTERM)
-        echo "[$TIMESTAMP] ⏹️ 외부 종료 신호(SIGTERM/143) 수신. 자동 재시작을 생략합니다." | tee -a watchdog.log
+        echo "[$TIMESTAMP] [TERM] External SIGTERM/143 received. Stopping watchdog." | tee -a watchdog.log
         break
     else
         # 비정상 종료 (크래시)
         RESTART_COUNT=$((RESTART_COUNT + 1))
-        MSG="🚨 <b>[봇 크래시 감지]</b>&#10;${TIMESTAMP}&#10;Exit Code: ${EXIT_CODE}&#10;재시작 횟수: ${RESTART_COUNT}&#10;5초 후 자동 재시작합니다..."
+        MSG="🚨 <b>[BOT CRASH]</b>&#10;${TIMESTAMP}&#10;Exit Code: ${EXIT_CODE}&#10;Restart Count: ${RESTART_COUNT}&#10;Restarting in 5 sec..."
         send_telegram "$MSG"
-        echo "[$TIMESTAMP] 🔥 비정상 종료 발생. 5초 후 재시작 시도 (횟수: $RESTART_COUNT)..." | tee -a watchdog.log
+        echo "[$TIMESTAMP] [CRASH] Abnormal exit. Restarting in 5 sec (Count: $RESTART_COUNT)..." | tee -a watchdog.log
         sleep 5
     fi
 done
