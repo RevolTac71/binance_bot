@@ -499,6 +499,16 @@ class StrategyEngine:
         mtf_regime_str = mtf.get("regime", "RANGE")
 
         percentiles["atr_boost_flag"] = atr_boost_flag
+
+        # 펀딩비 방향성 일치 여부 산출 (LONG 기준: 역펀딩비 -1일 때 보너스)
+        fr_val = hft_features.get("funding_rate", 0.0) if hft_features else 0.0
+        fr_match = 0
+        if fr_val > 0:
+            fr_match = 1
+        elif fr_val < 0:
+            fr_match = -1
+        percentiles["funding_rate_match"] = fr_match
+
         percentiles["htf_bias"] = (
             1 if htf_bias_str == "BULL" else (-1 if htf_bias_str == "BEAR" else 0)
         )

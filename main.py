@@ -415,6 +415,7 @@ async def process_closed_kline(
                     "open_interest": oi,
                     "funding_rate": funding,
                     "tick_count": hft_pipe.get_recent_tick_count(raw_sym),
+                    "nofi_1m": hft_pipe.get_recent_nofi(raw_sym),  # 신규 추가
                 }
             except Exception as hft_err:
                 logger.warning(f"[{symbol}] HFT 피처 조회 중 일시적 오류: {hft_err}")
@@ -435,12 +436,12 @@ async def process_closed_kline(
             "cvd_15m_sum": float(cvd_15m_delta),
             "cvd_delta_slope": float(cvd_slope),
             "bid_ask_imbalance": float(twap_imbalance),
-            "funding_rate_match": fr_match,
-            "log_vol_zscore": float(df_ind.iloc[-1].get("Log_Vol_ZScore", 0.0)),
+            "funding_rate_match": int(fr_match),  # 필드명 및 타입 수정
+            "log_vol_zscore": float(
+                df_ind.iloc[-1].get("Log_Vol_ZScore", 0.0)
+            ),  # 명칭 단축
             "correlation_max": float(max_corr),
-            # [V18.2] HFT 피처 명시적 추가
-            "open_interest": float(hft_feats.get("open_interest", 0.0)),
-            "tick_count": int(hft_feats.get("tick_count", 0)),
+            "nofi_1m": float(hft_feats.get("nofi_1m", 0.0)),  # 필드 추가
         }
 
         # 3. [V18.1] 신규 진입 필터 (데이터 업데이트 이후 수행)
@@ -464,35 +465,9 @@ async def process_closed_kline(
         )
 
         # 3. [V18] 스코어 및 확장 피처를 MarketSnapshot에 기록 (DB 적재용)
-        snapshot["nofi_1m"] = decision.get("nofi_1m", 0.0)
         snapshot["buy_ratio"] = decision.get("buy_ratio", 0.5)
         snapshot["long_score"] = decision.get("long_score")
         snapshot["short_score"] = decision.get("short_score")
-
-        # [V18.4] 신규 파라미터 스냅샷 추가
-        snapshot["timeframe"] = getattr(settings, "TIMEFRAME", "3m")
-        snapshot["min_score_long"] = getattr(settings, "MIN_SCORE_LONG", 16)
-        snapshot["min_score_short"] = getattr(settings, "MIN_SCORE_SHORT", 16)
-
-        # [V18.5] 세분화된 익절 모드 스냅샷
-        snapshot["long_tp_mode"] = getattr(settings, "LONG_TP_MODE", "ATR")
-        snapshot["long_sl_mode"] = getattr(settings, "LONG_SL_MODE", "ATR")
-        snapshot["short_tp_mode"] = getattr(settings, "SHORT_TP_MODE", "PERCENT")
-        snapshot["short_sl_mode"] = getattr(settings, "SHORT_SL_MODE", "ATR")
-
-        snapshot["long_tp_mult"] = getattr(settings, "LONG_TP_MULT", 5.0)
-        snapshot["long_sl_mult"] = getattr(settings, "LONG_SL_MULT", 1.5)
-        snapshot["short_tp_mult"] = getattr(settings, "SHORT_TP_MULT", 5.0)
-        snapshot["short_sl_mult"] = getattr(settings, "SHORT_SL_MULT", 1.5)
-
-        # 퍼센트 기반 설정
-        snapshot["long_tp_pct"] = getattr(settings, "LONG_TP_PCT", 0.05)
-        snapshot["long_sl_pct"] = getattr(settings, "LONG_SL_PCT", 0.02)
-        snapshot["short_tp_pct"] = getattr(settings, "SHORT_TP_PCT", 0.03)
-        snapshot["short_sl_pct"] = getattr(settings, "SHORT_SL_PCT", 0.015)
-
-        snapshot["fee_rate"] = getattr(settings, "FEE_RATE", 0.00045)
-        snapshot["macd_filter_enabled"] = getattr(settings, "MACD_FILTER_ENABLED", True)
 
         snapshot_queue.append(snapshot)
 

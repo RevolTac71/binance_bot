@@ -10,25 +10,6 @@ from datetime import datetime
 Base = declarative_base()
 
 
-class Trade(Base):
-    __tablename__ = "trades"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp = Column(DateTime)
-    action = Column(String(50))  # 'BUY' or 'SELL', 'PARTIAL_CLOSED' 등의 구분자
-    symbol = Column(String(50))  # 예: 'BTC/USDT:USDT'
-    price = Column(Float)
-    quantity = Column(Float)
-    realized_pnl = Column(Float, nullable=True)  # 실현손익 (청산 시에만 기록)
-    reason = Column(Text)  # 진입/청산 사유
-    dry_run = Column(Boolean, default=True)  # 테스트 거래 여부 구분자
-    # 거래 당시의 전략 파라미터 스냅샷 (JSON 문자열)
-    # 예: {"k_value": 2.0, "vol_mult": 1.5, "atr_ratio": 1.2, "leverage": 10, "timeframe": "3m", ...}
-    params = Column(Text, nullable=True)
-    # 진입 시점의 시장 지표 스냅샷 (JSONB 형식으로 저장하여 PostgreSQL 내부 검색/인덱싱 최적화)
-    market_data = Column(JSONB, nullable=True)
-
-
 # ==========================================
 # [V18 ML Data Pipeline Models]
 # ==========================================
@@ -64,47 +45,19 @@ class MarketSnapshot(Base):
     bid_ask_imbalance = Column(Float, nullable=True)  # TWAP 30s
 
     # 4. 기타 시장 정보
-    funding_rate_match = Column(Integer, nullable=True)  # 1(일치), 0(불일치), -1(반대)
+    funding_rate_match = Column(
+        Integer, nullable=True
+    )  # [V18.6] 1(양수), 0, -1(음수) 매칭 필드
 
     # 5. V18 확장 피처
     log_vol_zscore = Column(Float, nullable=True)  # 로그 변환 거래량 Z-Score
     correlation_max = Column(Float, nullable=True)  # 동조화 최대 상관계수
+    nofi_1m = Column(Float, nullable=True)  # [V18.6] 정문화된 Order Flow Imbalance
 
     # 6. V18 스코어링 피처
-    nofi_1m = Column(Float, nullable=True)
     buy_ratio = Column(Float, nullable=True)
     long_score = Column(Integer, nullable=True)
     short_score = Column(Integer, nullable=True)
-
-    # 7. V18.2 HFT 확장 피처 (추가)
-    open_interest = Column(Float, nullable=True)
-    tick_count = Column(Integer, nullable=True)
-
-    # 8. V18.5 전략 파라미터 스냅샷 (추가 및 통합)
-    timeframe = Column(String(10), index=True)
-    fee_rate = Column(Float, nullable=True)
-    min_score_long = Column(Integer, nullable=True)
-    min_score_short = Column(Integer, nullable=True)
-
-    # 익절/손절 개별 모드 (ATR or PERCENT)
-    long_tp_mode = Column(String(20), nullable=True)
-    long_sl_mode = Column(String(20), nullable=True)
-    short_tp_mode = Column(String(20), nullable=True)
-    short_sl_mode = Column(String(20), nullable=True)
-
-    # 배율 (ATR)
-    long_tp_mult = Column(Float, nullable=True)
-    long_sl_mult = Column(Float, nullable=True)
-    short_tp_mult = Column(Float, nullable=True)
-    short_sl_mult = Column(Float, nullable=True)
-
-    # 비율 (PERCENT)
-    long_tp_pct = Column(Float, nullable=True)
-    long_sl_pct = Column(Float, nullable=True)
-    short_tp_pct = Column(Float, nullable=True)
-    short_sl_pct = Column(Float, nullable=True)
-
-    macd_filter_enabled = Column(Boolean, nullable=True)
 
 
 class TradeLog(Base):
@@ -118,6 +71,7 @@ class TradeLog(Base):
     trade_id = Column(Integer, primary_key=True, autoincrement=True)
     symbol = Column(String(50), index=True)
     direction = Column(String(20))  # 'LONG' or 'SHORT'
+    action = Column(String(50), nullable=True)  # 'BUY', 'SELL', 'PARTIAL_CLOSED' 등
     qty = Column(Float)
 
     # 진입 스펙
@@ -145,8 +99,9 @@ class TradeLog(Base):
     tp_price = Column(Float, nullable=True)
     sl_price = Column(Float, nullable=True)
 
-    # [V18.2] 진입 시점의 시장 지표 스냅샷 (추가)
+    # [V18.2] 진입 시점의 시장 지표 스냅샷 및 파라미터 캡처
     market_data = Column(JSONB, nullable=True)
+    params = Column(Text, nullable=True)
 
     # 지연 모델링 레이블 (MFE, MAE 및 수익률) - Offline 배치로 UPDATE 됨
     mfe = Column(
@@ -211,8 +166,10 @@ async def check_db_connection():
     """
     try:
         async with AsyncSessionLocal() as session:
-            await session.execute(text("SELECT 1 FROM trades LIMIT 1"))
-            logger.info("Supabase 연결 점검 및 테이블(trades, trade_logs) 준비 완료.")
+            await session.execute(text("SELECT 1 FROM trade_logs LIMIT 1"))
+            logger.info(
+                "Supabase 연결 점검 및 테이블(trade_logs, market_snapshots) 준비 완료."
+            )
             return True
     except Exception as e:
         logger.error(f"DB 초기 연결 혹은 테이블 접근 실패. 상세: {e}")

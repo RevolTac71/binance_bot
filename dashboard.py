@@ -20,7 +20,7 @@ def load_data():
     engine = create_engine(sync_uri)
     try:
         trades_df = pd.read_sql(
-            "SELECT * FROM trades ORDER BY timestamp DESC LIMIT 100", engine
+            "SELECT * FROM trade_logs ORDER BY entry_time DESC LIMIT 100", engine
         )
         balance_df = pd.read_sql(
             "SELECT * FROM balance_history ORDER BY timestamp ASC LIMIT 500", engine
@@ -46,11 +46,13 @@ else:
 st.divider()
 
 # 2. 거래 체결 기록
-st.header("최근 체결 / 포지션 등록 기록")
+st.header("최근 체결 / 포지션 등록 기록 (trade_logs)")
 if not trades.empty:
     col1, col2 = st.columns([1, 3])
     with col1:
-        action_filter = st.selectbox("Action 조건", options=["ALL", "BUY", "SELL"])
+        action_filter = st.selectbox(
+            "Action 조건", options=["ALL", "LONG", "SHORT", "PARTIAL_CLOSED", "CLOSED"]
+        )
     with col2:
         pass  # 빈 공간 여백
 

@@ -71,9 +71,14 @@ async def run_offline_labeling(dry_run: bool = False):
     try:
         async with AsyncSessionLocal() as session:
             # 타겟: 청산이 완료(exit_time 존재)되었으나, 라벨 데이터(mfe 등)가 None인 거래
+            # [V19] 히스토리성 보조 레코드(PARTIAL_CLOSED, CLOSED 등)를 제외하고 진입 메인 레코드만 타겟
             stmt = (
                 select(TradeLog)
-                .where(TradeLog.exit_time.is_not(None), TradeLog.mfe.is_(None))
+                .where(
+                    TradeLog.exit_time.is_not(None),
+                    TradeLog.mfe.is_(None),
+                    TradeLog.action.in_(["LONG", "SHORT", "ENTRY"]),
+                )
                 .order_by(TradeLog.entry_time.asc())
             )
 
@@ -157,14 +162,26 @@ async def run_offline_labeling(dry_run: bool = False):
                 p30 = get_price_after(30)
 
                 if p5:
-                    t.price_5m = p5
+                    t.ret_5m = (
+                        (p5 - entry_price) / entry_price * 100
+                        if t.direction == "LONG"
+                        else (entry_price - p5) / entry_price * 100
+                    )
                 if p15:
-                    t.price_15m = p15
+                    t.ret_15m = (
+                        (p15 - entry_price) / entry_price * 100
+                        if t.direction == "LONG"
+                        else (entry_price - p15) / entry_price * 100
+                    )
                 if p30:
-                    t.price_30m = p30
+                    t.ret_30m = (
+                        (p30 - entry_price) / entry_price * 100
+                        if t.direction == "LONG"
+                        else (entry_price - p30) / entry_price * 100
+                    )
 
                 logger.info(
-                    f"[{t.id}] {symbol} 완료: MFE={mfe:.2f}%, MAE={mae:.2f}% / p5={p5}"
+                    f"[{t.trade_id}] {symbol} 완료: MFE={mfe:.2f}%, MAE={mae:.2f}% / ret5={t.ret_5m if p5 else 'N/A'}"
                 )
 
             if not dry_run:

@@ -3,7 +3,7 @@ import json
 import time
 from datetime import datetime, timezone, timedelta
 from config import settings, logger
-from database import Trade, TradeLog, AsyncSessionLocal
+from database import TradeLog, AsyncSessionLocal
 from sqlalchemy.future import select
 from data_pipeline import DataPipeline
 from notification import notifier
@@ -703,20 +703,26 @@ class ExecutionEngine:
             if not settings.DRY_RUN and order_id != "DRY_RUN_ID":
                 await self.exchange.cancel_order(order_id, symbol)
 
-            # DB에 취소 기록 남기기
+            # DB에 취소 기록 남기기 (히스토리용)
             try:
                 async with AsyncSessionLocal() as session:
-                    new_trade = Trade(
-                        timestamp=(datetime.utcnow() + timedelta(hours=9)),
+                    new_log = TradeLog(
+                        entry_time=(datetime.utcnow() + timedelta(hours=9)),
+                        exit_time=(datetime.utcnow() + timedelta(hours=9)),
                         action="CANCELED",
                         symbol=symbol,
-                        price=order_info.get("limit_price", 0.0),
-                        quantity=order_info.get("amount", 0.0),
-                        reason=f"진입 주문 취소: {reason}",
+                        direction=order_info.get("signal", "UNKNOWN"),
+                        target_price=order_info.get("limit_price", 0.0),
+                        execution_price=order_info.get("limit_price", 0.0),
+                        slippage=0.0,
+                        execution_time_ms=0,
+                        qty=order_info.get("amount", 0.0),
+                        entry_reason=f"진입 주문 취소: {reason}",
                         realized_pnl=0.0,
                         dry_run=settings.DRY_RUN,
+                        params=self._snapshot_params(),
                     )
-                    session.add(new_trade)
+                    session.add(new_log)
                     await session.commit()
             except Exception as db_err:
                 logger.error(f"[{symbol}] 주문 취소 DB 기록 중 에러 (무시됨): {db_err}")
@@ -782,42 +788,25 @@ class ExecutionEngine:
                 dr_prefix = "[DRY_RUN] " if settings.DRY_RUN else ""
                 now_kst = datetime.utcnow() + timedelta(hours=9)
 
-                # 기존 봇 호환용 Trade 모델
-                new_trade = Trade(
-                    timestamp=now_kst,
-                    action=signal_type,
-                    symbol=symbol,
-                    price=entry_price,
-                    quantity=total_amount,
-                    reason=f"{dr_prefix}V18 시장가/추격 진입 완료 (분할TP {partial_ratio * 100:.0f}%)",
-                    dry_run=settings.DRY_RUN,
-                    params=self._snapshot_params(),
-                    market_data=entry_info.get("market_data"),
-                )
-                session.add(new_trade)
-
-                # [V18] ML 파이프라인 전용 TradeLog 모델
+                # [V19] 모든 기록을 TradeLog로 단일화
                 new_tradelog = TradeLog(
                     symbol=symbol,
                     direction=signal_type,
+                    action=signal_type,  # 'LONG' or 'SHORT'
                     qty=total_amount,
                     entry_time=now_kst,
                     target_price=entry_price,
                     execution_price=entry_price,
                     slippage=0.0,
-                    entry_reason=entry_info.get("reason", "자동 진입"),
+                    entry_reason=f"{dr_prefix}V18 시장가/추격 진입 완료 (분할TP {partial_ratio * 100:.0f}%)",
                     execution_time_ms=entry_info.get("execution_time_ms", 0),
-                    # [V18.1] 영속화 필드 저장
                     dry_run=settings.DRY_RUN,
                     tp_price=tp_price,
                     sl_price=sl_price,
-                    # [V18.2] ML 파이프라인 학습용 시장 맥락 데이터 추가
                     market_data=entry_info.get("market_data"),
-                    # exit 관련은 NULL 유지
+                    params=self._snapshot_params(),
                 )
                 session.add(new_tradelog)
-                session.add(new_trade)
-
                 await session.commit()
 
             # TP 수량 정밀도 보정 및 최소 수량(minQty) 체크
@@ -1023,17 +1012,23 @@ class ExecutionEngine:
                             f"[{sym}] 수동/외부 진입 감지. 봇 메모리에 편입합니다."
                         )
                         async with AsyncSessionLocal() as session:
-                            new_trade = Trade(
-                                timestamp=(datetime.utcnow() + timedelta(hours=9)),
+                            new_log = TradeLog(
+                                entry_time=(datetime.utcnow() + timedelta(hours=9)),
+                                exit_time=None,
                                 action="MANUAL",
                                 symbol=sym,
-                                price=entry_price,
-                                quantity=contracts,
-                                reason=f"외부/수동 진입 감지 ({side})",
+                                direction=side,
+                                target_price=entry_price,
+                                execution_price=entry_price,
+                                slippage=0.0,
+                                execution_time_ms=0,
+                                qty=contracts,
+                                entry_reason=f"외부/수동 진입 감지 ({side})",
                                 realized_pnl=0.0,
                                 dry_run=settings.DRY_RUN,
+                                params=self._snapshot_params(),
                             )
-                            session.add(new_trade)
+                            session.add(new_log)
                             await session.commit()
 
                         await notifier.send_message(
@@ -1184,22 +1179,34 @@ class ExecutionEngine:
                                             "is_partial_tp_done"
                                         ] = True
 
-                                    # [V18.2] Trade 테이블에 분할 익절 내역 기록 추가 (모의투자와 동기화)
-                                    new_trade = Trade(
-                                        timestamp=(
+                                    # [V19] TradeLog 테이블에 분할 익절 내역 기록 추가 (히스토리용 별도 레코드 생성)
+                                    new_log = TradeLog(
+                                        entry_time=(
+                                            datetime.utcnow() + timedelta(hours=9)
+                                        ),
+                                        exit_time=(
                                             datetime.utcnow() + timedelta(hours=9)
                                         ),
                                         action="PARTIAL_CLOSED",
                                         symbol=symbol,
-                                        price=self.active_positions[symbol].get(
+                                        direction=self.active_positions[symbol].get(
+                                            "signal"
+                                        ),
+                                        target_price=self.active_positions[symbol].get(
                                             "tp_price", 0.0
                                         ),
-                                        quantity=prev_qty - current_contracts,
-                                        reason="분할 익절(Partial TP) 체결 감지",
+                                        execution_price=self.active_positions[
+                                            symbol
+                                        ].get("tp_price", 0.0),
+                                        slippage=0.0,
+                                        execution_time_ms=0,
+                                        qty=prev_qty - current_contracts,
+                                        entry_reason="분할 익절(Partial TP) 체결 감지",
                                         realized_pnl=partial_pnl,
                                         dry_run=False,
+                                        params=self._snapshot_params(),
                                     )
-                                    session.add(new_trade)
+                                    session.add(new_log)
                                     await session.commit()
 
                                     logger.info(
@@ -1422,18 +1429,25 @@ class ExecutionEngine:
 
                     async with AsyncSessionLocal() as session:
                         now_kst = datetime.utcnow() + timedelta(hours=9)
-                        new_trade = Trade(
-                            timestamp=now_kst,
+                        new_hist = TradeLog(
+                            entry_time=now_kst,
+                            exit_time=now_kst,
                             action="CLOSED",
                             symbol=symbol,
-                            price=close_price,
-                            quantity=close_qty,
-                            reason=exit_reason,
+                            direction=pos_mem.get("signal", "UNKNOWN")
+                            if pos_mem
+                            else "UNKNOWN",
+                            target_price=close_price,
+                            execution_price=close_price,
+                            slippage=0.0,
+                            execution_time_ms=0,
+                            qty=close_qty,
+                            entry_reason=f"청산 완료: {exit_reason}",
                             realized_pnl=realized_pnl,
                             dry_run=settings.DRY_RUN,
                             params=self._snapshot_params(),
                         )
-                        session.add(new_trade)
+                        session.add(new_hist)
 
                         # [V18] 기존 TradeLog 찾아 청산/성과 데이터 업데이트
                         if not settings.DRY_RUN:
@@ -1591,20 +1605,26 @@ class ExecutionEngine:
                 f"🚀 [{symbol}] {reason} 시장가 주문 완료. (수량: {final_amount})"
             )
 
-            # 4. DB 기록 (부분 청산인 경우 Trade 테이블만, 전량인 경우 루프에서 처리)
+            # 4. DB 기록 (부분 청산인 경우 히스토리용 TradeLog, 전량인 경우 루프에서 처리)
             # (여기서는 주문만 날리고, 실제 메모리 정리는 check_active_positions_state 폴링에 맡김)
             async with AsyncSessionLocal() as session:
-                new_trade = Trade(
-                    timestamp=(datetime.utcnow() + timedelta(hours=9)),
+                new_log = TradeLog(
+                    entry_time=(datetime.utcnow() + timedelta(hours=9)),
+                    exit_time=(datetime.utcnow() + timedelta(hours=9)),
                     action="CLOSED" if amount <= 0 else "PARTIAL_CLOSED",
                     symbol=symbol,
-                    price=0.0,  # 나중에 싱크됨
-                    quantity=final_amount,
-                    reason=reason,
+                    direction=side,
+                    target_price=0.0,
+                    execution_price=0.0,  # 나중에 싱크됨
+                    slippage=0.0,
+                    execution_time_ms=0,
+                    qty=final_amount,
+                    entry_reason=reason,
                     realized_pnl=0.0,
                     dry_run=False,
+                    params=self._snapshot_params(),
                 )
-                session.add(new_trade)
+                session.add(new_log)
                 await session.commit()
 
             await notifier.send_message(
@@ -1634,6 +1654,8 @@ class ExecutionEngine:
             pos_info = self.active_positions[symbol]
             realized_pnl = 0.0
             close_qty = 0.0
+            signal = "UNKNOWN"
+            amount = 0.0
 
             # 가상 종가가 주어지지 않았을 경우 현재가 조회
             if close_price <= 0.0:
@@ -1680,21 +1702,29 @@ class ExecutionEngine:
 
             async with AsyncSessionLocal() as session:
                 logger.info(
-                    f"🧪 [DRY RUN] Trade Insert 준비: realized_pnl={realized_pnl:.4f}, close_price={close_price:.4f}"
+                    f"🧪 [DRY RUN] TradeLog 기록 준비: realized_pnl={realized_pnl:.4f}, close_price={close_price:.4f}"
                 )
                 now_kst = datetime.utcnow() + timedelta(hours=9)
-                new_trade = Trade(
-                    timestamp=now_kst,
-                    action="CLOSED",
+
+                # [V19] DRY_RUN 종료 기록은 기존 TradeLog 업데이트와 신규 로그 생성을 병행하거나 통합 관리
+                # 여기서는 '전체 청결'을 의미하는 신규 레코드를 하나 더 남겨 히스토리 보존 (기존 방식 Trade 대체)
+                new_hist = TradeLog(
+                    entry_time=now_kst,
+                    exit_time=now_kst,
+                    action="PARTIAL_CLOSED" if partial else "CLOSED",
                     symbol=symbol,
-                    price=close_price,
-                    quantity=close_qty,
-                    reason=f"[DRY_RUN] {reason}",
+                    direction=signal,
+                    target_price=close_price,
+                    execution_price=close_price,
+                    slippage=0.0,
+                    execution_time_ms=0,
+                    qty=close_qty,
+                    entry_reason=f"[DRY_RUN] {reason}",
                     realized_pnl=realized_pnl,
                     dry_run=True,
                     params=self._snapshot_params(),
                 )
-                session.add(new_trade)
+                session.add(new_hist)
 
                 # ML Pipeline 전용 TradeLog 업데이트
                 try:

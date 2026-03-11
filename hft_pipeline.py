@@ -60,6 +60,7 @@ class HFTDataPipeline:
         # V18: OI/펀딩비 5분 캐시 (Rate Limit 회피)
         self._derivatives_cache = {}  # {sym: (oi, funding)}
         self._derivatives_last_fetch = 0  # UTC timestamp
+        self._nofi_cache = {}  # {sym: last_nofi}
 
         # Initialize deques for each symbol
         for sym in self.symbols:
@@ -145,6 +146,11 @@ class HFTDataPipeline:
         if sym in self.trade_buffer:
             return len(self.trade_buffer[sym])
         return 0
+
+    def get_recent_nofi(self, symbol: str) -> float:
+        """최근 계산된 NOFI(Normalized OFI) 값 반환 (main.py 스냅샷용)"""
+        sym = symbol.lower().replace("/", "").replace(":usdt", "")
+        return self._nofi_cache.get(sym, 0.0)
 
     # ── 2.5 V18: OI/펀딩비 5분 캐시 조회 ──
     async def _fetch_single_derivatives(self, sym: str) -> tuple:
@@ -274,7 +280,7 @@ class HFTDataPipeline:
             if std_val > 0:
                 log_vol_zscore = float((log_vol - mean_val) / std_val)
 
-        # Pydantic 스키마 검증 후 features JSONB 구성
+        # features JSONB 구성
         features_dict = HFTFeatures1m(
             ofi_1m=float(ofi),
             nofi_1m=float(nofi),
@@ -285,6 +291,9 @@ class HFTDataPipeline:
             spread_avg=spread_avg,
             log_volume_zscore=log_vol_zscore,
         ).model_dump()
+
+        # [V18.6] main.py 스냅샷 연동을 위한 NOFI 캐시 업데이트
+        self._nofi_cache[sym] = float(nofi)
 
         return {
             "symbol": sym.upper(),
