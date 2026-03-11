@@ -1,8 +1,11 @@
 #!/bin/bash
 # watchdog.sh - 봇 크래시 시 텔레그램 알림 후 자동 재시작
 
-# .env에서 텔레그램 설정 로드
+# 경로 및 환경 설정
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+export PATH=$PATH:/usr/local/bin:/usr/bin:/bin
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] ℹ️ Watchdog script started in $SCRIPT_DIR" | tee -a watchdog.log
+
 source "$SCRIPT_DIR/.env"
 
 send_telegram() {
