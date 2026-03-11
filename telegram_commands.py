@@ -88,19 +88,16 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     elif category == "trade":
         msg = (
-            "💰 [체결 및 사이징 설정]\n"
+            "💰 <b>[체결 및 사이징 설정]</b>\n"
             "베팅 비중과 체결 방식에 관한 설정입니다.\n\n"
-            "risk        베팅 비중 (계좌 대비 %, 0.01 = 1%)\n"
-            "leverage    레버리지 배수 (int)\n"
-            "mode        dry(모의) 또는 real(실전)\n"
-            "kelly       켈리 사이징 사용 (on/off)\n"
-            "kelly_min   켈리 계산용 최소 거래수 (20)\n"
-            "kelly_max   켈리 최대 베팅 상한 (0.05)\n"
-            "chasing     지정가 체결 대기 시간 (초)\n"
-            "refresh     종목 리프레시 주기 (시간 단위, 3)\n"
-            "timeframe   메인 분석 봉 (예: 3m)\n"
-            "htf_1h      장기 분석 봉 (예: 1h)\n"
-            "htf_15m     중기 분석 봉 (예: 15m)"
+            "▫ <code>risk</code> : 베팅 비중 (계좌 대비 %, 0.01 = 1%)\n"
+            "▫ <code>leverage</code> : 레버리지 배수\n"
+            "▫ <code>mode</code> : dry(모의) 또는 real(실전)\n"
+            "▫ <code>kelly</code> : 켈리 사이징 사용 (on/off)\n"
+            "▫ <code>chasing</code> : 지정가 체결 대기 시간 (초)\n"
+            "▫ <code>refresh</code> : 종목 리프레시 주기 (시간 단위)\n"
+            "▫ <code>timeframe</code> : 메인 분석 봉 (예: 3m)\n"
+            "▫ <code>htf_1h</code> / <code>htf_15m</code> : 중장기 분석 봉"
         )
     elif category == "risk":
         msg = (
@@ -160,615 +157,208 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 entry_price = float(p.get("entryPrice", 0))
                 mark_price = float(p.get("markPrice", 0))
                 leverage = p.get("leverage", 1)
-                unrealized_pnl = float(p.get("unrealizedPnl", 0))
-                percentage = p.get("percentage")
-
-                # ccxt percentage가 제공되지 않을 경우 수동 계산: (미실현 손익 / (포지션 규모 / 레버리지)) * 100
-                if percentage is None or percentage == 0:
-                    cost = (amt * entry_price) / float(leverage) if leverage else 0
-                    percentage = (unrealized_pnl / cost * 100) if cost > 0 else 0
-
-                side_str = "🟢LONG" if side == "long" else "🔴SHORT"
-
-                detail = (
-                    f"[{sym}] {side_str} ({leverage}x)\n"
-                    f" ├ 진입가: {entry_price:.4f}\n"
-                    f" ├ 현재가: {mark_price:.4f}\n"
-                    f" └ 수익률: {unrealized_pnl:.2f} USDT ({percentage:.2f}%)"
+                pnl = float(p.get("unrealizedPnl", 0))
+                roe = (pnl / (entry_price * amt / leverage)) * 100 if entry_price > 0 else 0
+                active_pos_list.append(
+                    f"▫<b>{sym}</b> ({side.upper()} {leverage}x)\n"
+                    f"  진입: {entry_price:.4f} / 수익: {pnl:+.2f} USDT ({roe:+.2f}%)"
                 )
-                active_pos_list.append(detail)
-
-        if active_pos_list:
-            position_details = "\n\n".join(active_pos_list)
-        else:
-            position_details = "활성 포지션 없음"
+        position_details = "\n".join(active_pos_list) if active_pos_list else "현재 보유 포지션 없음"
     except Exception as e:
-        position_details = f"포지션 상세 조회 실패: {e}"
-
-    mode = "DRY_RUN (모의투자)" if settings.DRY_RUN else "REAL (실전 매매)"
-    status_str = "일시정지됨 ⏸️" if settings.IS_PAUSED else "가동 중 🟢"
+        position_details = f"조회 오류: {e}"
 
     msg = (
-        f"📊 [봇 상태 요약]\n"
-        f"── 시스템 ──\n"
-        f"매매 모드 : {mode}\n"
-        f"봇 동작  : {status_str}\n"
-        f"생존 시간 : {days}일 {hours}시간 {minutes}분\n"
-        f"전체 잔고  : {capital} USDT\n"
-        f"기동 포지션: {len(execution.active_positions)}개 | "
-        f"대기 주문: {len(execution.pending_entries)}개\n\n"
-        f"── 서버 상태 (System) ──\n"
-        f"CPU 사용률: {psutil.cpu_percent(interval=0.1)}%\n"
-        f"메모리 사용: {psutil.virtual_memory().percent}%\n"
-        f"감시 종목 수: {len(getattr(settings, 'CURRENT_TARGET_SYMBOLS', []))}개\n\n"
-        f"── 현재 감시 중인 종목 목록 ──\n"
-        f"{', '.join(getattr(settings, 'CURRENT_TARGET_SYMBOLS', ['아직 결정되지 않음']))[:200]}...\n\n"
-        f"── 블랙리스트 (차단됨) ──\n"
-        f"{', '.join(execution.blacklist) if execution.blacklist else '없음'}\n\n"
-        f"── 현재 포지션 (실제 거래소) ──\n"
-        f"{position_details}"
+        f"📊 <b>실시간 봇 상태 리포트</b>\n"
+        f"──────────────────\n"
+        f"🕒 <b>Uptime</b>: {days}일 {hours}시간 {minutes}분\n"
+        f"💰 <b>USDT 잔고</b>: {capital:,.2f} USDT\n"
+        f"🚦 <b>신규 진입</b>: {'✅ ACTIVE' if not settings.PAUSED else '⚠️ PAUSED'}\n"
+        f"──────────────────\n"
+        f"📦 <b>보유 포지션</b>:\n{position_details}"
     )
-    await update.message.reply_text(msg)
+    await update.message.reply_text(msg, parse_mode="HTML")
 
 
 async def pause_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
-    settings.IS_PAUSED = True
-    await update.message.reply_text(
-        "⏸️ 봇이 [일시정지] 되었습니다. 신규 진입을 중단하지만 기존 포지션 청산(TP/SL) 감시는 계속 작동합니다."
-    )
+    settings.PAUSED = True
+    update_env_variable("PAUSED", "True")
+    await update.message.reply_text("⚠️ 신규 진입이 일시 중지되었습니다.")
 
 
 async def resume_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
-    settings.IS_PAUSED = False
-    await update.message.reply_text(
-        "▶️ 봇이 [재개] 되었습니다. 신규 진입 스캔을 정상적으로 다시 탐색합니다."
-    )
+    settings.PAUSED = False
+    update_env_variable("PAUSED", "False")
+    await update.message.reply_text("✅ 신규 진입이 재개되었습니다.")
 
 
 async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
-    await update.message.reply_text(
-        "🔄 봇 프로세스를 완전히 재부팅합니다... (Watchdog에 의해 3초 후 깔끔하게 새 창으로 켜집니다)"
-    )
-
-    logger.info(
-        "텔레그램 /restart 커맨드 수신. Exit Code 42로 프로세스를 자발적 종료합니다."
-    )
-
-    # asyncio loop를 지연 후 정지 및 종료코드 42 반환
-    loop = asyncio.get_running_loop()
-    loop.call_later(1.0, lambda: sys.exit(42))
+    await update.message.reply_text("🔄 봇을 재시작합니다 (프로세스 재실행)...")
+    # watchdog이 다시 띄워줄 수 있도록 프로세스 종료
+    os._exit(0)
 
 
 async def panic_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
-    await update.message.reply_text(
-        "🚨 [비상 정지] 패닉 모드를 가동합니다! 모든 포지션을 시장가로 방어하고 봇을 전면 정지합니다."
-    )
-
-    settings.IS_PAUSED = True
     execution = context.bot_data["execution"]
+    await update.message.reply_text("🚨 PANIC! 모든 포지션 시장가 정리 및 봇 정지 시도...")
+    
+    # 1. 진입 중지
+    settings.PAUSED = True
+    update_env_variable("PAUSED", "True")
 
-    target_symbols = list(execution.active_positions.keys()) + list(
-        execution.pending_entries.keys()
-    )
-    target_symbols = list(set(target_symbols))  # 중복제거
-
-    closed_count = 0
-    # 1. 모든 대기주문 (일반 + Algo) 삭제
-    for sym in target_symbols:
-        try:
-            raw_sym = execution.exchange.market(sym)["id"]
-            await execution.exchange.cancel_all_orders(sym)
-            algo_orders = await execution.exchange.request(
-                path="openAlgoOrders",
-                api="fapiPrivate",
-                method="GET",
-                params={"symbol": raw_sym},
-            )
-            algo_items = (
-                algo_orders.get("orders", algo_orders)
-                if isinstance(algo_orders, dict)
-                else algo_orders
-            )
-            for algo in algo_items:
-                await execution.exchange.request(
-                    path="algoOrder",
-                    api="fapiPrivate",
-                    method="DELETE",
-                    params={"symbol": raw_sym, "algoId": algo.get("algoId")},
-                )
-        except Exception as e:
-            logger.error(f"Panic Cancel Error [{sym}]: {e}")
-
-    # 2. 모든 포지션 시장가 청산
+    # 2. 모든 포지션 시장가 종료
     try:
         positions = await execution.exchange.fetch_positions()
         for p in positions:
             amt = float(p.get("contracts", 0))
             if amt > 0:
-                sym = p["symbol"]
                 side = "sell" if p["side"] == "long" else "buy"
-                if not settings.DRY_RUN:
-                    await execution.exchange.create_order(
-                        sym, "market", side, amt, params={"reduceOnly": True}
-                    )
-                closed_count += 1
+                symbol = p["symbol"]
+                await execution.exchange.create_order(symbol, "market", side, amt, params={"reduceOnly": True})
+        await update.message.reply_text("✅ 모든 포지션이 정리되었습니다. 봇을 종료합니다.")
+        os._exit(0)
     except Exception as e:
-        logger.error(f"Panic Market Close Error: {e}")
-
-    await update.message.reply_text(
-        f"💥 패닉 프로토콜 처리 완료. (정리된 포지션: {closed_count}개)\n모든 잔여 주문 상태가 초기화되었고 신규 진입이 잠겼습니다."
-    )
+        await update.message.reply_text(f"❌ 패닉 셀 중 오류 발생: {e}")
 
 
 async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /setparam [key] [value] — 전략 파라미터를 키윗-밸류 방식으로 일괄 변경합니다.
-    재시작 없이 즉시 적용되며 .env에 영구 저장됩니다.
-    """
     if not await check_admin(update):
         return
-    args = context.args
-    if len(args) < 2:
-        await update.message.reply_text(
-            "💡 사용법: /setparam [키] [값]\n"
-            "예) /setparam risk 0.02\n"
-            "예) /setparam sl 3.0\n"
-            "예) /setparam cooldown 15\n"
-            "\n전체 파라미터 목록은 /help 참조"
-        )
+    
+    if len(context.args) < 2:
+        await update.message.reply_text("사용법: /setparam [키] [값]\n예: /setparam risk 0.03")
         return
 
-    key = args[0].lower()
-    raw_val = args[1]
+    key = context.args[0].lower()
+    value_str = context.args[1]
 
+    # 설정 가능 파라미터 맵핑
+    param_map = {
+        "risk": ("RISK_PERCENTAGE", float),
+        "leverage": ("LEVERAGE", int),
+        "sl": ("STOP_LOSS_MULT", float),
+        "tp": ("TAKE_PROFIT_MULT", float),
+        "l_tp": ("LONG_TP_MULT", float),
+        "l_sl": ("LONG_SL_MULT", float),
+        "s_tp": ("SHORT_TP_MULT", float),
+        "s_sl": ("SHORT_SL_MULT", float),
+        "l_tp_pct": ("LONG_TP_PCT", float),
+        "l_sl_pct": ("LONG_SL_PCT", float),
+        "s_tp_pct": ("SHORT_TP_PCT", float),
+        "s_sl_pct": ("SHORT_SL_PCT", float),
+        "l_tp_mode": ("LONG_TP_MODE", str),
+        "l_sl_mode": ("LONG_SL_MODE", str),
+        "s_tp_mode": ("SHORT_TP_MODE", str),
+        "s_sl_mode": ("SHORT_SL_MODE", str),
+        "partial_tp": ("PARTIAL_TP_RATIO", float),
+        "fee_rate": ("FEE_RATE", float),
+        "chandelier": ("CHANDELIER_MULT", float),
+        "cooldown": ("LOSS_COOLDOWN_MINUTES", int),
+        "min_score_long": ("MIN_SCORE_LONG", int),
+        "min_score_short": ("MIN_SCORE_SHORT", int),
+        "macd_filter": ("MACD_FILTER_ENABLED", lambda v: v.lower() == "on")
+    }
+
+    if key not in param_map:
+        await update.message.reply_text(f"❌ 설정 불가능한 키입니다: {key}")
+        return
+
+    env_key, type_func = param_map[key]
     try:
-        mapping = {
-            "risk": ("RISK_PERCENTAGE", float, "RISK_PERCENTAGE"),
-            "leverage": ("LEVERAGE", int, "LEVERAGE"),
-            "timeframe": ("TIMEFRAME", str, "TIMEFRAME"),
-            "time_exit": ("TIME_EXIT_MINUTES", int, "TIME_EXIT_MINUTES"),
-            "refresh": ("SYMBOL_REFRESH_INTERVAL", int, "SYMBOL_REFRESH_INTERVAL"),
-            "htf_1h": ("HTF_TIMEFRAME_1H", str, "HTF_TIMEFRAME_1H"),
-            "htf_15m": ("HTF_TIMEFRAME_15M", str, "HTF_TIMEFRAME_15M"),
-            "atr_ratio": ("ATR_RATIO_MULT", float, "ATR_RATIO_MULT"),
-            "atr_long": ("ATR_LONG_LEN", int, "ATR_LONG_LEN"),
-            "chandelier": ("CHANDELIER_MULT", float, "CHANDELIER_MULT"),
-            "chan_atr": ("CHANDELIER_ATR_LEN", int, "CHANDELIER_ATR_LEN"),
-            "sl": ("SL_MULT", float, "SL_MULT"),
-            "tp": ("TP_MULT", float, "TP_MULT"),
-            "cooldown": ("LOSS_COOLDOWN_MINUTES", int, "LOSS_COOLDOWN_MINUTES"),
-            "max_trades": ("MAX_TRADES", int, "MAX_TRADES"),
-            "max": ("MAX_TRADES", int, "MAX_TRADES"),
-            "max_dir": ("MAX_CONCURRENT_SAME_DIR", int, "MAX_CONCURRENT_SAME_DIR"),
-            "be_trigger": ("BREAKEVEN_TRIGGER_MULT", float, "BREAKEVEN_TRIGGER_MULT"),
-            "be_profit": ("BREAKEVEN_PROFIT_MULT", float, "BREAKEVEN_PROFIT_MULT"),
-            "mode": (None, None, None),
-            # V18
-            "long_score": ("MIN_SCORE_LONG", int, "MIN_SCORE_LONG"),
-            "short_score": ("MIN_SCORE_SHORT", int, "MIN_SCORE_SHORT"),
-            "adx_boost": ("ADX_BOOST_PCTL", float, "ADX_BOOST_PCTL"),
-            "adx_window": ("PCTL_WINDOW", int, "PCTL_WINDOW"),
-            "partial_tp": ("PARTIAL_TP_RATIO", float, "PARTIAL_TP_RATIO"),
-            "chasing": ("CHASING_WAIT_SEC", float, "CHASING_WAIT_SEC"),
-            "kelly": (None, None, None),
-            "kelly_min": ("KELLY_MIN_TRADES", int, "KELLY_MIN_TRADES"),
-            "kelly_max": ("KELLY_MAX_FRACTION", float, "KELLY_MAX_FRACTION"),
-            # [V18.4] Long Rules Parameters
-            "l_macd_t1": ("SC_RULES_LONG", int, "L_MACD_T1"),
-            "l_macd_t2": ("SC_RULES_LONG", int, "L_MACD_T2"),
-            "l_macd_t4": ("SC_RULES_LONG", int, "L_MACD_T4"),
-            "l_macd_w1": ("SC_RULES_LONG", int, "L_MACD_W1"),
-            "l_macd_w2": ("SC_RULES_LONG", int, "L_MACD_W2"),
-            "l_macd_w4": ("SC_RULES_LONG", int, "L_MACD_W4"),
-            "l_cvd_t1": ("SC_RULES_LONG", int, "L_CVD_T1"),
-            "l_cvd_t2": ("SC_RULES_LONG", int, "L_CVD_T2"),
-            "l_cvd_w1": ("SC_RULES_LONG", int, "L_CVD_W1"),
-            "l_cvd_w2": ("SC_RULES_LONG", int, "L_CVD_W2"),
-            "l_imbal_t1": ("SC_RULES_LONG", int, "L_IMBAL_T1"),
-            "l_imbal_w1": ("SC_RULES_LONG", int, "L_IMBAL_W1"),
-            "l_nofi_t1": ("SC_RULES_LONG", int, "L_NOFI_T1"),
-            "l_nofi_w1": ("SC_RULES_LONG", int, "L_NOFI_W1"),
-            "l_oi_t1": ("SC_RULES_LONG", int, "L_OI_T1"),
-            "l_oi_t2": ("SC_RULES_LONG", int, "L_OI_T2"),
-            "l_oi_w1": ("SC_RULES_LONG", int, "L_OI_W1"),
-            "l_oi_w2": ("SC_RULES_LONG", int, "L_OI_W2"),
-            "l_tick_t1": ("SC_RULES_LONG", int, "L_TICK_T1"),
-            "l_tick_w1": ("SC_RULES_LONG", int, "L_TICK_W1"),
-            "l_vol_t1": ("SC_RULES_LONG", float, "L_VOL_T1"),
-            "l_vol_w1": ("SC_RULES_LONG", int, "L_VOL_W1"),
-            "l_buy_t1": ("SC_RULES_LONG", int, "L_BUY_T1"),
-            "l_buy_w1": ("SC_RULES_LONG", int, "L_BUY_W1"),
-            # [V18.4] Short Rules Parameters
-            "s_macd_t1": ("SC_RULES_SHORT", int, "S_MACD_T1"),
-            "s_macd_t2": ("SC_RULES_SHORT", int, "S_MACD_T2"),
-            "s_macd_t4": ("SC_RULES_SHORT", int, "S_MACD_T4"),
-            "s_macd_w1": ("SC_RULES_SHORT", int, "S_MACD_W1"),
-            "s_macd_w2": ("SC_RULES_SHORT", int, "S_MACD_W2"),
-            "s_macd_w4": ("SC_RULES_SHORT", int, "S_MACD_W4"),
-            "s_cvd_t1": ("SC_RULES_SHORT", int, "S_CVD_T1"),
-            "s_cvd_t2": ("SC_RULES_SHORT", int, "S_CVD_T2"),
-            "s_cvd_w1": ("SC_RULES_SHORT", int, "S_CVD_W1"),
-            "s_cvd_w2": ("SC_RULES_SHORT", int, "S_CVD_W2"),
-            "s_imbal_t1": ("SC_RULES_SHORT", int, "S_IMBAL_T1"),
-            "s_imbal_t2": ("SC_RULES_SHORT", int, "S_IMBAL_T2"),
-            "s_imbal_w1": ("SC_RULES_SHORT", int, "S_IMBAL_W1"),
-            "s_imbal_w2": ("SC_RULES_SHORT", int, "S_IMBAL_W2"),
-            "s_nofi_t1": ("SC_RULES_SHORT", int, "S_NOFI_T1"),
-            "s_nofi_t2": ("SC_RULES_SHORT", int, "S_NOFI_T2"),
-            "s_nofi_w1": ("SC_RULES_SHORT", int, "S_NOFI_W1"),
-            "s_nofi_w2": ("SC_RULES_SHORT", int, "S_NOFI_W2"),
-            "s_oi_t1": ("SC_RULES_SHORT", int, "S_OI_T1"),
-            "s_oi_t2": ("SC_RULES_SHORT", int, "S_OI_T2"),
-            "s_oi_w1": ("SC_RULES_SHORT", int, "S_OI_W1"),
-            "s_oi_w2": ("SC_RULES_SHORT", int, "S_OI_W2"),
-            "s_tick_t1": ("SC_RULES_SHORT", int, "S_TICK_T1"),
-            "s_tick_t2": ("SC_RULES_SHORT", int, "S_TICK_T2"),
-            "s_tick_w1": ("SC_RULES_SHORT", int, "S_TICK_W1"),
-            "s_tick_w2": ("SC_RULES_SHORT", int, "S_TICK_W2"),
-            "s_vol_t1": ("SC_RULES_SHORT", float, "S_VOL_T1"),
-            "s_vol_t2": ("SC_RULES_SHORT", float, "S_VOL_T2"),
-            "s_vol_w1": ("SC_RULES_SHORT", int, "S_VOL_W1"),
-            "s_vol_w2": ("SC_RULES_SHORT", int, "S_VOL_W2"),
-            "s_rsi_t1": ("SC_RULES_SHORT", int, "S_RSI_T1"),
-            "s_rsi_t2": ("SC_RULES_SHORT", int, "S_RSI_T2"),
-            "s_rsi_w1": ("SC_RULES_SHORT", int, "S_RSI_W1"),
-            "s_rsi_w2": ("SC_RULES_SHORT", int, "S_RSI_W2"),
-            "s_buy_t1": ("SC_RULES_SHORT", int, "S_BUY_T1"),
-            "s_buy_t2": ("SC_RULES_SHORT", int, "S_BUY_T2"),
-            "s_buy_w1": ("SC_RULES_SHORT", int, "S_BUY_W1"),
-            "s_buy_w2": ("SC_RULES_SHORT", int, "S_BUY_W2"),
-            # Weights (Global)
-            "refresh": ("SYMBOL_REFRESH_INTERVAL", int, "SYMBOL_REFRESH_INTERVAL"),
-            "l_tp": ("LONG_TP_MULT", float, "L_TP_MULT"),
-            "l_sl": ("LONG_SL_MULT", float, "L_SL_MULT"),
-            "s_tp": ("SHORT_TP_MULT", float, "S_TP_MULT"),
-            "s_sl": ("SHORT_SL_MULT", float, "S_SL_MULT"),
-            "w_atr_2": ("atr", int, "WEIGHT_ATR_2"),
-            "w_adx_1": ("adx_boost", int, "WEIGHT_ADX_1"),
-            "w_fr_2": ("fr_boost", int, "WEIGHT_FR_2"),
-            "w_htf_2": ("htf_bias", int, "WEIGHT_HTF_BIAS"),
-            "w_mtm_2": ("mtf_moment", int, "WEIGHT_MTF_MOMENT"),
-            "w_reg_1": ("mtf_regime", int, "WEIGHT_MTF_REGIME"),
-            "w_vwap_2": ("vwap_dist", int, "WEIGHT_VWAP_DIST"),
-            "macd_filter": ("MACD_FILTER_ENABLED", bool, "MACD_FILTER_ENABLED"),
-            "fee_rate": ("FEE_RATE", float, "FEE_RATE"),
-            "l_tp_mode": ("LONG_TP_MODE", str, "LONG_TP_MODE"),
-            "l_sl_mode": ("LONG_SL_MODE", str, "LONG_SL_MODE"),
-            "s_tp_mode": ("SHORT_TP_MODE", str, "SHORT_TP_MODE"),
-            "s_sl_mode": ("SHORT_SL_MODE", str, "SHORT_SL_MODE"),
-            "l_tp_pct": ("LONG_TP_PCT", float, "L_TP_PCT"),
-            "l_sl_pct": ("LONG_SL_PCT", float, "L_SL_PCT"),
-            "s_tp_pct": ("SHORT_TP_PCT", float, "S_TP_PCT"),
-            "s_sl_pct": ("SHORT_SL_PCT", float, "S_SL_PCT"),
-            # Aliases for easier typing
-            "weight_adx": ("adx_boost", int, "WEIGHT_ADX_1"),
-            "weight_adx_1": ("adx_boost", int, "WEIGHT_ADX_1"),
-            "weight_mtf_regime": ("mtf_regime", int, "WEIGHT_MTF_REGIME"),
-            "weight_htf_bias": ("htf_bias", int, "WEIGHT_HTF_BIAS"),
-            "weight_mtf_moment": ("mtf_moment", int, "WEIGHT_MTF_MOMENT"),
-            "weight_atr": ("atr", int, "WEIGHT_ATR_2"),
-            "weight_fr": ("fr_boost", int, "WEIGHT_FR_2"),
-            "weight_vwap": ("vwap_dist", int, "WEIGHT_VWAP_DIST"),
-            "l_tp_p": ("LONG_TP_PCT", float, "L_TP_PCT"),
-            "s_tp_p": ("SHORT_TP_PCT", float, "S_TP_PCT"),
-        }
-
-        if key not in mapping:
-            await update.message.reply_text(
-                f"❌ 알 수 없는 파라미터: '{key}'\n/help로 파라미터 목록을 확인하세요."
-            )
-            return
-
-        attr_name, cast_fn, env_key = mapping[key]
-
-        # mode 특별 처리
-        if key == "mode":
-            is_dry = raw_val.lower() in ("dry", "dry_run", "true", "1")
-            settings.DRY_RUN = is_dry
-            update_env_variable("DRY_RUN", str(is_dry).capitalize())
-            label = "모의투자(DRY_RUN)" if is_dry else "실전매매(REAL)"
-            await update.message.reply_text(f"✅ 매매 모드 → {label} 설정 완료")
-            return
-
-        # V18: Kelly 사이징 on/off 특별 처리
-        elif key == "kelly":
-            is_on = raw_val.lower() in ("true", "1", "yes", "on")
-            settings.KELLY_SIZING = is_on
-            update_env_variable("KELLY_SIZING", str(is_on).capitalize())
-            label = (
-                "활성화 (Half-Kelly 동적 사이징)" if is_on else "비활성화 (고정 비율)"
-            )
-            await update.message.reply_text(f"✅ Kelly 사이징 → {label} 설정 완료")
-            return
-
-        # [V18.4] MACD 하드 필터 on/off 특별 처리
-        elif key == "macd_filter":
-            is_on = raw_val.lower() in ("true", "1", "yes", "on")
-            settings.MACD_FILTER_ENABLED = is_on
-            update_env_variable("MACD_FILTER_ENABLED", str(is_on).capitalize())
-            label = (
-                "활성화 (방향 불일치 시 진입 차단)" if is_on else "비활성화 (필터 무시)"
-            )
-            await update.message.reply_text(f"✅ MACD 하드 필터 → {label} 설정 완료")
-            return
-
-        # [V18.4] 규칙 기반(Long/Short Rules) 및 가중치 업데이트 처리
-        # l_sl, l_tp 등 일반 설정은 attr_name이 SC_RULES_... 가 아니므로 아래 블록을 건너뜁니다.
-        if key.startswith("w_") or attr_name in ("SC_RULES_LONG", "SC_RULES_SHORT"):
-            new_val = cast_fn(raw_val)
-
-            # .env 저장 (공통)
-            update_env_variable(env_key, str(new_val))
-
-            # 1. 가중치(Weights) 처리: w_atr_2, w_htf_2 등
-            if key.startswith("w_"):
-                # attr_name은 mapping에서 가져온 지표 키 (예: 'atr', 'htf_bias')
-                # sub_key는 마지막 숫자 부분 ('2' 등)
-                sub_key = key.split("_")[-1]
-                settings.SCORING_WEIGHTS[attr_name][sub_key] = new_val
-                label = f"가중치 {attr_name}[{sub_key}]"
-
-            # 2. 규칙(Rules) 처리: l_macd_t1, s_rsi_w2 등
-            else:
-                # attr_name: "SC_RULES_LONG" 혹은 "SC_RULES_SHORT"
-                # key 구조: {l/s}_{indicator}_{t/w}{idx}  예: l_macd_t1
-                parts = key.split("_")
-                target_rule_dict = getattr(settings, attr_name)  # SC_RULES_LONG 등
-
-                # [V18.4] 단축어와 실제 지표 키 간의 매핑 시스템
-                INDICATOR_MAP = {
-                    "macd": "macd_hist",
-                    "cvd": "cvd_delta_slope",
-                    "imbal": "bid_ask_imbalance",
-                    "nofi": "nofi_1m",
-                    "oi": "open_interest",
-                    "tick": "tick_count",
-                    "vol": "log_volume_zscore",
-                    "buy": "buy_ratio",
-                    "rsi": "rsi",
-                }
-
-                # 지표그룹(trend/mean_reversion) 찾기
-                found = False
-                short_name = parts[1]
-                real_key = INDICATOR_MAP.get(short_name, short_name)
-
-                for group in target_rule_dict.values():
-                    if real_key in group:
-                        rules_list = group[real_key]
-
-                        # t(threshold) 혹은 w(weight) 구분
-                        rule_type = parts[2][0]  # 't' or 'w'
-                        rule_idx = int(parts[2][1:]) - 1  # 1-based to 0-based
-
-                        if rule_idx < len(rules_list):
-                            # 기존 튜플 속성 유지 (threshold, weight, [opt_type])
-                            current_rule = list(rules_list[rule_idx])
-                            if rule_type == "t":
-                                current_rule[0] = new_val
-                            else:
-                                current_rule[1] = new_val
-
-                            rules_list[rule_idx] = tuple(current_rule)
-                            found = True
-                            label = f"규칙 {parts[1]}[{rule_idx + 1}] {'임계값' if rule_type == 't' else '가중치'}"
-                            break
-
-                if not found:
-                    await update.message.reply_text(
-                        f"❌ 규칙 구조 내에서 '{parts[1]}' 지표를 찾을 수 없거나 인덱스 초과입니다."
-                    )
-                    return
-
-            await update.message.reply_text(
-                f"✅ [{label}] {key} → {new_val} 설정 및 저장 완료"
-            )
-            return
-
-        # 일반 키 처리 (변경 전 값을 먼저 읽어둠)
-        old_val = getattr(settings, attr_name, "(없음)")
-        new_val = cast_fn(raw_val)
-
-        # 유효성 검사 등...
-        if key in ("be_trigger", "be_profit"):
-            if new_val < 0.0 or new_val > 3.0:
-                await update.message.reply_text(
-                    "❌ 지정 가능한 범위를 벗어났습니다. (0.0~3.0)"
-                )
-                return
-
-        setattr(settings, attr_name, new_val)
-        update_env_variable(env_key, str(new_val))
-
-        restart_notice = ""
-        if key in ("timeframe", "htf_1h", "htf_15m", "mode"):
-            restart_notice = f"\n⚠️ {key} 변경 시 /restart 권장!"
-
-        await update.message.reply_text(
-            f"✅ [{key.upper()}] 변경 완료\n이전: {old_val} → 새: {new_val}{restart_notice}"
-        )
-
+        typed_val = type_func(value_str)
+        setattr(settings, env_key, typed_val)
+        update_env_variable(env_key, str(typed_val))
+        await update.message.reply_text(f"✅ 설정 변경 완료: {key} -> {typed_val}")
     except Exception as e:
-        logger.error(f"Error in setparam: {e}")
-        await update.message.reply_text(f"❌ 설정 변경 중 오류 발생: {e}")
+        await update.message.reply_text(f"❌ 변환 오류: {e}")
 
 
 async def ignore_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
-    execution = context.bot_data["execution"]
     if not context.args:
-        await update.message.reply_text(
-            "💡 사용법: /ignore [코인명]\n예) /ignore LINK/USDT"
-        )
+        await update.message.reply_text("사용법: /ignore [BTC]")
         return
+    
     coin = context.args[0].upper()
-    if not coin.endswith("USDT"):
-        coin += "USDT"  # 편의성을 위해 USDT 붙여줌, ccxt 포맷상 /USDT나 단순 문자열 처리에 주의. 바이낸스는 일단 매핑 필요.
-        # 실제 Binance ccxt symbol 형식은 "BTC/USDT" 등. 사용자가 'LINK'라고 치면 'LINK/USDT'로.
-        if "/" not in coin:
-            coin = coin.replace("USDT", "/USDT")
-    execution.blacklist.add(coin)
-    await update.message.reply_text(
-        f"✅ {coin} 코인이 블랙리스트에 추가되어 신규 진입이 차단됩니다."
-    )
+    if coin not in settings.BLACKLIST_SYMBOLS:
+        settings.BLACKLIST_SYMBOLS.append(coin)
+        update_env_variable("BLACKLIST_SYMBOLS", ",".join(settings.BLACKLIST_SYMBOLS))
+        await update.message.reply_text(f"🚫 {coin} 종목을 블랙리스트에 추가했습니다.")
+    else:
+        await update.message.reply_text(f"이미 {coin} 종목이 제외되어 있습니다.")
 
 
 async def allow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
-    execution = context.bot_data["execution"]
     if not context.args:
-        await update.message.reply_text(
-            "💡 사용법: /allow [코인명]\n예) /allow LINK/USDT"
-        )
+        await update.message.reply_text("사용법: /allow [BTC]")
         return
+    
     coin = context.args[0].upper()
-    if not coin.endswith("USDT"):
-        coin += "USDT"
-        if "/" not in coin:
-            coin = coin.replace("USDT", "/USDT")
-    if coin in execution.blacklist:
-        execution.blacklist.remove(coin)
-        await update.message.reply_text(
-            f"✅ {coin} 코인이 블랙리스트에서 제거되었습니다. 진입이 허용됩니다."
-        )
+    if coin in settings.BLACKLIST_SYMBOLS:
+        settings.BLACKLIST_SYMBOLS.remove(coin)
+        update_env_variable("BLACKLIST_SYMBOLS", ",".join(settings.BLACKLIST_SYMBOLS))
+        await update.message.reply_text(f"✅ {coin} 종목을 다시 허용했습니다.")
     else:
-        await update.message.reply_text(f"❌ {coin} 코인은 블랙리스트에 없습니다.")
+        await update.message.reply_text(f"{coin} 종목은 이미 허용되어 있습니다.")
 
 
 async def close_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
-    execution = context.bot_data["execution"]
     if not context.args:
-        await update.message.reply_text(
-            "💡 사용법: /close [코인명]\n예) /close LINK/USDT"
-        )
+        await update.message.reply_text("사용법: /close [DOGE]")
         return
-
+    
     coin = context.args[0].upper()
-    if not coin.endswith("USDT"):
-        coin += "USDT"
-        if "/" not in coin:
-            coin = coin.replace("USDT", "/USDT")
-
-    await update.message.reply_text(f"🗑️ [{coin}] 코인의 시장가 청산을 시도합니다...")
+    execution = context.bot_data["execution"]
     try:
-        # 1. 펜딩 주문(조건부 SL 포함) 취소
-        try:
-            raw_sym = execution.exchange.market(coin)["id"]
-            await execution.exchange.cancel_all_orders(coin)
-            # Algo 주문 취소 로직도 포함하면 좋지만 심플하게
-        except Exception as cancel_e:
-            logger.warning(
-                f"/{coin} 미체결 주문 취소 실패 (존재하지 않거나 에러): {cancel_e}"
-            )
-
-        # 2. 시장가 청산
         positions = await execution.exchange.fetch_positions()
         closed = False
         for p in positions:
-            if p["symbol"] == coin:
+            sym = p["symbol"]
+            if coin in sym:
                 amt = float(p.get("contracts", 0))
                 if amt > 0:
                     side = "sell" if p["side"] == "long" else "buy"
                     if not settings.DRY_RUN:
-                        await execution.exchange.create_order(
-                            coin, "market", side, amt, params={"reduceOnly": True}
-                        )
+                        await execution.exchange.create_order(sym, "market", side, amt, params={"reduceOnly": True})
                     closed = True
                     break
-
         if closed:
             await update.message.reply_text(f"✅ [{coin}] 전량 시장가 청산 완료")
         else:
-            await update.message.reply_text(
-                f"❌ [{coin}] 활성 포지션을 찾을 수 없습니다."
-            )
+            await update.message.reply_text(f"❌ [{coin}] 활성 포지션을 찾을 수 없습니다.")
     except Exception as e:
-        logger.error(f"개별 종목 {coin} 청산 중 에러: {e}")
-        await update.message.reply_text(f"❌ 청산 중 에러 발생: {e}")
+        await update.message.reply_text(f"❌ 청산 중 오류 발생: {e}")
 
 
 async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
-
+    
     mode = "모의투자(DRY_RUN)" if settings.DRY_RUN else "실전매매(REAL)"
-
-    # [V18.3] 텔레그램 파라미터 출력 최적화
     msg = (
-        "⚙️ <b>[V18.3 현재 설정 파라미터]</b>\n"
-        "━━━━━━ <b>시스템 & 리스크</b> ━━━━━━\n"
-        f"• <b>매매 모드</b>  : {mode}\n"
-        f"• <b>레버리지</b>  : {settings.LEVERAGE}x\n"
-        f"• <b>리스크/수수료</b>: {settings.RISK_PERCENTAGE * 100:.1f}% / {getattr(settings, 'FEE_RATE', 0.00045) * 100:.3f}%\n"
-        f"• <b>MaxTrades</b> : {getattr(settings, 'MAX_TRADES', 3)} (동일방향: {getattr(settings, 'MAX_CONCURRENT_SAME_DIR', 2)})\n"
-        f"• <b>캔들/보유</b> : {getattr(settings, 'TIMEFRAME', '3m')} / {getattr(settings, 'TIME_EXIT_MINUTES', 0)}분\n"
-        f"• <b>진입 임계</b> : LONG={getattr(settings, 'MIN_SCORE_LONG', 18)} / SHORT={getattr(settings, 'MIN_SCORE_SHORT', 17)}\n"
-        f"• <b>재진입대기</b>: {getattr(settings, 'LOSS_COOLDOWN_MINUTES', 15)}분\n\n"
-        "━━━━━━ <b>기술적 필터 (Hard)</b> ━━━━━━\n"
-        f"• <b>ADX 부스트</b>: {getattr(settings, 'ADX_BOOST_PCTL', 70.0)}%tile (윈도우: {getattr(settings, 'PCTL_WINDOW', 100)})\n"
-        f"• <b>MACD 필터</b> : {'ON (하드필터)' if getattr(settings, 'MACD_FILTER_ENABLED', True) else 'OFF (점수만계산)'}\n"
-        f"• <b>ATR 부스트</b>: {getattr(settings, 'ATR_RATIO_MULT', 1.2)}x ({getattr(settings, 'ATR_LONG_LEN', 200)}봉 대비)\n"
-        f"• <b>Kelly</b>     : {'ON' if getattr(settings, 'KELLY_SIZING', False) else 'OFF'} (MinSample:{getattr(settings, 'KELLY_MIN_TRADES', 20)}, Cap:{getattr(settings, 'KELLY_MAX_FRACTION', 0.05)})\n"
-        f"• <b>Chasing</b>   : Wait={getattr(settings, 'CHASING_WAIT_SEC', 2.5)}s, Retry={getattr(settings, 'CHASING_MAX_RETRY', 10)}, Market_At={getattr(settings, 'CHASING_MARKET_THRESHOLD', 2)}\n\n"
-        "━━━━━━ <b>지표별 임계치 & 가중치</b> ━━━━━━\n"
+        "⚙️ <b>[현재 전략 파라미터 요약]</b>\n"
+        f"▪ <b>Mode</b>: {mode}\n"
+        f"▪ <b>Risk</b>: {settings.RISK_PERCENTAGE*100:.1f}%\n"
+        f"▪ <b>Leverage</b>: {settings.LEVERAGE}x\n"
+        f"▪ <b>Candle</b>: {settings.TIMEFRAME} / Exit={settings.TIME_EXIT_MINUTES}min\n"
+        f"▪ <b>Score</b>: L={settings.MIN_SCORE_LONG} / S={settings.MIN_SCORE_SHORT}\n"
+        f"▪ <b>MACD Filter</b>: {'ON' if getattr(settings, 'MACD_FILTER_ENABLED', False) else 'OFF'}\n\n"
+        "── <b>방향별 청산 전략</b> ──\n"
+        f"<b>LONG</b>: {settings.LONG_TP_MODE}({settings.LONG_TP_MULT}x / {settings.LONG_TP_PCT*100}%) | {settings.LONG_SL_MODE}({settings.LONG_SL_MULT}x / {settings.LONG_SL_PCT*100}%)\n"
+        f"<b>SHORT</b>: {settings.SHORT_TP_MODE}({settings.SHORT_TP_MULT}x / {settings.SHORT_TP_PCT*100}%) | {settings.SHORT_SL_MODE}({settings.SHORT_SL_MULT}x / {settings.SHORT_SL_PCT*100}%)\n"
     )
-
-    # [V18.4] 숏/롱 분리형 규칙 및 방향별 TP/SL 출력
-    rl = getattr(settings, "SC_RULES_LONG", {})
-    rs = getattr(settings, "SC_RULES_SHORT", {})
-    w = getattr(settings, "SCORING_WEIGHTS", {})
-
-    msg += "━━━━━━ <b>[LONG] 진입 규칙</b> ━━━━━━\n"
-    for group_name, sensors in rl.items():
-        msg += f"<i>[{group_name.upper()}]</i>\n"
-        for sensor, rules in sensors.items():
-            rule_str = (
-                ", ".join([f"{r[0]}→{r[1]}점" for r in rules]) if rules else "비활성"
-            )
-            msg += f" • {sensor}: {rule_str}\n"
-
-    msg += "\n━━━━━━ <b>[SHORT] 진입 규칙</b> ━━━━━━\n"
-    for group_name, sensors in rs.items():
-        msg += f"<i>[{group_name.upper()}]</i>\n"
-        for sensor, rules in sensors.items():
-            rule_str = (
-                ", ".join([f"{r[0]}→{r[1]}점" for r in rules]) if rules else "비활성"
-            )
-            msg += f" • {sensor}: {rule_str}\n"
-
-    msg += "\n━━━━━━ <b>거시 & 환경 점수</b> ━━━━━━\n"
-    msg += (
-        f"• <b>HTF Bias</b> (1H): {w['htf_bias']['2']}점\n"
-        f"• <b>MTF Moment</b> (15m): {w['mtf_moment']['2']}점\n"
-        f"• <b>MTF Regime</b> (15m): {w['mtf_regime']['1']}점\n"
-        f"• <b>ATR/ADX/VWAP</b>: {w['atr']['2']}/{w['adx_boost']['1']}/{w['vwap_dist']['2']}점\n"
-        f"• <b>Funding Match</b>: {w['fr_boost']['2']}점\n\n"
-    )
-
-    msg += (
-        "━━━━━━ <b>청산 & 탈출 전략</b> ━━━━━━\n"
-        f"• <b>LONG TP</b> : {getattr(settings, 'LONG_TP_MODE', 'ATR')} ({getattr(settings, 'LONG_TP_MULT', 5.0)}x / {getattr(settings, 'LONG_TP_PCT', 0.05) * 100:.1f}%)\n"
-        f"• <b>LONG SL</b> : {getattr(settings, 'LONG_SL_MODE', 'ATR')} ({getattr(settings, 'LONG_SL_MULT', 1.5)}x / {getattr(settings, 'LONG_SL_PCT', 0.02) * 100:.1f}%)\n"
-        f"• <b>SHORT TP</b>: {getattr(settings, 'SHORT_TP_MODE', 'PERCENT')} ({getattr(settings, 'SHORT_TP_MULT', 5.0)}x / {getattr(settings, 'SHORT_TP_PCT', 0.03) * 100:.1f}%)\n"
-        f"• <b>SHORT SL</b>: {getattr(settings, 'SHORT_SL_MODE', 'ATR')} ({getattr(settings, 'SHORT_SL_MULT', 1.5)}x / {getattr(settings, 'SHORT_SL_PCT', 0.015) * 100:.1f}%)\n"
-        f"• <b>분할익절</b> : {getattr(settings, 'PARTIAL_TP_RATIO', 0.5) * 100:.0f}%\n"
-        f"• <b>본절전환</b> : {getattr(settings, 'BREAKEVEN_TRIGGER_MULT', 1.5)}x (보존: {getattr(settings, 'BREAKEVEN_PROFIT_MULT', 0.2)}x)\n\n"
-        "💡 변경: /setparam [옵션] [값]\n"
-        "💡 예시: s_tp_mode, s_tp_pct, fee_rate"
-    )
-
     await update.message.reply_text(msg, parse_mode="HTML")
 
 
@@ -779,27 +369,19 @@ async def refresh_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     refresh_event = context.bot_data.get("refresh_event")
     if refresh_event:
         refresh_event.set()
-        await update.message.reply_text(
-            "🔄 즉시 종목 새로고침 신호를 보냈습니다. 곧 반영됩니다."
-        )
+        await update.message.reply_text("🔄 즉시 종목 새로고침 신호를 보냈습니다. 곧 반영됩니다.")
     else:
         await update.message.reply_text("❌ 새로고침 이벤트를 찾을 수 없습니다.")
 
 
 def setup_telegram_bot(execution_engine, refresh_event=None):
-    """
-    python-telegram-bot Application 인스턴스를 빌드하고 핸들러를 붙여 반환합니다.
-    """
     token = settings.TELEGRAM_BOT_TOKEN
     chat_id = settings.TELEGRAM_CHAT_ID
 
     if not token or not chat_id:
-        logger.warning(
-            "텔레그램 토큰 또는 Chat ID가 설정되지 않아 Interactive 커맨더를 시작할 수 없습니다."
-        )
+        logger.warning("텔레그램 토큰/Chat ID가 없어 컨트롤러를 시작할 수 없습니다.")
         return None
 
-    # [V19] 네트워크 불안정 및 RemoteProtocolError 대응을 위한 타임아웃 연장 (기본 5s -> 20s)
     request = HTTPXRequest(connect_timeout=20, read_timeout=20)
     application = ApplicationBuilder().token(token).request(request).build()
     application.bot_data["execution"] = execution_engine
@@ -819,5 +401,5 @@ def setup_telegram_bot(execution_engine, refresh_event=None):
     application.add_handler(CommandHandler("close", close_cmd))
     application.add_handler(CommandHandler("refresh", refresh_cmd))
 
-    logger.info("텔레그램 Interactive 커맨더(Poller) 세팅이 완료되었습니다.")
+    logger.info("텔레그램 Interactive 커맨더 세팅 완료.")
     return application
