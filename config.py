@@ -216,16 +216,16 @@ class Config:
             },
         }
 
-    # 하위 호환 및 환경 부스트/거시 가중치 유지 (규칙 엔진으로 미통합된 항목들)
-    SCORING_WEIGHTS = {
-        "atr": {"2": int(os.getenv("WEIGHT_ATR_2", "2"))},
-        "adx_boost": {"1": int(os.getenv("WEIGHT_ADX_1", "1"))},
-        "fr_boost": {"2": int(os.getenv("WEIGHT_FR_2", "2"))},
-        "htf_bias": {"2": int(os.getenv("WEIGHT_HTF_BIAS", "2"))},
-        "mtf_moment": {"2": int(os.getenv("WEIGHT_MTF_MOMENT", "2"))},
-        "mtf_regime": {"1": int(os.getenv("WEIGHT_MTF_REGIME", "1"))},
-        "vwap_dist": {"2": int(os.getenv("WEIGHT_VWAP_DIST", "2"))},
-    }
+        # 하위 호환 및 환경 부스트/거시 가중치 유지 (규칙 엔진으로 미통합된 항목들)
+        self.SCORING_WEIGHTS = {
+            "atr": {"2": int(os.getenv("WEIGHT_ATR_2", "2"))},
+            "adx_boost": {"1": int(os.getenv("WEIGHT_ADX_1", "1"))},
+            "fr_boost": {"2": int(os.getenv("WEIGHT_FR_2", "2"))},
+            "htf_bias": {"2": int(os.getenv("WEIGHT_HTF_BIAS", "2"))},
+            "mtf_moment": {"2": int(os.getenv("WEIGHT_MTF_MOMENT", "2"))},
+            "mtf_regime": {"1": int(os.getenv("WEIGHT_MTF_REGIME", "1"))},
+            "vwap_dist": {"2": int(os.getenv("WEIGHT_VWAP_DIST", "2"))},
+        }
 
     # ── V18 체결 & 사이징 파라미터 ────────────────────────────────────────
     # Half-Kelly 동적 사이징 (승률·손익비 기반 투입 비중 자동 조절)

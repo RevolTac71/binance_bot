@@ -253,7 +253,14 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "cooldown": ("LOSS_COOLDOWN_MINUTES", int),
         "min_score_long": ("MIN_SCORE_LONG", int),
         "min_score_short": ("MIN_SCORE_SHORT", int),
-        "macd_filter": ("MACD_FILTER_ENABLED", lambda v: v.lower() == "on")
+        "macd_filter": ("MACD_FILTER_ENABLED", lambda v: v.lower() == "on"),
+        "weight_adx": ("WEIGHT_ADX_1", int),
+        "weight_mtf_moment": ("WEIGHT_MTF_MOMENT", int),
+        "weight_atr": ("WEIGHT_ATR_2", int),
+        "weight_fr": ("WEIGHT_FR_2", int),
+        "weight_htf": ("WEIGHT_HTF_BIAS", int),
+        "weight_mtf_regime": ("WEIGHT_MTF_REGIME", int),
+        "weight_vwap": ("WEIGHT_VWAP_DIST", int)
     }
 
     # [V18.4] 스코어링 세부 규칙 동적 지원 (자동 생성)
@@ -272,7 +279,9 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "S_TICK_T1", "S_TICK_W1", "S_TICK_T2", "S_TICK_W2",
         "S_VOL_T1", "S_VOL_W1", "S_VOL_T2", "S_VOL_W2",
         "S_RSI_T1", "S_RSI_W1", "S_RSI_T2", "S_RSI_W2",
-        "S_BUY_T1", "S_BUY_W1", "S_BUY_T2", "S_BUY_W2"
+        "S_BUY_T1", "S_BUY_W1", "S_BUY_T2", "S_BUY_W2",
+        "WEIGHT_ADX_1", "WEIGHT_MTF_MOMENT", "WEIGHT_ATR_2", "WEIGHT_FR_2",
+        "WEIGHT_HTF_BIAS", "WEIGHT_MTF_REGIME", "WEIGHT_VWAP_DIST"
     ]
 
     for skey in scoring_keys:
