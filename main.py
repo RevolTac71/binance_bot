@@ -1014,10 +1014,17 @@ async def main():
         async def guarded(coro, name):
             try:
                 await coro
+            except asyncio.CancelledError:
+                logger.info(f"[{name}] 태스크가 취소되어 종료됩니다.")
             except Exception as e:
                 logger.error(f"[{name}] 태스크 비정상 종료: {e}")
-                raise
+                # 핵심 태스크 종료 시 전체 봇 종료 유도
+                if not shutdown_event.is_set():
+                    shutdown_event.set()
 
+        # 텔레그램에서 넘겨받은 이벤트 사용 (혹은 새로 생성)
+        shutdown_event = app.bot_data.get("shutdown_event", asyncio.Event())
+        
         task_state = asyncio.create_task(
             guarded(state_machine_loop(execution), "StateMachine")
         )
@@ -1033,18 +1040,34 @@ async def main():
             )
         )
 
-        results = await asyncio.gather(
-            task_state, task_trade, task_chandelier, return_exceptions=True
+        # shutdown_event가 set될 때까지 대기 (혹은 태스크들이 종료될 때까지)
+        wait_shutdown = asyncio.create_task(shutdown_event.wait())
+        
+        done, pending = await asyncio.wait(
+            [task_state, task_trade, task_chandelier, wait_shutdown],
+            return_when=asyncio.FIRST_COMPLETED
         )
-        for r in results:
-            if isinstance(r, Exception):
-                logger.critical(f"[Main] 핵심 태스크 예외로 인해 봇이 종료됩니다: {r}")
+
+        logger.info(f"봇 종료 신호 감지됨. (활성 태스크 수: {len(done)})")
+        if not shutdown_event.is_set():
+            shutdown_event.set()
+
+        # 모든 펜딩 태스크 정리
+        for task in [task_state, task_trade, task_chandelier, wait_shutdown]:
+            if not task.done():
+                task.cancel()
+        
+        await asyncio.gather(task_state, task_trade, task_chandelier, return_exceptions=True)
 
     except KeyboardInterrupt:
         logger.warning("CTRL+C(키보드 인터럽트)로 시스템이 정지되었습니다.")
+    except Exception as e:
+        logger.error(f"Main Loop unexpected Error: {e}")
     finally:
+        exit_code = 0
         if "app" in locals() and app:
-            logger.info("텔레그램 인터랙티브 커맨더를 안전하게 종료합니다...")
+            exit_code = app.bot_data.get("exit_code", 0)
+            logger.info(f"텔레그램 인터랙티브 커맨더를 안전하게 종료합니다... (Exit Code: {exit_code})")
             try:
                 if app.updater and app.updater.running:
                     await app.updater.stop()
@@ -1063,12 +1086,18 @@ async def main():
             logger.warning(f"거래소 연결 종료 중 예외 발생: {e}")
 
         logger.info("거래소 API 객체 릴리즈 및 시스템 종료 절차 통과 완료.")
+        sys.exit(exit_code)
 
 
 if __name__ == "__main__":
-    import sys
-
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except SystemExit as e:
+        # sys.exit() 호출 시 발생하는 SystemExit를 조용히 처리 (watchdog이 exit code를 읽음)
+        pass
+    except Exception as e:
+        logger.critical(f"봇이 치명적 오류로 종료되었습니다: {e}")
+        sys.exit(1)

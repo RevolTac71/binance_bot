@@ -183,9 +183,12 @@ async def resume_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
-    await update.message.reply_text("🔄 봇을 재시작합니다 (프로세스 재실행)...")
-    # watchdog이 다시 띄워줄 수 있도록 프로세스 종료
-    os._exit(0)
+    await update.message.reply_text("🔄 봇을 재시작합니다 (감시 프로세스에 의해 42번 코드로 재기동)...")
+    # shutdown_event를 호출하여 main 루프에서 안전하게 종료하도록 유도
+    context.bot_data["exit_code"] = 42
+    shutdown_event = context.bot_data.get("shutdown_event")
+    if shutdown_event:
+        shutdown_event.set()
 
 
 async def panic_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -208,7 +211,11 @@ async def panic_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 symbol = p["symbol"]
                 await execution.exchange.create_order(symbol, "market", side, amt, params={"reduceOnly": True})
         await update.message.reply_text("✅ 모든 포지션이 정리되었습니다. 봇을 종료합니다.")
-        os._exit(0)
+        
+        context.bot_data["exit_code"] = 0
+        shutdown_event = context.bot_data.get("shutdown_event")
+        if shutdown_event:
+            shutdown_event.set()
     except Exception as e:
         await update.message.reply_text(f"❌ 패닉 셀 중 오류 발생: {e}")
 
@@ -403,6 +410,8 @@ def setup_telegram_bot(execution_engine, refresh_event=None):
     application = ApplicationBuilder().token(token).request(request).build()
     application.bot_data["execution"] = execution_engine
     application.bot_data["refresh_event"] = refresh_event
+    application.bot_data["shutdown_event"] = asyncio.Event()  # 기본 이벤트 생성
+    application.bot_data["exit_code"] = 0  # 기본 종료 코드
 
     application.add_handler(CommandHandler("start", start_cmd))
     application.add_handler(CommandHandler("help", help_cmd))
