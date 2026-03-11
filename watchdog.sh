@@ -19,34 +19,36 @@ source venv/bin/activate
 RESTART_COUNT=0
 
 while true; do
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 봇 시작 (재시작 횟수: $RESTART_COUNT)"
+    TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$TIMESTAMP] 🚀 봇 시작 시도 (재시작 횟수: $RESTART_COUNT)" | tee -a watchdog.log
 
-    # 봇 실행 (파이썬 내부 RotatingFileHandler와 중복 저장 방지를 위해 콘솔 출력은 console.log로 리다이렉션)
+    # 봇 실행 (콘솔 출력은 console.log로, 에러 포함)
     python3 main.py >> console.log 2>&1
     EXIT_CODE=$?
 
     TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$TIMESTAMP] ⚠️ 봇 프로세스 종료 (Exit Code: $EXIT_CODE)" | tee -a watchdog.log
 
     if [ $EXIT_CODE -eq 0 ]; then
         # 정상 종료 (예: /stop 명령어)
-        MSG="🛑 <b>[봇 정상 종료]</b>&#10;${TIMESTAMP}&#10;Exit Code: 0&#10;자동 재시작을 하지 않습니다."
+        MSG="🛑 <b>[봇 정상 종료]</b>&#10;${TIMESTAMP}&#10;Exit Code: 0&#10;자동 재시작을 중지합니다."
         send_telegram "$MSG"
-        echo "[$TIMESTAMP] 정상 종료 감지. watchdog 종료."
+        echo "[$TIMESTAMP] ✅ 정상 종료 감지. Watchdog을 종료합니다." | tee -a watchdog.log
         break
     elif [ $EXIT_CODE -eq 42 ]; then
         # 의도된 재시작 (텔레그램 /restart 커맨드)
-        echo "[$TIMESTAMP] 사용자의 /restart 명령어 감지. 3초 후 재기동..."
+        echo "[$TIMESTAMP] 🔄 사용자의 /restart 명령어 감지. 3초 후 재기동합니다..." | tee -a watchdog.log
         sleep 3
     elif [ $EXIT_CODE -eq 143 ]; then
-        # 배포 등 외부 요인에 의한 강제 종료 (SIGTERM)
-        echo "[$TIMESTAMP] 외부 종료 신호(SIGTERM, 143) 수신. 배포 또는 강제 중단으로 간주하여 재시작 알림 생략..."
-        sleep 5
+        # 외부 요인에 의한 강제 종료 (SIGTERM)
+        echo "[$TIMESTAMP] ⏹️ 외부 종료 신호(SIGTERM/143) 수신. 자동 재시작을 생략합니다." | tee -a watchdog.log
+        break
     else
         # 비정상 종료 (크래시)
         RESTART_COUNT=$((RESTART_COUNT + 1))
         MSG="🚨 <b>[봇 크래시 감지]</b>&#10;${TIMESTAMP}&#10;Exit Code: ${EXIT_CODE}&#10;재시작 횟수: ${RESTART_COUNT}&#10;5초 후 자동 재시작합니다..."
         send_telegram "$MSG"
-        echo "[$TIMESTAMP] 비정상 종료(Exit: $EXIT_CODE). 5초 후 재시작..."
+        echo "[$TIMESTAMP] 🔥 비정상 종료 발생. 5초 후 재시작 시도 (횟수: $RESTART_COUNT)..." | tee -a watchdog.log
         sleep 5
     fi
 done
