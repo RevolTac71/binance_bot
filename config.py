@@ -251,6 +251,12 @@ class Config:
     MACD_FILTER_ENABLED = os.getenv("MACD_FILTER_ENABLED", "True").lower() == "true"
     SYMBOL_REFRESH_INTERVAL = int(os.getenv("SYMBOL_REFRESH_INTERVAL", "3"))
     CURRENT_TARGET_SYMBOLS = []  # 메인 루프에서 동적으로 채워짐 (AttributeError 방지)
+    
+    # [V18.5] 블랙리스트 심볼 (쉼표로 구분된 문자열을 리스트로 변환)
+    _blacklist = os.getenv("BLACKLIST_SYMBOLS", "")
+    BLACKLIST_SYMBOLS = [s.strip().upper() for s in _blacklist.split(",") if s.strip()]
+
+    # ── V18 스코어링 & 필터 파라미터 (V18.3/4 추가분) ───────────────────
 
     # ── V18 스코어링 & 필터 파라미터 (V18.3/4 추가분) ───────────────────
     MIN_SCORE_LONG = int(os.getenv("MIN_SCORE_LONG", "18"))
@@ -296,7 +302,7 @@ class Config:
     TP_MULT = float(os.getenv("TP_MULT", "5.0"))
 
     # Telegram Interactive Pause Mode
-    IS_PAUSED = False
+    PAUSED = os.getenv("PAUSED", "False").lower() == "true"
     HTF_TIMEFRAME_1H = os.getenv("HTF_TIMEFRAME_1H", "1h")
     HTF_TIMEFRAME_15M = os.getenv("HTF_TIMEFRAME_15M", "15m")
 

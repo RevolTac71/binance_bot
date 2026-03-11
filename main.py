@@ -769,9 +769,15 @@ async def target_refresh_loop(pipeline: DataPipeline, execution: ExecutionEngine
         # 1. 새 종목 리스트 추출
         base_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
         try:
+            # 블랙리스트에 기본 종목이 있으면 제외
+            base_symbols = [s for s in base_symbols if s not in settings.BLACKLIST_SYMBOLS]
+            
             alts = await pipeline.fetch_top_altcoins_by_volume(
-                limit=13, exclude_symbols=base_symbols
+                limit=13 + len(settings.BLACKLIST_SYMBOLS), # 블랙리스트 대비 넉넉하게 추출
+                exclude_symbols=base_symbols + settings.BLACKLIST_SYMBOLS
             )
+            # 최종적으로 다시 한번 블랙리스트 필터링 (fetch_top_altcoins_by_volume 내부 혹은 외부)
+            alts = [s for s in alts if s not in settings.BLACKLIST_SYMBOLS][:13]
         except Exception as e:
             logger.error(f"심볼 갱신 중 에러 발생: {e}. 다음 주기로 연기합니다.")
             continue
@@ -862,7 +868,7 @@ async def websocket_loop(
                     logger.info("🟢 웹소켓 연결 완료! 실시간 트레이딩 봇 가동 시작.")
 
                     async for msg in ws:
-                        if getattr(settings, "IS_PAUSED", False):
+                        if getattr(settings, "PAUSED", False):
                             continue
 
                         if msg.type == aiohttp.WSMsgType.TEXT:
@@ -987,9 +993,14 @@ async def main():
         # [V18] 포트폴리오 최초 종목 15개 선정 및 웜업 (HFT Pipeline 가동 전)
         if not getattr(settings, "CURRENT_TARGET_SYMBOLS", None):
             base_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+            # 블랙리스트 필터링
+            base_symbols = [s for s in base_symbols if s not in settings.BLACKLIST_SYMBOLS]
+            
             alts = await pipeline.fetch_top_altcoins_by_volume(
-                limit=13, exclude_symbols=base_symbols
+                limit=13 + len(settings.BLACKLIST_SYMBOLS),
+                exclude_symbols=base_symbols + settings.BLACKLIST_SYMBOLS
             )
+            alts = [s for s in alts if s not in settings.BLACKLIST_SYMBOLS][:13]
             settings.CURRENT_TARGET_SYMBOLS = base_symbols + alts
 
             logger.info(
