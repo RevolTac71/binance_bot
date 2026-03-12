@@ -1094,6 +1094,8 @@ async def main():
 
         try:
             await pipeline.close()
+            # [V19] aiohttp 세션이 완전히 닫힐 시간을 주기 위해 아주 짧은 대기 추가
+            await asyncio.sleep(0.25)
         except Exception as e:
             logger.warning(f"거래소 연결 종료 중 예외 발생: {e}")
 
