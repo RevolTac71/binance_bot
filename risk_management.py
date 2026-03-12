@@ -133,13 +133,13 @@ class RiskManager:
 
         # 3. 거래당 스탑폭/익절폭 거리 산출 (모드에 따라 분리)
         # 3-1. TP 거리 계산
-        if tp_mode == "PERCENT":
+        if tp_mode.upper() == "PERCENT":
             tp_distance = entry_price * tp_pct
         else:
             tp_distance = atr_val * tp_mult
 
         # 3-2. SL 거리 계산
-        if sl_mode == "PERCENT":
+        if sl_mode.upper() == "PERCENT":
             sl_distance = entry_price * sl_pct
         else:
             sl_distance = atr_val * sl_mult
