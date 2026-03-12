@@ -16,6 +16,7 @@ pip-delete-this-directory.txt
 
 # 로그 파일
 *.log
+*.log.*
 logs/
 
 # IDE 및 편집기
