@@ -235,12 +235,23 @@ class Config:
         }
 
 
+class KSTFormatter(logging.Formatter):
+    """로그 출력 시간을 항상 한국 시간(KST)으로 표시하기 위한 커스텀 포맷터"""
+    def formatTime(self, record, datefmt=None):
+        dt = datetime.fromtimestamp(record.created, tz=KST)
+        if datefmt:
+            return dt.strftime(datefmt)
+        return dt.isoformat()
+
+
 def get_logger(name="BinanceBot"):
     logger = logging.getLogger(name)
     if logger.handlers:
         return logger
     logger.setLevel(logging.INFO)
-    formatter = logging.Formatter(
+    
+    # [V18.6] KST 전용 포맷터 적용
+    formatter = KSTFormatter(
         "%(asctime)s - %(name)s - [%(levelname)s] - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
