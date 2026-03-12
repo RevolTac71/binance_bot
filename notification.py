@@ -81,6 +81,10 @@ class TelegramLogHandler(logging.Handler):
     Python logging 핸들러: ERROR 등급 이상의 로그를 실시간으로 텔레그램에 전송합니다.
     """
     def emit(self, record):
+        # 무한 루프 방지: notification 모듈에서 발생한 에러는 텔레그램으로 보내지 않음
+        if record.module == "notification":
+            return
+
         try:
             log_entry = self.format(record)
             # HTML 특수 문자 이스케이프 (중첩 태그로 인한 400 에러 방지)
