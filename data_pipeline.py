@@ -64,6 +64,7 @@ class DataPipeline:
                 "options": {
                     "defaultType": "future",
                     "warnOnFetchOpenOrdersWithoutSymbol": False,  # 초기 동기화 시 전체 대기주문 조회 경고 무시
+                    "adjustForTimeDifference": True,  # [V18.6] Windows 시간 동기화 오차 대응 (-1021 에러 방지)
                 },  # 현물(spot) -> 선물(future) 변경
             }
         )
@@ -279,24 +280,38 @@ class DataPipeline:
         """
         바이낸스 선물 시장에서 24시간 거래금액(Quote Volume) 기준으로 상위 알트코인을 추출합니다.
         스테이블코인이나 무거운 비트, 이더리움은 제외합니다.
+        API 키 오류(-2015) 등이 발생할 경우 기본 메이저 알트코인 리스트를 반환합니다.
         """
-        tickers = await self.exchange.fetch_tickers()
+        try:
+            tickers = await self.exchange.fetch_tickers()
 
-        # USDT 기반 선형 선물 티커 필터링 (선물은 "ADA/USDT:USDT" 형태)
-        usdt_pairs = {
-            k: v
-            for k, v in tickers.items()
-            if k.endswith("/USDT:USDT") and k not in exclude_symbols
-        }
+            # USDT 기반 선형 선물 티커 필터링 (선물은 "ADA/USDT:USDT" 형태)
+            usdt_pairs = {
+                k: v
+                for k, v in tickers.items()
+                if k.endswith("/USDT:USDT") and k not in exclude_symbols
+            }
 
-        # 24시간 거래대금 (quoteVolume) 내림차순 정렬
-        sorted_pairs = sorted(
-            usdt_pairs.items(), key=lambda x: x[1].get("quoteVolume", 0), reverse=True
-        )
+            # 24시간 거래대금 (quoteVolume) 내림차순 정렬
+            sorted_pairs = sorted(
+                usdt_pairs.items(), key=lambda x: x[1].get("quoteVolume", 0), reverse=True
+            )
 
-        # 심볼 추출
-        top_symbols = [pair[0] for pair in sorted_pairs[:limit]]
-        return top_symbols
+            # 심볼 추출
+            top_symbols = [pair[0] for pair in sorted_pairs[:limit]]
+            return top_symbols
+        except Exception as e:
+            logger.warning(f"⚠️ 상위 거래량 종목 조회 중 오류 발생 (Fallback 리스트 사용): {e}")
+            # API 키 오류나 IP 제한 시 사용할 기본 메이저 알트코인 리스트
+            fallback_list = [
+                "SOL/USDT:USDT", "ADA/USDT:USDT", "XRP/USDT:USDT", "DOT/USDT:USDT",
+                "AVAX/USDT:USDT", "LINK/USDT:USDT", "DOGE/USDT:USDT", "MATIC/USDT:USDT",
+                "TRX/USDT:USDT", "LTC/USDT:USDT", "BCH/USDT:USDT", "ICP/USDT:USDT",
+                "NEAR/USDT:USDT", "APT/USDT:USDT", "ARB/USDT:USDT"
+            ]
+            # exclude_symbols에 없는 것들만 필터링하여 반환
+            filtered_fallback = [s for s in fallback_list if s not in exclude_symbols]
+            return filtered_fallback[:limit]
 
     # [V18 ML] 호가창 불균형(Imbalance) 조회
     @with_exponential_backoff(max_retries=3)

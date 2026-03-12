@@ -996,6 +996,7 @@ async def main():
             # 블랙리스트 필터링
             base_symbols = [s for s in base_symbols if s not in settings.BLACKLIST_SYMBOLS]
             
+            logger.info("🔍 [Init] 상위 거래량 알트코인 리스트 조회 중...")
             alts = await pipeline.fetch_top_altcoins_by_volume(
                 limit=13 + len(settings.BLACKLIST_SYMBOLS),
                 exclude_symbols=base_symbols + settings.BLACKLIST_SYMBOLS
@@ -1006,7 +1007,9 @@ async def main():
             logger.info(
                 f"📡 V18 최초 포트폴리오 15종목 동적 선정 결과: {settings.CURRENT_TARGET_SYMBOLS}"
             )
+            logger.info("⏳ [Init] 데이터 웜업(3m/1h/15m) 시작...")
             await warm_up_data(settings.CURRENT_TARGET_SYMBOLS, pipeline)
+            logger.info("✅ [Init] 데이터 웜업 완료.")
 
         global hft_pipeline
         hft_pipeline = HFTDataPipeline(settings.CURRENT_TARGET_SYMBOLS)
