@@ -972,9 +972,10 @@ async def main():
         )
         return
 
-    await notifier.send_message(
+    # [V19] 텔레그램 알림이 시작 절차를 블로킹하지 않도록 비동기 태스크로 실행
+    asyncio.create_task(notifier.send_message(
         f"🚀 [시작] 바이낸스 V18 MTF {settings.TIMEFRAME} 스캘핑 봇 웹소켓 대기열 접속 중..."
-    )
+    ))
 
     pipeline = DataPipeline()
     strategy = StrategyEngine()

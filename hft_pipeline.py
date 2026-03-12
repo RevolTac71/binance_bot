@@ -11,6 +11,7 @@ import numpy as np
 from sklearn.preprocessing import RobustScaler
 
 from sqlalchemy import delete
+from sqlalchemy.exc import IntegrityError
 from database import AsyncSessionLocal, MarketData_1m
 from utils import clean_json_data
 from schemas import HFTFeatures1m
@@ -376,6 +377,12 @@ class HFTDataPipeline:
                         await session.commit()
                         logger.info(
                             f"[HFT] Successfully inserted {len(insert_batch)} 1M snapshots."
+                        )
+                        self.retry_queue.clear()
+                    except IntegrityError:
+                        await session.rollback()
+                        logger.warning(
+                            "[HFT] 중복된 1분 스냅샷 건너뜀 (IntegrityError)."
                         )
                         self.retry_queue.clear()
                     except Exception as e:

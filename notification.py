@@ -2,6 +2,8 @@ import asyncio
 import aiohttp
 import logging
 import html
+import time
+import threading
 
 
 class TelegramNotifier:
@@ -80,13 +82,42 @@ class TelegramLogHandler(logging.Handler):
     """
     Python logging 핸들러: ERROR 등급 이상의 로그를 실시간으로 텔레그램에 전송합니다.
     """
+    def __init__(self):
+        super().__init__()
+        self._last_sent_messages = {}  # {message_hash: timestamp}
+        self._lock = threading.Lock()
+
     def emit(self, record):
         # 무한 루프 방지: notification 모듈에서 발생한 에러는 텔레그램으로 보내지 않음
         if record.module == "notification":
             return
 
+        # Defensive import for stale deployments where module-level imports may differ.
+        import time
+            
+        # 텔레그램 핸들러 자체의 에러는 무시 (무한 루프 위험)
+        if "텔레그램" in record.getMessage():
+            return
+
         try:
             log_entry = self.format(record)
+            
+            # 동일 메시지 폭주 방지 (1분 쿨타임)
+            msg_hash = hash(log_entry)
+            now = time.time()
+            with self._lock:
+                last_sent = self._last_sent_messages.get(msg_hash, 0)
+                if now - last_sent < 60:
+                    return
+                self._last_sent_messages[msg_hash] = now
+                
+                # 오래된 캐시 정리 (1시간 이상 된 것)
+                if len(self._last_sent_messages) > 1000:
+                    self._last_sent_messages = {
+                        k: v for k, v in self._last_sent_messages.items() 
+                        if now - v < 3600
+                    }
+
             # HTML 특수 문자 이스케이프 (중첩 태그로 인한 400 에러 방지)
             safe_log = html.escape(log_entry)
             # 비동기 전송을 위해 백그라운드 태스크로 실행

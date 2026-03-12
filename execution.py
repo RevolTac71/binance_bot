@@ -1,7 +1,10 @@
+import asyncio
+import json
+import time
 from datetime import datetime, timezone, timedelta
 from config import settings, logger
 from database import TradeLog, AsyncSessionLocal
-from sqlalchemy.future import select
+from sqlalchemy import select
 from data_pipeline import DataPipeline
 from notification import notifier
 from strategy import PortfolioState
@@ -121,6 +124,8 @@ class ExecutionEngine:
             logger.info(
                 "🧪 [DRY RUN] 가상 실행 중이므로 거래소 초기 동기화를 생략합니다."
             )
+            # [V18.1] 가상 포지션 복구 로직으로 즉시 이동
+            await self._recover_dry_run_positions()
             return
 
         try:
@@ -178,40 +183,14 @@ class ExecutionEngine:
                             f"✅ [REAL 복구] {symbol} 메타데이터 복원 완료 (진입: {entry_time}, 누적PnL: {last_pnl:.2f} USDT, 기준시막: {readable_time})"
                         )
         except Exception as e:
-            logger.error(f"거래소 동기화 중(sync_state_from_exchange) 예외 발생: {e}")
+            error_msg = str(e).lower()
+            if "invalid api-key" in error_msg or "-2015" in error_msg:
+                logger.error("❌ [API ERROR] 바이낸스 API 키가 유효하지 않거나 권한이 없습니다.")
+                logger.error("👉 확인 사항: 1. API 키/시크릿 오타, 2. Futures 권한 활성화, 3. IP 화이트리스트 설정")
+            else:
+                logger.error(f"거래소 동기화 중(sync_state_from_exchange) 예외 발생: {e}")
 
-        # [V18.1] DRY_RUN 가상 포지션 복구 로직 (동기화 블록 외부 또는 내부에서 별도 실행)
-        if settings.DRY_RUN:
-            try:
-                async with AsyncSessionLocal() as session:
-                    # 청산되지 않은(exit_time이 NULL) 가상 포지션 조회
-                    stmt = select(TradeLog).where(
-                        TradeLog.dry_run == True, TradeLog.exit_time == None
-                    )
-                    result = await session.execute(stmt)
-                    recovered_logs = result.scalars().all()
-
-                    for log in recovered_logs:
-                        # active_positions 에 복원 (place_chasing_entry_order의 entry_info 형식과 호환)
-                        self.active_positions[log.symbol] = {
-                            "signal": log.direction,
-                            "amount": log.qty,
-                            "limit_price": log.execution_price,
-                            "tp_price": log.tp_price,
-                            "sl_price": log.sl_price,
-                            "entry_time": log.entry_time,  # [V18.4] 진입시간 복구 (Time-Exit용)
-                            "last_summed_ts": int(
-                                time.time() * 1000
-                            ),  # 가상은 매 하트비트마다 갱계산
-                            "is_partial_tp_done": False,  # TODO: DB 필드 연동 필요 시 확장
-                            "reason": log.entry_reason,
-                            "market_data": None,
-                        }
-                        logger.info(
-                            f"✅ [DRY RUN 복구] 기존 가상 포지션 감지 및 복구: {log.symbol} ({log.direction}, 수량: {log.qty})"
-                        )
-            except Exception as e:
-                logger.error(f"DRY RUN 포지션 복구 중 에러: {e}")
+        # [V18.5] 15분 손실 쿨다운 복구 로직 추가 (영속화)
 
         if not settings.DRY_RUN:
             try:
@@ -346,14 +325,41 @@ class ExecutionEngine:
         except Exception as e:
             logger.error(f"쿨다운 상태 복구 중 에러: {e}")
 
+    async def _recover_dry_run_positions(self):
+        """[V18.1] DRY_RUN 가상 포지션 복구 로직 (별도 메서드화)"""
+        try:
+            async with AsyncSessionLocal() as session:
+                stmt = select(TradeLog).where(
+                    TradeLog.dry_run == True, TradeLog.exit_time == None
+                )
+                result = await session.execute(stmt)
+                recovered_logs = result.scalars().all()
+
+                for log in recovered_logs:
+                    self.active_positions[log.symbol] = {
+                        "signal": log.direction,
+                        "amount": log.qty,
+                        "limit_price": log.execution_price,
+                        "tp_price": log.tp_price,
+                        "sl_price": log.sl_price,
+                        "entry_time": log.entry_time,
+                        "last_summed_ts": int(time.time() * 1000),
+                        "is_partial_tp_done": False,
+                        "reason": log.entry_reason,
+                        "market_data": None,
+                    }
+                    logger.info(
+                        f"✅ [DRY RUN 복구] 기존 가상 포지션 감지 및 복구: {log.symbol} ({log.direction}, 수량: {log.qty})"
+                    )
+        except Exception as e:
+            logger.error(f"DRY RUN 포지션 복구 중 에러: {e}")
+
     async def setup_margin_and_leverage(self, symbol: str):
         """
         바이낸스 선물에서 해당 코인의 레버리지를 1배로, 마진 모드를 격리(Isolated)로 확실하게 고정합니다.
-        (CROSS로 포지션 진입 시 전체 계좌가 청산되는 것을 방지하기 위함)
         """
         # [V18.5] DRY_RUN 모드에서는 실계좌 설정을 건드리지 않고 즉시 반환합니다. (안전 및 에러 방지)
         if settings.DRY_RUN:
-            # logger.info(f"[{symbol}] DRY_RUN 모드이므로 마진/레버리지 설정을 생략합니다.")
             return
 
         try:
@@ -438,6 +444,9 @@ class ExecutionEngine:
             remaining = int((cooldown_until - now_kst).total_seconds() / 60)
             logger.info(f"[{symbol}] 손실 쿨다운 중. {remaining}분 후 진입 가능. 스킵.")
             return False
+
+        # Defensive import: protects against stale deployments where module-level import is missing.
+        import time
 
         try:
             # [HOTFIX] 진입 시도 시작 시 즉각 pending_entries에 등록하여 수동진입 오탐지 방지
@@ -679,7 +688,10 @@ class ExecutionEngine:
             return True
 
         except Exception as e:
-            logger.error(f"[{symbol}] 시장가 진입 로직 처리 중 예외 발생: {e}")
+            logger.error(
+                f"[{symbol}] 시장가 진입 로직 처리 중 예외 발생: {e}",
+                exc_info=True,
+            )
             # TP/SL 생성 도중 에러가 나더라도 포지션은 체결되어 있으므로 봇 루프에서 관리되도록 True 반환
             return True
         finally:

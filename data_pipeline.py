@@ -348,7 +348,12 @@ class DataPipeline:
 
             return bid_vol / total_vol
         except Exception as e:
-            logger.warning(f"[{symbol}] 오더북 조회 실패: {e}")
+            error_msg = str(e).lower()
+            if "-2015" in error_msg or "invalid api-key" in error_msg:
+                # [V18.6] 중복 로그 억제를 위해 최초 1회 혹은 주기적으로만 상세 알림 (여기서는 단순화)
+                logger.warning(f"⚠️ [{symbol}] API 권한 오류(-2015)로 오더북 조회 실패. (Futures 권장/IP 화이트리스트 확인 필요)")
+            else:
+                logger.warning(f"[{symbol}] 오더북 조회 실패: {e}")
             return 0.5
 
     # [V18 ML] 펀딩비 조회
@@ -361,5 +366,9 @@ class DataPipeline:
             funding = await self.exchange.fetch_funding_rate(symbol)
             return float(funding.get("fundingRate", 0.0))
         except Exception as e:
-            logger.warning(f"[{symbol}] 펀딩비 조회 실패: {e}")
+            error_msg = str(e).lower()
+            if "-2015" in error_msg:
+                logger.warning(f"⚠️ [{symbol}] API 권한 오류(-2015)로 펀딩비 조회 실패.")
+            else:
+                logger.warning(f"[{symbol}] 펀딩비 조회 실패: {e}")
             return 0.0
