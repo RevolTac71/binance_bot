@@ -202,6 +202,7 @@ async def warm_up_data(symbols: list, pipeline: DataPipeline):
         asyncio.gather(*tasks_15m, return_exceptions=True),
     )
 
+    logger.info(f"[DEBUG] results_3m 개수: {len(results_3m)}")
     for sym, res in zip(symbols, results_3m):
         if isinstance(res, Exception):
             logger.error(f"[{sym}] 웜업 데이터 로딩 실패: {res}")
@@ -1006,7 +1007,9 @@ async def main():
             logger.info(
                 f"📡 V18 최초 포트폴리오 15종목 동적 선정 결과: {settings.CURRENT_TARGET_SYMBOLS}"
             )
+            logger.info("[DEBUG] warm_up_data 호출 직전")
             await warm_up_data(settings.CURRENT_TARGET_SYMBOLS, pipeline)
+            logger.info("[DEBUG] warm_up_data 호출 직후")
 
         global hft_pipeline
         hft_pipeline = HFTDataPipeline(settings.CURRENT_TARGET_SYMBOLS)
@@ -1021,6 +1024,7 @@ async def main():
         logger.info(
             "[V18] 백그라운드 태스크(HTF / TWAP / Snapshot Flush / Refresher) 가동 완료."
         )
+        logger.info("[DEBUG] guarded 태스크 생성 및 wait 진입 직전")
 
         # V18 메인 웹소켓 루프 / 스테이트 머신 / 샹들리에 모니터링 병렬 가동
         async def guarded(coro, name):
@@ -1060,7 +1064,9 @@ async def main():
             return_when=asyncio.FIRST_COMPLETED
         )
 
-        logger.info(f"봇 종료 신호 감지됨. (활성 태스크 수: {len(done)})")
+        logger.info(f"봇 종료 신호 감지됨. (완료된 태스크: {done}, 펜딩: {len(pending)})")
+        for t in done:
+            logger.info(f"[DEBUG] 완료된 태스크 상세: {t}")
         if not shutdown_event.is_set():
             shutdown_event.set()
 
@@ -1073,8 +1079,10 @@ async def main():
 
     except KeyboardInterrupt:
         logger.warning("CTRL+C(키보드 인터럽트)로 시스템이 정지되었습니다.")
-    except Exception as e:
-        logger.error(f"Main Loop unexpected Error: {e}")
+    except BaseException as e:
+        logger.error(f"Main Loop unexpected Error ({type(e).__name__}): {e}")
+        import traceback
+        logger.error(traceback.format_exc())
     finally:
         exit_code = 0
         if "app" in locals() and app:
