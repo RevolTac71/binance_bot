@@ -801,8 +801,9 @@ class ExecutionEngine:
                 raw_params = self._snapshot_params()
                 if isinstance(raw_params, str):
                     try:
-                        # 이미 JSON 문자열이면 그대로 사용하거나, 검증을 위해 로드 후 세척
-                        cleaned_params = raw_params 
+                        # 이미 JSON 문자열이면 파싱 후 다시 세척하여 직렬화 (이중 안전장치)
+                        params_dict = json.loads(raw_params)
+                        cleaned_params = json.dumps(clean_json_data(params_dict), ensure_ascii=False)
                     except:
                         cleaned_params = raw_params
                 else:
