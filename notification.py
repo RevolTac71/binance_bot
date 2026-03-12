@@ -1,10 +1,12 @@
 import asyncio
 import aiohttp
-from config import logger, settings
+import logging
+import html
 
 
 class TelegramNotifier:
     def __init__(self):
+        from config import settings
         self.bot_token = settings.TELEGRAM_BOT_TOKEN
         self.chat_id = settings.TELEGRAM_CHAT_ID
         self.base_url = f"https://api.telegram.org/bot{self.bot_token}"
@@ -21,6 +23,7 @@ class TelegramNotifier:
         429 에러(Too Many Requests) 발생 시 retry_after 지시만큼 대기 후 재시도합니다.
         """
         if not self.bot_token or not self.chat_id:
+            from config import logger
             logger.warning(
                 "텔레그램 봇 토큰이나 Chat ID가 설정되지 않아 알림을 스킵합니다."
             )
@@ -33,6 +36,7 @@ class TelegramNotifier:
             try:
                 session = await self._get_session()
                 async with session.post(url, json=payload) as response:
+                    from config import logger
                     if response.status == 200:
                         logger.info(f"텔레그램 메시지 전송 성공: {text[:20]}...")
                         return
@@ -70,3 +74,21 @@ class TelegramNotifier:
 
 # 전역 싱글톤 객체로 사용
 notifier = TelegramNotifier()
+
+
+class TelegramLogHandler(logging.Handler):
+    """
+    Python logging 핸들러: ERROR 등급 이상의 로그를 실시간으로 텔레그램에 전송합니다.
+    """
+    def emit(self, record):
+        try:
+            log_entry = self.format(record)
+            # HTML 특수 문자 이스케이프 (중첩 태그로 인한 400 에러 방지)
+            safe_log = html.escape(log_entry)
+            # 비동기 전송을 위해 백그라운드 태스크로 실행
+            asyncio.create_task(notifier.send_message(f"⚠️ <b>[BOT ERROR]</b>\n<pre>{safe_log}</pre>"))
+        except Exception:
+            self.handleError(record)
+
+
+import logging

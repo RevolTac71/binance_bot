@@ -4,41 +4,41 @@ import ccxt.async_support as ccxt
 import pandas as pd
 import numpy as np
 import pandas_ta as ta
-from ccxt.base.errors import RateLimitExceeded, RequestTimeout, NetworkError
+from ccxt.base.errors import RateLimitExceeded, RequestTimeout, NetworkError, AuthenticationError
 from config import settings, logger
 
 
 # -- Exponential Backoff Decorator --
 def with_exponential_backoff(max_retries=5, base_delay=1.0, max_delay=60.0):
     """
-    API 429 에러(RateLimitExceeded)나 타임아웃 발생 시,
-    대기 시간을 점진적으로(지수적) 증가시켜가며 재시도하는 데코레이터입니다.
+    V18.6: 429/Timeout/Network/TimeSync(-1021) 에러 대응 지수 백오프 데코레이터.
     """
-
     def decorator(func):
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
-            retries = 0
-            delay = base_delay
+            retries, delay = 0, base_delay
             while True:
                 try:
                     return await func(*args, **kwargs)
-                except (RateLimitExceeded, RequestTimeout, NetworkError) as e:
+                except (RateLimitExceeded, RequestTimeout, NetworkError, AuthenticationError) as e:
                     retries += 1
+                    error_msg = str(e)
+                    is_time_error = "-1021" in error_msg or "Timestamp for this request" in error_msg
+                    
                     if retries > max_retries:
-                        logger.error(
-                            f"최대 재시도 횟수({max_retries}) 초과. {func.__name__} 최종 에러: {e}"
-                        )
+                        logger.error(f"❌ {func.__name__} 최대 재시도({max_retries}) 초과: {e}")
                         raise e
 
-                    logger.warning(
-                        f"API 에러 발생 ({e.__class__.__name__}): {e}. {delay}초 대기 후 재시도 ({retries}/{max_retries})..."
-                    )
+                    if is_time_error:
+                        logger.warning(f"🕒 시간 동기화 오류 추출됨 (-1021). 즉시 동기화 수행 ({retries}/{max_retries})")
+                        if len(args) > 0 and hasattr(args[0], "sync_time"):
+                            await args[0].sync_time()
+                        continue
+
+                    logger.warning(f"⚠️ API 에러({e.__class__.__name__}): {delay}초 후 재시도 ({retries}/{max_retries})")
                     await asyncio.sleep(delay)
-                    delay = min(max_delay, delay * 2)  # 지수 증가, 최댓값 max_delay
-
+                    delay = min(max_delay, delay * 2)
         return wrapper
-
     return decorator
 
 
@@ -56,6 +56,11 @@ class DataPipeline:
             else settings.BINANCE_API_SECRET
         )
 
+        # [V18.6] Diagnostic Log (Masked)
+        masked_key = f"{api_key[:5]}...{api_key[-5:]}" if api_key else "None"
+        masked_secret = f"{api_secret[:5]}...{api_secret[-5:]}" if api_secret else "None"
+        logger.info(f"🔑 [Init] API Key Loaded: {masked_key}, Secret Loaded: {masked_secret}")
+
         self.exchange = ccxt.binance(
             {
                 "apiKey": api_key,
@@ -65,9 +70,13 @@ class DataPipeline:
                     "defaultType": "future",
                     "warnOnFetchOpenOrdersWithoutSymbol": False,  # 초기 동기화 시 전체 대기주문 조회 경고 무시
                     "adjustForTimeDifference": True,  # [V18.6] Windows 시간 동기화 오차 대응 (-1021 에러 방지)
+                    "recvWindow": 10000,  # [V18.6] 시간 오차 허용 범위 확대 (기존 5000 -> 10000)
                 },  # 현물(spot) -> 선물(future) 변경
             }
         )
+
+        # [V18.6] 최초 실행 시 서버 시간 동기화 수행
+        asyncio.create_task(self.sync_time())
 
         # Testnet (Sandbox) 모드 활성화 처리
         if settings.USE_TESTNET:
@@ -75,6 +84,16 @@ class DataPipeline:
             logger.info(
                 "🧪 [TESTNET MODE] 바이낸스 선물 테스트넷 환경으로 CCXT 객체 연결이 세팅되었습니다."
             )
+
+    async def sync_time(self):
+        """바이낸스 서버와 로컬 시간을 동기화하여 -1021 에러를 방지합니다."""
+        try:
+            # CCXT 내장 시간 동기화 메서드 호출
+            await self.exchange.load_time_difference()
+            offset = self.exchange.options.get("timeDifference", 0)
+            logger.info(f"🕒 [Sync] 바이낸스 서버 시간 동기화 완료. (Offset: {offset}ms)")
+        except Exception as e:
+            logger.error(f"❌ [Sync] 시간 동기화 실패: {e}")
 
     async def close(self):
         """거래소 세션을 안전하게 종료합니다."""
@@ -301,17 +320,9 @@ class DataPipeline:
             top_symbols = [pair[0] for pair in sorted_pairs[:limit]]
             return top_symbols
         except Exception as e:
-            logger.warning(f"⚠️ 상위 거래량 종목 조회 중 오류 발생 (Fallback 리스트 사용): {e}")
-            # API 키 오류나 IP 제한 시 사용할 기본 메이저 알트코인 리스트
-            fallback_list = [
-                "SOL/USDT:USDT", "ADA/USDT:USDT", "XRP/USDT:USDT", "DOT/USDT:USDT",
-                "AVAX/USDT:USDT", "LINK/USDT:USDT", "DOGE/USDT:USDT", "MATIC/USDT:USDT",
-                "TRX/USDT:USDT", "LTC/USDT:USDT", "BCH/USDT:USDT", "ICP/USDT:USDT",
-                "NEAR/USDT:USDT", "APT/USDT:USDT", "ARB/USDT:USDT"
-            ]
-            # exclude_symbols에 없는 것들만 필터링하여 반환
-            filtered_fallback = [s for s in fallback_list if s not in exclude_symbols]
-            return filtered_fallback[:limit]
+            logger.warning(f"⚠️ 상위 거래량 종목 조회 실패 (Fallback 사용): {e}")
+            fallback_list = getattr(settings, "DEFAULT_FALLBACK_SYMBOLS", [])
+            return [s for s in fallback_list if s not in exclude_symbols][:limit]
 
     # [V18 ML] 호가창 불균형(Imbalance) 조회
     @with_exponential_backoff(max_retries=3)
