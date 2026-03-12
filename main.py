@@ -1093,11 +1093,18 @@ async def main():
                 logger.warning(f"Telegram App 종료 중 예외 발생: {e}")
 
         try:
+            # [V19] Telegram Notifier 세션 종료
+            await notifier.close()
+            
+            # [V18] HFT 파이프라인 세션 종료
+            if "hft_pipeline" in globals() and hft_pipeline:
+                await hft_pipeline.close_session()
+
             await pipeline.close()
             # [V19] aiohttp 세션이 완전히 닫힐 시간을 주기 위해 아주 짧은 대기 추가
             await asyncio.sleep(0.25)
         except Exception as e:
-            logger.warning(f"거래소 연결 종료 중 예외 발생: {e}")
+            logger.warning(f"연결 및 세션 종료 중 예외 발생: {e}")
 
         logger.info("거래소 API 객체 릴리즈 및 시스템 종료 절차 통과 완료.")
         sys.exit(exit_code)
