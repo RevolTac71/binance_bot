@@ -492,7 +492,7 @@ class StrategyEngine:
 
         # ATR 부스트 및 HTF/MTF 정보 수집
         atr_ratio_mult = getattr(settings, "ATR_RATIO_MULT", 1.2)
-        atr_boost_flag = atr_14 > (atr_long * atr_ratio_mult)
+        atr_boost_flag = bool(atr_14 > (atr_long * atr_ratio_mult))
         mtf = self.get_mtf_regime(df_15m)
         htf_bias_str = self.get_htf_bias(df_1h)
         mtf_moment_str = mtf.get("momentum", "NEUTRAL")
