@@ -12,6 +12,7 @@ from sklearn.preprocessing import RobustScaler
 
 from sqlalchemy import delete
 from database import AsyncSessionLocal, MarketData_1m
+from utils import clean_json_data
 from schemas import HFTFeatures1m
 from config import settings, get_logger
 
@@ -368,7 +369,7 @@ class HFTDataPipeline:
                             low=res["low"],
                             close=res["close"],
                             volume=res["volume"],
-                            features=res["features"],
+                            features=clean_json_data(res["features"]),
                         )
                         session.add(new_row)
                     try:

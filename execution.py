@@ -1,8 +1,3 @@
-import asyncio
-import json
-import time
-import numpy as np
-import pandas as pd
 from datetime import datetime, timezone, timedelta
 from config import settings, logger
 from database import TradeLog, AsyncSessionLocal
@@ -10,6 +5,7 @@ from sqlalchemy.future import select
 from data_pipeline import DataPipeline
 from notification import notifier
 from strategy import PortfolioState
+from utils import clean_json_data
 
 
 class ExecutionEngine:
@@ -789,24 +785,6 @@ class ExecutionEngine:
             f"실제 익절률(수수료 차감 후): {real_tp_pct * 100:.2f}%, "
             f"실제 손절률(수수료 차감 후): {real_sl_pct * 100:.2f}% (Taker 수수료 0.045% 포함. R:R={abs(real_tp_pct / real_sl_pct) if real_sl_pct != 0 else 0:.2f})"
         )
-
-        def clean_json_data(data):
-            """전달받은 데이터를 JSON 직렬화 가능한 순수 파이썬 타입으로 재귀적으로 변환합니다."""
-            if isinstance(data, dict):
-                return {k: clean_json_data(v) for k, v in data.items()}
-            elif isinstance(data, (list, tuple, set)):
-                return [clean_json_data(i) for i in data]
-            elif hasattr(data, "model_dump"):  # Pydantic 모델 대응
-                return clean_json_data(data.model_dump())
-            elif isinstance(data, np.bool_):
-                return bool(data)
-            elif isinstance(data, (np.int64, np.int32, np.int16, np.int8)):
-                return int(data)
-            elif isinstance(data, (np.float64, np.float32, np.float16)):
-                return float(data)
-            elif pd.isna(data):
-                return None
-            return data
 
         try:
             # DB 기록 (진입) - DRY_RUN 이더라도 테스트 내역을 DB에 기록
