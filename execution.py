@@ -104,6 +104,12 @@ class ExecutionEngine:
                 # MTF 필터 파라미터
                 "htf_timeframe_1h": getattr(settings, "HTF_TIMEFRAME_1H", None),
                 "htf_timeframe_15m": getattr(settings, "HTF_TIMEFRAME_15M", None),
+                # [V19] 상세 스코어링 규칙 정적 스냅샷 (최적화 분석용)
+                "scoring_rules": {
+                    "long": getattr(settings, "SC_RULES_LONG", {}),
+                    "short": getattr(settings, "SC_RULES_SHORT", {}),
+                    "weights": getattr(settings, "SCORING_WEIGHTS", {}),
+                },
             },
             ensure_ascii=False,
         )

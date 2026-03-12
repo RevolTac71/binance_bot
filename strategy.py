@@ -628,6 +628,9 @@ class StrategyEngine:
                 macd_filter_enabled=bool(
                     getattr(settings, "MACD_FILTER_ENABLED", True)
                 ),
+                # [V19] 상세 스코어 및 백분위수 전체 저장
+                scores=score_result.get("scores"),
+                percentiles=score_result.get("percentiles"),
             ).model_dump(exclude_none=True)
 
         return {

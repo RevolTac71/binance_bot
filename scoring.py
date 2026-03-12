@@ -241,7 +241,23 @@ def calculate_entry_score(indicators: dict, adx_boost_pctl: float = 70.0) -> dic
         if long_score > short_score
         else (-1 if short_score > long_score else 0),
         "detail": detail,
-        # V18: 필수 조건 체크를 위한 개별 점수 노출 (상대 순수 점수 반환)
+        # [V19] 상세 스코어 구성 요소 (DB 적재 및 최적화용)
+        "scores": {
+            "long": {
+                "macd": l_macd, "cvd": l_cvd, "imbal": l_imbal, "nofi": l_nofi,
+                "rsi": l_rsi, "buy": l_buy, "vol": l_vol, "adx": l_adx,
+                "fr": l_fr, "oi": l_oi, "tick": l_tick, "atr": l_atr,
+                "htf": l_htf, "mom": l_mtf_m, "reg": l_mtf_r, "vwap": l_vwap
+            },
+            "short": {
+                "macd": s_macd, "cvd": s_cvd, "imbal": s_imbal, "nofi": s_nofi,
+                "rsi": s_rsi, "buy": s_buy, "vol": s_vol, "adx": s_adx,
+                "fr": s_fr, "oi": s_oi, "tick": s_tick, "atr": s_atr,
+                "htf": s_htf, "mom": s_mtf_m, "reg": s_mtf_r, "vwap": s_vwap
+            }
+        },
+        "percentiles": indicators, # 원본 백분위수 데이터 전달
+        # 하위 호환성 유지
         "l_cvd": l_cvd,
         "l_nofi": l_nofi,
         "s_cvd": s_cvd,

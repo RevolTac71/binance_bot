@@ -8,7 +8,7 @@ class MarketDataSnapshot(BaseModel):
     데이터 타입과 Key 누락을 방지하여 ML 전처리 파이프라인의 안전성을 보장합니다.
     """
 
-    model_config = ConfigDict(extra="ignore")  # 정의되지 않은 추가 필드는 무시
+    model_config = ConfigDict(extra="allow")  # 정의되지 않은 추가 필드도 허용하여 유연한 확장 보장
 
     adx_5m: Optional[float] = None
     adx_15m: Optional[float] = None
@@ -40,6 +40,10 @@ class MarketDataSnapshot(BaseModel):
     short_score: Optional[int] = None
     excess_score: Optional[int] = None  # [V18.2] 임계치 대비 여유 점수 (actual - min)
     entry_type: Optional[str] = None
+
+    # [Detailed Scores & Percentiles]
+    scores: Optional[dict] = None
+    percentiles: Optional[dict] = None
 
     # [V18.5] Settings Snapshot
     timeframe: Optional[str] = None
