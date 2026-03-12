@@ -340,8 +340,8 @@ class ExecutionEngine:
                         "signal": log.direction,
                         "amount": log.qty,
                         "limit_price": log.execution_price,
-                        "tp_price": log.tp_price,
-                        "sl_price": log.sl_price,
+                        "tp_price": log.tp_price or 0.0,
+                        "sl_price": log.sl_price or 0.0,
                         "entry_time": log.entry_time,
                         "last_summed_ts": int(time.time() * 1000),
                         "is_partial_tp_done": False,
@@ -1084,8 +1084,8 @@ class ExecutionEngine:
 
                     if current_price > 0 and isinstance(pos_info, dict):
                         signal_type = pos_info.get("signal")
-                        tp_price = pos_info.get("tp_price", 0.0)
-                        sl_price = pos_info.get("sl_price", 0.0)
+                        tp_price = pos_info.get("tp_price") or 0.0
+                        sl_price = pos_info.get("sl_price") or 0.0
                         is_partial_tp_done = pos_info.get("is_partial_tp_done", False)
 
                         triggered = False
