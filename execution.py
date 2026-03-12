@@ -1,6 +1,8 @@
 import asyncio
 import json
 import time
+import numpy as np
+import pandas as pd
 from datetime import datetime, timezone, timedelta
 from config import settings, logger
 from database import TradeLog, AsyncSessionLocal
@@ -788,11 +790,45 @@ class ExecutionEngine:
             f"실제 손절률(수수료 차감 후): {real_sl_pct * 100:.2f}% (Taker 수수료 0.045% 포함. R:R={abs(real_tp_pct / real_sl_pct) if real_sl_pct != 0 else 0:.2f})"
         )
 
+        def clean_json_data(data):
+            """전달받은 데이터를 JSON 직렬화 가능한 순수 파이썬 타입으로 재귀적으로 변환합니다."""
+            if isinstance(data, dict):
+                return {k: clean_json_data(v) for k, v in data.items()}
+            elif isinstance(data, (list, tuple, set)):
+                return [clean_json_data(i) for i in data]
+            elif hasattr(data, "model_dump"):  # Pydantic 모델 대응
+                return clean_json_data(data.model_dump())
+            elif isinstance(data, np.bool_):
+                return bool(data)
+            elif isinstance(data, (np.int64, np.int32, np.int16, np.int8)):
+                return int(data)
+            elif isinstance(data, (np.float64, np.float32, np.float16)):
+                return float(data)
+            elif pd.isna(data):
+                return None
+            return data
+
         try:
             # DB 기록 (진입) - DRY_RUN 이더라도 테스트 내역을 DB에 기록
             async with AsyncSessionLocal() as session:
                 dr_prefix = "[DRY_RUN] " if settings.DRY_RUN else ""
                 now_kst = datetime.utcnow() + timedelta(hours=9)
+
+                # market_data와 params를 안전하게 세척 후 기록
+                raw_market_data = entry_info.get("market_data")
+                cleaned_market_data = clean_json_data(raw_market_data)
+                
+                # params는 이미 _snapshot_params()에서 json.dumps()된 문자열일 수 있으나
+                # 만약 dict라면 세척 후 저장 (TradeLog.params는 String 혹은 JSONB일 수 있음)
+                raw_params = self._snapshot_params()
+                if isinstance(raw_params, str):
+                    try:
+                        # 이미 JSON 문자열이면 그대로 사용하거나, 검증을 위해 로드 후 세척
+                        cleaned_params = raw_params 
+                    except:
+                        cleaned_params = raw_params
+                else:
+                    cleaned_params = json.dumps(clean_json_data(raw_params), ensure_ascii=False)
 
                 # [V19] 모든 기록을 TradeLog로 단일화
                 new_tradelog = TradeLog(
@@ -809,8 +845,8 @@ class ExecutionEngine:
                     dry_run=settings.DRY_RUN,
                     tp_price=tp_price,
                     sl_price=sl_price,
-                    market_data=entry_info.get("market_data"),
-                    params=self._snapshot_params(),
+                    market_data=cleaned_market_data,
+                    params=cleaned_params,
                 )
                 session.add(new_tradelog)
                 await session.commit()
