@@ -24,8 +24,9 @@ class TelegramNotifier:
         텔레그램 봇을 통해 지정된 Chat ID로 비동기 메시지를 전송합니다.
         429 에러(Too Many Requests) 발생 시 retry_after 지시만큼 대기 후 재시도합니다.
         """
+        from config import logger
+
         if not self.bot_token or not self.chat_id:
-            from config import logger
             logger.warning(
                 "텔레그램 봇 토큰이나 Chat ID가 설정되지 않아 알림을 스킵합니다."
             )
@@ -38,7 +39,6 @@ class TelegramNotifier:
             try:
                 session = await self._get_session()
                 async with session.post(url, json=payload) as response:
-                    from config import logger
                     if response.status == 200:
                         logger.info(f"텔레그램 메시지 전송 성공: {text[:20]}...")
                         return

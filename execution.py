@@ -445,9 +445,6 @@ class ExecutionEngine:
             logger.info(f"[{symbol}] 손실 쿨다운 중. {remaining}분 후 진입 가능. 스킵.")
             return False
 
-        # Defensive import: protects against stale deployments where module-level import is missing.
-        import time
-
         try:
             # [HOTFIX] 진입 시도 시작 시 즉각 pending_entries에 등록하여 수동진입 오탐지 방지
             self.pending_entries[symbol] = {
