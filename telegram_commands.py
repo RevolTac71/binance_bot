@@ -1,7 +1,5 @@
 import os
-import sys
 import asyncio
-import psutil
 from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -11,10 +9,22 @@ from config import settings, logger, update_env_variable
 START_TIME = datetime.utcnow() + timedelta(hours=9)
 
 
+async def reply(update: Update, text: str, **kwargs):
+    msg = update.effective_message
+    if msg is None:
+        logger.warning("Telegram update has no message; reply skipped.")
+        return
+    await msg.reply_text(text, **kwargs)
+
+
 async def check_admin(update: Update) -> bool:
-    chat_id = str(update.effective_chat.id)
+    chat = update.effective_chat
+    if chat is None:
+        logger.warning("Telegram update has no chat; admin check failed.")
+        return False
+    chat_id = str(chat.id)
     if chat_id != settings.TELEGRAM_CHAT_ID:
-        await update.message.reply_text("🚨 권한이 없는 사용자입니다.")
+        await reply(update, "🚨 권한이 없는 사용자입니다.")
         return False
     return True
 
@@ -36,7 +46,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "예: /setparam sl 3.0\n"
         "자세한 파라미터 목록은 /help 참조"
     )
-    await update.message.reply_text(msg)
+    await reply(update, msg)
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -117,7 +127,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         msg = "❌ 알 수 없는 카테고리입니다. `/help`를 입력해 목록을 확인하세요."
 
-    await update.message.reply_text(msg, parse_mode="HTML")
+    await reply(update, msg, parse_mode="HTML")
 
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -160,38 +170,40 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         position_details = f"조회 오류: {e}"
 
+    is_paused = getattr(settings, "PAUSED", False)
+    capital_text = f"{capital:,.2f} USDT" if isinstance(capital, (int, float)) else str(capital)
     msg = (
         f"📊 <b>실시간 봇 상태 리포트</b>\n"
         f"──────────────────\n"
         f"🕒 <b>Uptime</b>: {days}일 {hours}시간 {minutes}분\n"
-        f"💰 <b>USDT 잔고</b>: {capital:,.2f} USDT\n"
-        f"🚦 <b>신규 진입</b>: {'✅ ACTIVE' if not settings.PAUSED else '⚠️ PAUSED'}\n"
+        f"💰 <b>USDT 잔고</b>: {capital_text}\n"
+        f"🚦 <b>신규 진입</b>: {'✅ ACTIVE' if not is_paused else '⚠️ PAUSED'}\n"
         f"──────────────────\n"
         f"📦 <b>보유 포지션</b>:\n{position_details}"
     )
-    await update.message.reply_text(msg, parse_mode="HTML")
+    await reply(update, msg, parse_mode="HTML")
 
 
 async def pause_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
-    settings.PAUSED = True
+    setattr(settings, "PAUSED", True)
     update_env_variable("PAUSED", "True")
-    await update.message.reply_text("⚠️ 신규 진입이 일시 중지되었습니다.")
+    await reply(update, "⚠️ 신규 진입이 일시 중지되었습니다.")
 
 
 async def resume_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
-    settings.PAUSED = False
+    setattr(settings, "PAUSED", False)
     update_env_variable("PAUSED", "False")
-    await update.message.reply_text("✅ 신규 진입이 재개되었습니다.")
+    await reply(update, "✅ 신규 진입이 재개되었습니다.")
 
 
 async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
-    await update.message.reply_text("🔄 봇을 재시작합니다 (감시 프로세스에 의해 42번 코드로 재기동)...")
+    await reply(update, "🔄 봇을 재시작합니다 (감시 프로세스에 의해 42번 코드로 재기동)...")
     # shutdown_event를 호출하여 main 루프에서 안전하게 종료하도록 유도
     context.bot_data["exit_code"] = 42
     shutdown_event = context.bot_data.get("shutdown_event")
@@ -203,10 +215,10 @@ async def panic_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
     execution = context.bot_data["execution"]
-    await update.message.reply_text("🚨 PANIC! 모든 포지션 시장가 정리 및 봇 정지 시도...")
+    await reply(update, "🚨 PANIC! 모든 포지션 시장가 정리 및 봇 정지 시도...")
     
     # 1. 진입 중지
-    settings.PAUSED = True
+    setattr(settings, "PAUSED", True)
     update_env_variable("PAUSED", "True")
 
     # 2. 모든 포지션 시장가 종료
@@ -218,39 +230,40 @@ async def panic_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 side = "sell" if p["side"] == "long" else "buy"
                 symbol = p["symbol"]
                 await execution.exchange.create_order(symbol, "market", side, amt, params={"reduceOnly": True})
-        await update.message.reply_text("✅ 모든 포지션이 정리되었습니다. 봇을 종료합니다.")
+        await reply(update, "✅ 모든 포지션이 정리되었습니다. 봇을 종료합니다.")
         
         context.bot_data["exit_code"] = 0
         shutdown_event = context.bot_data.get("shutdown_event")
         if shutdown_event:
             shutdown_event.set()
     except Exception as e:
-        await update.message.reply_text(f"❌ 패닉 셀 중 오류 발생: {e}")
+        await reply(update, f"❌ 패닉 셀 중 오류 발생: {e}")
 
 
 async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
     
-    if len(context.args) < 2:
-        await update.message.reply_text("사용법: /setparam [키] [값]\n예: /setparam risk 0.03")
+    args = context.args or []
+    if len(args) < 2:
+        await reply(update, "사용법: /setparam [키] [값]\n예: /setparam risk 0.03")
         return
 
-    key = context.args[0].lower()
-    value_str = context.args[1]
+    key = args[0].lower()
+    value_str = args[1]
 
     # 설정 가능 파라미터 맵핑
     param_map = {
         "risk": ("RISK_PERCENTAGE", float),
         "leverage": ("LEVERAGE", int),
-        "l_tp": ("LONG_TP_MULT", float),
-        "l_sl": ("LONG_SL_MULT", float),
-        "s_tp": ("SHORT_TP_MULT", float),
-        "s_sl": ("SHORT_SL_MULT", float),
-        "l_tp_pct": ("LONG_TP_PCT", float),
-        "l_sl_pct": ("LONG_SL_PCT", float),
-        "s_tp_pct": ("SHORT_TP_PCT", float),
-        "s_sl_pct": ("SHORT_SL_PCT", float),
+        "l_tp": ("L_TP_MULT", float),
+        "l_sl": ("L_SL_MULT", float),
+        "s_tp": ("S_TP_MULT", float),
+        "s_sl": ("S_SL_MULT", float),
+        "l_tp_pct": ("L_TP_PCT", float),
+        "l_sl_pct": ("L_SL_PCT", float),
+        "s_tp_pct": ("S_TP_PCT", float),
+        "s_sl_pct": ("S_SL_PCT", float),
         "l_tp_mode": ("LONG_TP_MODE", str),
         "l_sl_mode": ("LONG_SL_MODE", str),
         "s_tp_mode": ("SHORT_TP_MODE", str),
@@ -308,7 +321,7 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             param_map[k_lower] = (skey, t_func)
 
     if key not in param_map:
-        await update.message.reply_text(f"❌ 설정 불가능한 키입니다: {key}")
+        await reply(update, f"❌ 설정 불가능한 키입니다: {key}")
         return
 
     env_key, type_func = param_map[key]
@@ -322,50 +335,50 @@ async def setparam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if is_scoring_rule:
             settings.rebuild_scoring_rules()
-            await update.message.reply_text(f"🎯 [Engine Rebuild] 스코어링 규칙 '{key}'가 {typed_val}로 즉시 업데이트되었습니다.")
+            await reply(update, f"🎯 [Engine Rebuild] 스코어링 규칙 '{key}'가 {typed_val}로 즉시 업데이트되었습니다.")
         else:
-            await update.message.reply_text(f"✅ 설정 변경 완료: {key} -> {typed_val}")
+            await reply(update, f"✅ 설정 변경 완료: {key} -> {typed_val}")
     except Exception as e:
-        await update.message.reply_text(f"❌ 변환 오류: {e}")
+        await reply(update, f"❌ 변환 오류: {e}")
 
 
 async def ignore_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
     if not context.args:
-        await update.message.reply_text("사용법: /ignore [BTC]")
+        await reply(update, "사용법: /ignore [BTC]")
         return
     
     coin = context.args[0].upper()
     if coin not in settings.BLACKLIST_SYMBOLS:
         settings.BLACKLIST_SYMBOLS.append(coin)
         update_env_variable("BLACKLIST_SYMBOLS", ",".join(settings.BLACKLIST_SYMBOLS))
-        await update.message.reply_text(f"🚫 {coin} 종목을 블랙리스트에 추가했습니다.")
+        await reply(update, f"🚫 {coin} 종목을 블랙리스트에 추가했습니다.")
     else:
-        await update.message.reply_text(f"이미 {coin} 종목이 제외되어 있습니다.")
+        await reply(update, f"이미 {coin} 종목이 제외되어 있습니다.")
 
 
 async def allow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
     if not context.args:
-        await update.message.reply_text("사용법: /allow [BTC]")
+        await reply(update, "사용법: /allow [BTC]")
         return
     
     coin = context.args[0].upper()
     if coin in settings.BLACKLIST_SYMBOLS:
         settings.BLACKLIST_SYMBOLS.remove(coin)
         update_env_variable("BLACKLIST_SYMBOLS", ",".join(settings.BLACKLIST_SYMBOLS))
-        await update.message.reply_text(f"✅ {coin} 종목을 다시 허용했습니다.")
+        await reply(update, f"✅ {coin} 종목을 다시 허용했습니다.")
     else:
-        await update.message.reply_text(f"{coin} 종목은 이미 허용되어 있습니다.")
+        await reply(update, f"{coin} 종목은 이미 허용되어 있습니다.")
 
 
 async def close_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_admin(update):
         return
     if not context.args:
-        await update.message.reply_text("사용법: /close [DOGE]")
+        await reply(update, "사용법: /close [DOGE]")
         return
     
     coin = context.args[0].upper()
@@ -384,11 +397,11 @@ async def close_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     closed = True
                     break
         if closed:
-            await update.message.reply_text(f"✅ [{coin}] 전량 시장가 청산 완료")
+            await reply(update, f"✅ [{coin}] 전량 시장가 청산 완료")
         else:
-            await update.message.reply_text(f"❌ [{coin}] 활성 포지션을 찾을 수 없습니다.")
+            await reply(update, f"❌ [{coin}] 활성 포지션을 찾을 수 없습니다.")
     except Exception as e:
-        await update.message.reply_text(f"❌ 청산 중 오류 발생: {e}")
+        await reply(update, f"❌ 청산 중 오류 발생: {e}")
 
 
 async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -413,24 +426,26 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "💡 <b>상세 조회:</b> <code>/params [risk|trade|score|weight]</code>"
             )
         elif category == "risk":
+            chandelier_mult = getattr(settings, "CHANDELIER_MULT", float(os.getenv("CHANDELIER_MULT", "2.0")))
+            chandelier_atr_len = getattr(settings, "CHANDELIER_ATR_LEN", int(os.getenv("CHANDELIER_ATR_LEN", "14")))
             msg = (
                 "🛡️ <b>[청산 및 리스크 상세 설정]</b>\n\n"
                 "🟢 <b>LONG Positions</b>:\n"
                 f" ▫ <b>TP 모드</b>: {settings.LONG_TP_MODE}\n"
-                f"   - ATR배수: {settings.LONG_TP_MULT}x\n"
-                f"   - 고정비율: {settings.LONG_TP_PCT*100:.1f}%\n"
+                f"   - ATR배수: {settings.L_TP_MULT}x\n"
+                f"   - 고정비율: {settings.L_TP_PCT*100:.1f}%\n"
                 f" ▫ <b>SL 모드</b>: {settings.LONG_SL_MODE}\n"
-                f"   - ATR배수: {settings.LONG_SL_MULT}x\n"
-                f"   - 고정비율: {settings.LONG_SL_PCT*100:.1f}%\n\n"
+                f"   - ATR배수: {settings.L_SL_MULT}x\n"
+                f"   - 고정비율: {settings.L_SL_PCT*100:.1f}%\n\n"
                 "🔴 <b>SHORT Positions</b>:\n"
                 f" ▫ <b>TP 모드</b>: {settings.SHORT_TP_MODE}\n"
-                f"   - ATR배수: {settings.SHORT_TP_MULT}x\n"
-                f"   - 고정비율: {settings.SHORT_TP_PCT*100:.1f}%\n"
+                f"   - ATR배수: {settings.S_TP_MULT}x\n"
+                f"   - 고정비율: {settings.S_TP_PCT*100:.1f}%\n"
                 f" ▫ <b>SL 모드</b>: {settings.SHORT_SL_MODE}\n"
-                f"   - ATR배수: {settings.SHORT_SL_MULT}x\n"
-                f"   - 고정비율: {settings.SHORT_SL_PCT*100:.1f}%\n\n"
+                f"   - ATR배수: {settings.S_SL_MULT}x\n"
+                f"   - 고정비율: {settings.S_SL_PCT*100:.1f}%\n\n"
                 "⚙️ <b>공통 리스크 제어</b>:\n"
-                f" ▪ <b>Chandelier</b>: {settings.CHANDELIER_MULT}x (ATR:{settings.CHANDELIER_ATR_LEN})\n"
+                f" ▪ <b>Chandelier</b>: {chandelier_mult}x (ATR:{chandelier_atr_len})\n"
                 f" ▪ <b>Partial TP</b>: {settings.PARTIAL_TP_RATIO*100:.0f}% 물량 청산\n"
                 f" ▪ <b>Breakeven</b>: 트리거 {settings.BREAKEVEN_TRIGGER_MULT}x / 확보 {settings.BREAKEVEN_PROFIT_MULT}x\n"
                 f" ▪ <b>Exit Timeout</b>: {settings.TIME_EXIT_MINUTES}분 강제청산\n"
@@ -485,10 +500,10 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             msg = "❌ 알 수 없는 카테고리입니다. <code>/params [risk|trade|score|weight]</code>를 확인하세요."
 
-        await update.message.reply_text(msg, parse_mode="HTML")
+        await reply(update, msg, parse_mode="HTML")
     except Exception as e:
         logger.error(f"Error in params_cmd: {e}", exc_info=True)
-        await update.message.reply_text(f"❌ 설정 조회 중 오류가 발생했습니다: {e}")
+        await reply(update, f"❌ 설정 조회 중 오류가 발생했습니다: {e}")
 
 
 async def refresh_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -498,9 +513,9 @@ async def refresh_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     refresh_event = context.bot_data.get("refresh_event")
     if refresh_event:
         refresh_event.set()
-        await update.message.reply_text("🔄 즉시 종목 새로고침 신호를 보냈습니다. 곧 반영됩니다.")
+        await reply(update, "🔄 즉시 종목 새로고침 신호를 보냈습니다. 곧 반영됩니다.")
     else:
-        await update.message.reply_text("❌ 새로고침 이벤트를 찾을 수 없습니다.")
+        await reply(update, "❌ 새로고침 이벤트를 찾을 수 없습니다.")
 
 
 def setup_telegram_bot(execution_engine, refresh_event=None):
