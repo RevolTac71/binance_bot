@@ -100,7 +100,7 @@ class TradeLog(Base):
     sl_price = Column(Float, nullable=True)
 
     # [V18.2] 진입 시점의 시장 지표 스냅샷 및 파라미터 캡처
-    market_data = Column(JSONB, nullable=True)
+    market_data = Column(JSONB, nullable=False, default=dict)
     params = Column(Text, nullable=True)
 
     # 지연 모델링 레이블 (MFE, MAE 및 수익률) - Offline 배치로 UPDATE 됨
@@ -155,8 +155,9 @@ engine = create_async_engine(
     execution_options={"prepared_statement_cache_size": 0, "compiled_cache": None},
 )
 
+
 AsyncSessionLocal = sessionmaker(
-    bind=engine, class_=AsyncSession, expire_on_commit=False
+    engine, class_=AsyncSession, expire_on_commit=False
 )
 
 

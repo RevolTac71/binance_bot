@@ -245,11 +245,15 @@ class ExecutionEngine:
                 )
 
                 # 반환형이 배열 또는 {'orders': [...]} 인지 확인 후 정리
-                algo_items = (
-                    algo_orders.get("orders", algo_orders)
-                    if isinstance(algo_orders, dict)
-                    else algo_orders
-                )
+                # None일 경우 에러 발생 방지
+                if algo_orders is None:
+                    algo_items = []
+                else:
+                    algo_items = (
+                        algo_orders.get("orders", algo_orders)
+                        if isinstance(algo_orders, dict)
+                        else algo_orders
+                    )
 
                 for algo in algo_items:
                     raw_binance_symbol = algo.get("symbol")
@@ -1700,30 +1704,29 @@ class ExecutionEngine:
                 entry_price = pos_info.get("limit_price", 0.0)
                 amount = pos_info.get("amount", 0.0)
                 signal = pos_info.get("signal", "LONG")
-                close_qty = amount
+
+                # 분할 청산 시 실제 청산 수량을 먼저 확정합니다.
+                partial_ratio = float(getattr(settings, "PARTIAL_TP_RATIO", 0.5))
+                partial_ratio = min(max(partial_ratio, 0.0), 1.0)
+                close_qty = amount * partial_ratio if partial else amount
 
                 # [V18.4] settings.FEE_RATE 사용
                 taker_fee = getattr(settings, "FEE_RATE", 0.00045)
                 # 가상 청산이므로 보수적으로 Taker fee 2회(진입/청산) 부과 가정
-                fees = (entry_price * amount * taker_fee) + (
-                    close_price * amount * taker_fee
+                fees = (entry_price * close_qty * taker_fee) + (
+                    close_price * close_qty * taker_fee
                 )
 
                 if signal == "LONG":
-                    gross_pnl = (close_price - entry_price) * amount
+                    gross_pnl = (close_price - entry_price) * close_qty
                 else:
-                    gross_pnl = (entry_price - close_price) * amount
-
-                # 분할 익절인 경우 수량의 절반만 계산
-                if partial:
-                    gross_pnl *= settings.PARTIAL_TP_RATIO
-                    fees *= settings.PARTIAL_TP_RATIO
+                    gross_pnl = (entry_price - close_price) * close_qty
 
                 realized_pnl = gross_pnl - fees
 
                 logger.info(
                     f"🧪 [DRY RUN] {symbol} {'부분' if partial else '전체'} 가상 PNL 정산 완료: 진입가={entry_price}, 청산가={close_price}, "
-                    f"수량={amount * (settings.PARTIAL_TP_RATIO if partial else 1.0)}, Signal={signal}, Net PNL={realized_pnl:.4f}"
+                    f"수량={close_qty}, Signal={signal}, Net PNL={realized_pnl:.4f}"
                 )
             else:
                 logger.warning(
@@ -1771,8 +1774,6 @@ class ExecutionEngine:
                     trade_log = result.scalars().first()
 
                     if trade_log:
-                        trade_log.exit_time = now_kst
-                        trade_log.exit_price = close_price
                         # [V18] 누적 수익 처리
                         trade_log.realized_pnl = (
                             trade_log.realized_pnl or 0.0
@@ -1780,6 +1781,7 @@ class ExecutionEngine:
                         trade_log.exit_reason = f"[DRY_RUN] {reason}"
                         if not partial:
                             trade_log.exit_time = now_kst
+                            trade_log.exit_price = close_price
 
                         logger.info(
                             f"🧪 [DRY RUN] TradeLog 디버그 전 - roi_pct 갱신 전, exc_price: {trade_log.execution_price}"
@@ -1821,7 +1823,9 @@ class ExecutionEngine:
             else:
                 # 1차 익절 완료 시 수량 감소 및 플래그 세팅
                 if symbol in self.active_positions:
-                    self.active_positions[symbol]["amount"] -= close_qty
+                    self.active_positions[symbol]["amount"] = max(
+                        0.0, self.active_positions[symbol]["amount"] - close_qty
+                    )
                     self.active_positions[symbol]["is_partial_tp_done"] = True
 
                 # [V18.2] PortfolioState(샹들리에 추적용) 플래그도 가상 업데이트
