@@ -332,14 +332,34 @@ class ExecutionEngine:
     async def _recover_dry_run_positions(self):
         """[V18.1] DRY_RUN 가상 포지션 복구 로직 (별도 메서드화)"""
         try:
+            max_trades = getattr(settings, "MAX_TRADES", 3)
             async with AsyncSessionLocal() as session:
-                stmt = select(TradeLog).where(
-                    TradeLog.dry_run == True, TradeLog.exit_time == None
+                # entry_time 내림차순 정렬 → 심볼당 가장 최신 레코드가 먼저 나옴
+                stmt = (
+                    select(TradeLog)
+                    .where(TradeLog.dry_run == True, TradeLog.exit_time == None)
+                    .order_by(TradeLog.entry_time.desc())
                 )
                 result = await session.execute(stmt)
                 recovered_logs = result.scalars().all()
 
+                seen_symbols: set = set()
                 for log in recovered_logs:
+                    # 심볼당 최신 1건만 복구 (이전 버그로 인한 중복 미청산 레코드 방어)
+                    if log.symbol in seen_symbols:
+                        logger.warning(
+                            f"⚠️ [DRY RUN 복구] {log.symbol} 중복 미청산 레코드 발견 — 건너뜀 (DB 직접 정리 필요)"
+                        )
+                        continue
+
+                    # MAX_TRADES 한도 초과 시 더 이상 복구하지 않음
+                    if len(self.active_positions) >= max_trades:
+                        logger.warning(
+                            f"⚠️ [DRY RUN 복구] MAX_TRADES({max_trades}) 한도 도달 — 나머지 복구 생략."
+                        )
+                        break
+
+                    seen_symbols.add(log.symbol)
                     self.active_positions[log.symbol] = {
                         "signal": log.direction,
                         "amount": log.qty,
