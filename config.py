@@ -134,7 +134,7 @@ class Config:
 
     def rebuild_scoring_rules(self):
         """환경변수로부터 스코어링 규칙을 다시 빌드합니다."""
-        self.L_MACD_T1 = (os.getenv("L_MACD_T1", "65"))
+        self.L_MACD_T1 = float(os.getenv("L_MACD_T1", "65"))
         self.L_MACD_W1 = float(os.getenv("L_MACD_W1", "1"))
         self.L_MACD_T2 = float(os.getenv("L_MACD_T2", "75"))
         self.L_MACD_W2 = float(os.getenv("L_MACD_W2", "2"))
