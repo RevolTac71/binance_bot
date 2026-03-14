@@ -507,7 +507,7 @@ async def process_closed_kline(
             )
 
             # 4. 추격 매수(Chasing) 방식 진입 시도
-            await execution.place_chasing_entry_order(
+            entry_success = await execution.place_chasing_entry_order(
                 symbol=symbol,
                 side=side,
                 amount=qty,
@@ -518,12 +518,14 @@ async def process_closed_kline(
             )
 
             # V18 포트폴리오 상태에 포지션 등록 (Chandelier 추적 시작)
-            portfolio.register_position(
-                symbol=symbol,
-                direction=decision["signal"],
-                entry_price=market_price,
-                atr=atr_val,
-            )
+            # 진입이 실제로 시작된 경우에만 등록 (False 반환 시 등록하면 청산 없이 PortfolioState만 쌓임)
+            if entry_success:
+                portfolio.register_position(
+                    symbol=symbol,
+                    direction=decision["signal"],
+                    entry_price=market_price,
+                    atr=atr_val,
+                )
 
     except Exception as e:
         logger.error(f"[{symbol}] KLINE 마감 처리 중 에러: {e}")

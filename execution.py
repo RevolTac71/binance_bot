@@ -433,11 +433,13 @@ class ExecutionEngine:
             return False
 
         # 포트폴리오 동시 진입 최대 개수(MAX_TRADES) 체크
+        # pending_entries(체결 진행 중)도 합산하여 레이스 컨디션으로 인한 초과 진입 방지
         max_trades = getattr(settings, "MAX_TRADES", 3)
-        if len(self.active_positions) >= max_trades:
+        current_count = len(self.active_positions) + len(self.pending_entries)
+        if current_count >= max_trades:
             logger.info(
                 f"[{symbol}] 전체 활성 포지션 한도 도달 "
-                f"(현재 {len(self.active_positions)}/최대 {max_trades}). 연쇄 손실 방지를 위해 진입 생략."
+                f"(활성 {len(self.active_positions)} + 대기 {len(self.pending_entries)} = {current_count}/최대 {max_trades}). 연쇄 손실 방지를 위해 진입 생략."
             )
             return False
 
