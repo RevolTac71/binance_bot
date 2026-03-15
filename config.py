@@ -1,210 +1,496 @@
-import os
+import json
 import logging
-from logging.handlers import RotatingFileHandler
-from datetime import datetime
-from zoneinfo import ZoneInfo
-from dotenv import load_dotenv, set_key
+import os
 import urllib.parse
-import threading
-import requests
-import requests
-
-# Load environment variables (override=True를 통해 .env 파일의 수정사항이 항상 우선 적용되도록 함)
-dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
-load_dotenv(dotenv_path, override=True)
-
-
-def update_env_variable(key: str, value: str, silent: bool = False):
-    """
-    실행 중 메모리의 환경변수를 갱신하고 동시에 .env 파일에도 덮어씁니다.
-    """
-    os.environ[key] = str(value)
-    try:
-        if not os.path.exists(dotenv_path):
-            with open(dotenv_path, "a", encoding="utf-8") as f:
-                pass
-
-        success = set_key(dotenv_path, key, str(value))
-
-        if success and not silent:
-            logger.info(
-                f"💾 [Persistence] 환경변수 '{key}' 가 {value}로 영구 저장되었습니다."
-            )
-    except Exception as e:
-        logger.error(f"❌ [Persistence] .env 파일 갱신 실패 ({key}): {e}")
-
+from datetime import datetime
+from logging.handlers import RotatingFileHandler
+from zoneinfo import ZoneInfo
 
 # KST Timezone 설정
 KST = ZoneInfo("Asia/Seoul")
 
+BASE_DIR = os.path.dirname(__file__)
+SETTINGS_JSON_PATH = os.path.join(BASE_DIR, "settings.json")
+LEGACY_DOTENV_PATH = os.path.join(BASE_DIR, ".env")
+
+SECRET_KEYS = {
+    "BINANCE_API_KEY",
+    "BINANCE_API_SECRET",
+    "BINANCE_TESTNET_API_KEY",
+    "BINANCE_TESTNET_API_SECRET",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_CHAT_ID",
+    "DB_PASSWORD",
+    "BINANCE_KEY",
+    "BINANCE_SECRET",
+}
+
+ENV_ONLY_KEYS = SECRET_KEYS | {
+    "DB_USER",
+    "DB_HOST",
+    "DB_PORT",
+    "DB_NAME",
+}
+
+
+def _parse_env_file(file_path: str) -> dict:
+    parsed = {}
+    if not os.path.exists(file_path):
+        return parsed
+
+    with open(file_path, "r", encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export ") :].strip()
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            parsed[key.strip()] = value.strip()
+    return parsed
+
+
+def _load_settings_data() -> dict:
+    if os.path.exists(SETTINGS_JSON_PATH):
+        try:
+            with open(SETTINGS_JSON_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+
+    # settings.json 이 없을 경우 .env를 1회 마이그레이션 소스로 사용
+    env_data = _parse_env_file(LEGACY_DOTENV_PATH)
+    env_data = {k: v for k, v in env_data.items() if k not in ENV_ONLY_KEYS}
+    if env_data:
+        _save_settings_data(env_data)
+    return env_data
+
+
+def _save_settings_data(data: dict) -> None:
+    with open(SETTINGS_JSON_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def _to_storage_value(value):
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if isinstance(value, list):
+        return ",".join(str(v) for v in value)
+    return str(value)
+
+
+def _to_bool(value, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _load_secret_data() -> dict:
+    parsed = _parse_env_file(LEGACY_DOTENV_PATH)
+    secrets = {k: v for k, v in parsed.items() if k in ENV_ONLY_KEYS}
+    # OS 환경변수는 .env 보다 우선합니다.
+    for key in ENV_ONLY_KEYS:
+        env_val = os.environ.get(key)
+        if env_val not in (None, ""):
+            secrets[key] = env_val
+    return secrets
+
+
+def _save_secret_to_env_file(key: str, value: str) -> None:
+    lines = []
+    if os.path.exists(LEGACY_DOTENV_PATH):
+        with open(LEGACY_DOTENV_PATH, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+    target = f"{key}={value}\n"
+    replaced = False
+    for i, raw_line in enumerate(lines):
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        current_key = line.split("=", 1)[0].replace("export ", "").strip()
+        if current_key == key:
+            lines[i] = target
+            replaced = True
+            break
+
+    if not replaced:
+        if lines and not lines[-1].endswith("\n"):
+            lines[-1] = lines[-1] + "\n"
+        lines.append(target)
+
+    with open(LEGACY_DOTENV_PATH, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+
+
+_SETTINGS_DATA = _load_settings_data()
+_SECRET_DATA = _load_secret_data()
+
+
+def update_env_variable(key: str, value, silent: bool = False):
+    """
+    실행 중 설정값을 갱신하고 settings.json 파일에 영구 반영합니다.
+    함수명은 기존 호출 호환성을 위해 유지합니다.
+    """
+    stored = _to_storage_value(value)
+    try:
+        if key in ENV_ONLY_KEYS:
+            _SECRET_DATA[key] = stored
+            os.environ[key] = stored
+            _save_secret_to_env_file(key, stored)
+            if not silent:
+                logger.info(f"💾 [Persistence] .env 전용 설정 '{key}' 가 저장되었습니다.")
+            return
+
+        _SETTINGS_DATA[key] = stored
+        os.environ[key] = stored
+        _save_settings_data(_SETTINGS_DATA)
+        if not silent:
+            logger.info(f"💾 [Persistence] 설정 '{key}' 가 {stored}로 저장되었습니다.")
+    except Exception as e:
+        logger.error(f"❌ [Persistence] settings.json 갱신 실패 ({key}): {e}")
+
 
 class Config:
     def __init__(self):
+        self._data = _SETTINGS_DATA
+        self._secrets = _SECRET_DATA
+        self._known_keys = set()
+
         # 1. Binance API Settings
-        self.BINANCE_API_KEY = os.getenv("BINANCE_API_KEY") or os.getenv("BINANCE_KEY")
-        self.BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET") or os.getenv("BINANCE_SECRET")
-        self.USE_TESTNET = os.getenv("USE_TESTNET", "False").lower() == "true"
-        self.BINANCE_TESTNET_API_KEY = os.getenv("BINANCE_TESTNET_API_KEY")
-        self.BINANCE_TESTNET_API_SECRET = os.getenv("BINANCE_TESTNET_API_SECRET")
+        self.BINANCE_API_KEY = self._get_str("BINANCE_API_KEY", None, aliases=["BINANCE_KEY"])
+        self.BINANCE_API_SECRET = self._get_str(
+            "BINANCE_API_SECRET", None, aliases=["BINANCE_SECRET"]
+        )
+        self.USE_TESTNET = self._get_bool("USE_TESTNET", False)
+        self.BINANCE_TESTNET_API_KEY = self._get_str("BINANCE_TESTNET_API_KEY", None)
+        self.BINANCE_TESTNET_API_SECRET = self._get_str("BINANCE_TESTNET_API_SECRET", None)
 
         # 2. Database Settings
-        self.DB_USER = os.getenv("DB_USER", "postgres.uvqhpiilmameyjortqoc")
-        _raw_password = os.getenv("DB_PASSWORD", "")
-        self.DB_PASSWORD = urllib.parse.quote_plus(_raw_password)
-        self.DB_HOST = os.getenv("DB_HOST", "aws-1-ap-southeast-2.pooler.supabase.com")
-        self.DB_PORT = os.getenv("DB_PORT", "6543")
-        self.DB_NAME = os.getenv("DB_NAME", "postgres")
+        self.DB_USER = self._get_str("DB_USER", "postgres.uvqhpiilmameyjortqoc")
+        raw_password = self._get_str("DB_PASSWORD", "")
+        self.DB_PASSWORD = urllib.parse.quote_plus(raw_password)
+        self.DB_HOST = self._get_str("DB_HOST", "aws-1-ap-southeast-2.pooler.supabase.com")
+        self.DB_PORT = self._get_str("DB_PORT", "6543")
+        self.DB_NAME = self._get_str("DB_NAME", "postgres")
 
         self.SQLALCHEMY_DATABASE_URI = (
             f"postgresql+asyncpg://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
         )
 
         # 3. Telegram Settings
-        self.TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-        self.TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+        self.TELEGRAM_BOT_TOKEN = self._get_str("TELEGRAM_BOT_TOKEN", None)
+        self.TELEGRAM_CHAT_ID = self._get_str("TELEGRAM_CHAT_ID", None)
 
         # 4. Global Parameters
-        self.STRATEGY_VERSION = os.getenv("STRATEGY_VERSION", "V18")
-        self.TIMEFRAME = os.getenv("TIMEFRAME", "3m")
-        self.RISK_PERCENTAGE = float(os.getenv("RISK_PERCENTAGE", "0.005"))
-        self.LEVERAGE = int(os.getenv("LEVERAGE", "5"))
-        self.TIME_EXIT_MINUTES = int(os.getenv("TIME_EXIT_MINUTES", "60"))
-        self.DRY_RUN = os.getenv("DRY_RUN", "True").lower() == "true"
-        
+        self.STRATEGY_VERSION = self._get_str("STRATEGY_VERSION", "V18")
+        self.TIMEFRAME = self._get_str("TIMEFRAME", "3m")
+        self.RISK_PERCENTAGE = self._get_float("RISK_PERCENTAGE", 0.005)
+        self.LEVERAGE = self._get_int("LEVERAGE", 5)
+        self.TIME_EXIT_MINUTES = self._get_int("TIME_EXIT_MINUTES", 60)
+        self.DRY_RUN = self._get_bool("DRY_RUN", True)
+        self.PAUSED = self._get_bool("PAUSED", False)
+
         # 5. Kelly & Chasing
-        self.KELLY_SIZING = os.getenv("KELLY_SIZING", "False").lower() == "true"
-        self.KELLY_MIN_TRADES = int(os.getenv("KELLY_MIN_TRADES", "20"))
-        self.KELLY_MAX_FRACTION = float(os.getenv("KELLY_MAX_FRACTION", "0.05"))
-        self.CHASING_WAIT_SEC = float(os.getenv("CHASING_WAIT_SEC", "2.5"))
-        self.CHASING_MAX_RETRY = int(os.getenv("CHASING_MAX_RETRY", "10"))
-        self.CHASING_MARKET_THRESHOLD = int(os.getenv("CHASING_MARKET_THRESHOLD", "2"))
-        
+        self.KELLY_SIZING = self._get_bool("KELLY_SIZING", False)
+        self.KELLY_MIN_TRADES = self._get_int("KELLY_MIN_TRADES", 20)
+        self.KELLY_MAX_FRACTION = self._get_float("KELLY_MAX_FRACTION", 0.05)
+        self.CHASING_WAIT_SEC = self._get_float("CHASING_WAIT_SEC", 2.5)
+        self.CHASING_MAX_RETRY = self._get_int("CHASING_MAX_RETRY", 10)
+        self.CHASING_MARKET_THRESHOLD = self._get_int("CHASING_MARKET_THRESHOLD", 2)
+
         # 6. Exit Modes & Multipliers
-        self.PARTIAL_TP_RATIO = float(os.getenv("PARTIAL_TP_RATIO", "0.5"))
-        self.LONG_TP_MODE = os.getenv("LONG_TP_MODE", "ATR")
-        self.LONG_SL_MODE = os.getenv("LONG_SL_MODE", "ATR")
-        self.SHORT_TP_MODE = os.getenv("SHORT_TP_MODE", "PERCENT")
-        self.SHORT_SL_MODE = os.getenv("SHORT_SL_MODE", "ATR")
-        
-        self.L_TP_MULT = float(os.getenv("L_TP_MULT", "5.0"))
-        self.L_SL_MULT = float(os.getenv("L_SL_MULT", "1.5"))
-        self.S_TP_MULT = float(os.getenv("S_TP_MULT", "5.0"))
-        self.S_SL_MULT = float(os.getenv("S_SL_MULT", "1.5"))
-        
-        self.L_TP_PCT = float(os.getenv("L_TP_PCT", "0.05"))
-        self.L_SL_PCT = float(os.getenv("L_SL_PCT", "0.02"))
-        self.S_TP_PCT = float(os.getenv("S_TP_PCT", "0.03"))
-        self.S_SL_PCT = float(os.getenv("S_SL_PCT", "0.015"))
-        
-        self.FEE_RATE = float(os.getenv("FEE_RATE", "0.00045"))
-        self.BREAKEVEN_TRIGGER_MULT = float(os.getenv("BREAKEVEN_TRIGGER_MULT", "1.5"))
-        self.BREAKEVEN_PROFIT_MULT = float(os.getenv("BREAKEVEN_PROFIT_MULT", "0.2"))
-        
+        self.PARTIAL_TP_RATIO = self._get_float("PARTIAL_TP_RATIO", 0.5)
+        self.LONG_TP_MODE = self._get_str("LONG_TP_MODE", "ATR")
+        self.LONG_SL_MODE = self._get_str("LONG_SL_MODE", "ATR")
+        self.SHORT_TP_MODE = self._get_str("SHORT_TP_MODE", "PERCENT")
+        self.SHORT_SL_MODE = self._get_str("SHORT_SL_MODE", "ATR")
+
+        self.L_TP_MULT = self._get_float("L_TP_MULT", 5.0, aliases=["LONG_TP_MULT", "TP_MULT"])
+        self.L_SL_MULT = self._get_float("L_SL_MULT", 1.5, aliases=["LONG_SL_MULT", "SL_MULT"])
+        self.S_TP_MULT = self._get_float("S_TP_MULT", 5.0, aliases=["SHORT_TP_MULT", "TP_MULT"])
+        self.S_SL_MULT = self._get_float("S_SL_MULT", 1.5, aliases=["SHORT_SL_MULT", "SL_MULT"])
+
+        self.L_TP_PCT = self._get_float("L_TP_PCT", 0.05, aliases=["LONG_TP_PCT"])
+        self.L_SL_PCT = self._get_float("L_SL_PCT", 0.02, aliases=["LONG_SL_PCT"])
+        self.S_TP_PCT = self._get_float("S_TP_PCT", 0.03, aliases=["SHORT_TP_PCT"])
+        self.S_SL_PCT = self._get_float("S_SL_PCT", 0.015, aliases=["SHORT_SL_PCT"])
+
+        self.FEE_RATE = self._get_float("FEE_RATE", 0.00045)
+        self.BREAKEVEN_TRIGGER_MULT = self._get_float("BREAKEVEN_TRIGGER_MULT", 1.5)
+        self.BREAKEVEN_PROFIT_MULT = self._get_float("BREAKEVEN_PROFIT_MULT", 0.2)
+
         # 7. System Settings
-        self.MACD_FILTER_ENABLED = os.getenv("MACD_FILTER_ENABLED", "True").lower() == "true"
-        self.SYMBOL_REFRESH_INTERVAL = int(os.getenv("SYMBOL_REFRESH_INTERVAL", "3"))
+        self.MACD_FILTER_ENABLED = self._get_bool("MACD_FILTER_ENABLED", True)
+        self.SYMBOL_REFRESH_INTERVAL = self._get_int("SYMBOL_REFRESH_INTERVAL", 3)
         self.CURRENT_TARGET_SYMBOLS = []
-        _blacklist = os.getenv("BLACKLIST_SYMBOLS", "")
-        self.BLACKLIST_SYMBOLS = [s.strip().upper() for s in _blacklist.split(",") if s.strip()]
-        
+        self.BLACKLIST_SYMBOLS = self._get_list("BLACKLIST_SYMBOLS")
+
+        # Dashboard/Telegram 표시값
+        self.K_VALUE = self._get_float("K_VALUE", 1.6)
+        self.CHANDELIER_MULT = self._get_float("CHANDELIER_MULT", 2.5)
+        self.CHANDELIER_ATR_LEN = self._get_int("CHANDELIER_ATR_LEN", 14)
+
         # 8. Scoring & Boosts
-        self.MIN_SCORE_LONG = int(os.getenv("MIN_SCORE_LONG", "18"))
-        self.MIN_SCORE_SHORT = int(os.getenv("MIN_SCORE_SHORT", "17"))
-        self.ADX_BOOST_PCTL = float(os.getenv("ADX_BOOST_PCTL", "70.0"))
-        self.PCTL_WINDOW = int(os.getenv("PCTL_WINDOW", "100"))
-        self.ATR_RATIO_MULT = float(os.getenv("ATR_RATIO_MULT", "1.2"))
-        self.ATR_LONG_LEN = int(os.getenv("ATR_LONG_LEN", "200"))
-        self.LOSS_COOLDOWN_MINUTES = int(os.getenv("LOSS_COOLDOWN_MINUTES", "15"))
-        self.MAX_TRADES = int(os.getenv("MAX_TRADES", "3"))
-        self.MAX_CONCURRENT_SAME_DIR = int(os.getenv("MAX_CONCURRENT_SAME_DIR", "2"))
-        
+        self.MIN_SCORE_LONG = self._get_int("MIN_SCORE_LONG", 18)
+        self.MIN_SCORE_SHORT = self._get_int("MIN_SCORE_SHORT", 17)
+        self.ADX_BOOST_PCTL = self._get_float("ADX_BOOST_PCTL", 70.0)
+        self.PCTL_WINDOW = self._get_int("PCTL_WINDOW", 100)
+        self.ATR_RATIO_MULT = self._get_float("ATR_RATIO_MULT", 1.2)
+        self.ATR_LONG_LEN = self._get_int("ATR_LONG_LEN", 200)
+        self.LOSS_COOLDOWN_MINUTES = self._get_int("LOSS_COOLDOWN_MINUTES", 15)
+        self.MAX_TRADES = self._get_int("MAX_TRADES", 3)
+        self.MAX_CONCURRENT_SAME_DIR = self._get_int("MAX_CONCURRENT_SAME_DIR", 2)
+
         # MTF
-        self.HTF_TIMEFRAME_1H = os.getenv("HTF_TIMEFRAME_1H", "1h")
-        self.HTF_TIMEFRAME_15M = os.getenv("HTF_TIMEFRAME_15M", "15m")
+        self.HTF_TIMEFRAME_1H = self._get_str("HTF_TIMEFRAME_1H", "1h")
+        self.HTF_TIMEFRAME_15M = self._get_str("HTF_TIMEFRAME_15M", "15m")
 
         self.rebuild_scoring_rules()
+        self._log_unknown_keys()
 
     # [V18.6] API 장애 시 사용할 기본 메이저 알트코인 리스트
     DEFAULT_FALLBACK_SYMBOLS = [
-        "SOL/USDT:USDT", "ADA/USDT:USDT", "XRP/USDT:USDT", "DOT/USDT:USDT",
-        "AVAX/USDT:USDT", "LINK/USDT:USDT", "DOGE/USDT:USDT", "MATIC/USDT:USDT",
-        "TRX/USDT:USDT", "LTC/USDT:USDT", "BCH/USDT:USDT", "ICP/USDT:USDT",
-        "NEAR/USDT:USDT", "APT/USDT:USDT", "ARB/USDT:USDT"
+        "SOL/USDT:USDT",
+        "ADA/USDT:USDT",
+        "XRP/USDT:USDT",
+        "DOT/USDT:USDT",
+        "AVAX/USDT:USDT",
+        "LINK/USDT:USDT",
+        "DOGE/USDT:USDT",
+        "MATIC/USDT:USDT",
+        "TRX/USDT:USDT",
+        "LTC/USDT:USDT",
+        "BCH/USDT:USDT",
+        "ICP/USDT:USDT",
+        "NEAR/USDT:USDT",
+        "APT/USDT:USDT",
+        "ARB/USDT:USDT",
     ]
 
-    def rebuild_scoring_rules(self):
-        """환경변수로부터 스코어링 규칙을 다시 빌드합니다."""
-        self.L_MACD_T1 = float(os.getenv("L_MACD_T1", "65"))
-        self.L_MACD_W1 = float(os.getenv("L_MACD_W1", "1"))
-        self.L_MACD_T2 = float(os.getenv("L_MACD_T2", "75"))
-        self.L_MACD_W2 = float(os.getenv("L_MACD_W2", "2"))
-        self.L_MACD_T4 = float(os.getenv("L_MACD_T4", "85"))
-        self.L_MACD_W4 = float(os.getenv("L_MACD_W4", "4"))
-        self.L_CVD_T1 = float(os.getenv("L_CVD_T1", "70"))
-        self.L_CVD_W1 = float(os.getenv("L_CVD_W1", "1"))
-        self.L_CVD_T2 = float(os.getenv("L_CVD_T2", "85"))
-        self.L_CVD_W2 = float(os.getenv("L_CVD_W2", "2"))
-        self.L_IMBAL_T1 = float(os.getenv("L_IMBAL_T1", "80"))
-        self.L_IMBAL_W1 = float(os.getenv("L_IMBAL_W1", "1"))
-        self.L_NOFI_T1 = float(os.getenv("L_NOFI_T1", "85"))
-        self.L_NOFI_W1 = float(os.getenv("L_NOFI_W1", "1"))
-        self.L_OI_T1 = float(os.getenv("L_OI_T1", "70"))
-        self.L_OI_W1 = float(os.getenv("L_OI_W1", "2"))
-        self.L_OI_T2 = float(os.getenv("L_OI_T2", "85"))
-        self.L_OI_W2 = float(os.getenv("L_OI_W2", "4"))
-        self.L_TICK_T1 = float(os.getenv("L_TICK_T1", "85"))
-        self.L_TICK_W1 = float(os.getenv("L_TICK_W1", "1"))
-        self.L_VOL_T1 = float(os.getenv("L_VOL_T1", "1.9"))
-        self.L_VOL_W1 = float(os.getenv("L_VOL_W1", "1"))
-        self.L_BUY_T1 = int(os.getenv("L_BUY_T1", "15"))
-        self.L_BUY_W1 = int(os.getenv("L_BUY_W1", "1"))
+    def _remember_keys(self, key: str, aliases=None):
+        self._known_keys.add(key)
+        self._known_keys.add(str(key).lower())
+        self._known_keys.add(str(key).upper())
+        if aliases:
+            for alias in aliases:
+                self._known_keys.add(alias)
+                self._known_keys.add(str(alias).lower())
+                self._known_keys.add(str(alias).upper())
 
-        self.S_MACD_T1 = float(os.getenv("S_MACD_T1", "65"))
-        self.S_MACD_W1 = float(os.getenv("S_MACD_W1", "1"))
-        self.S_MACD_T2 = float(os.getenv("S_MACD_T2", "75"))
-        self.S_MACD_W2 = float(os.getenv("S_MACD_W2", "2"))
-        self.S_MACD_T4 = float(os.getenv("S_MACD_T4", "85"))
-        self.S_MACD_W4 = float(os.getenv("S_MACD_W4", "4"))
-        self.S_CVD_T1 = float(os.getenv("S_CVD_T1", "70"))
-        self.S_CVD_W1 = float(os.getenv("S_CVD_W1", "1"))
-        self.S_CVD_T2 = float(os.getenv("S_CVD_T2", "85"))
-        self.S_CVD_W2 = float(os.getenv("S_CVD_W2", "2"))
-        self.S_IMBAL_T1 = float(os.getenv("S_IMBAL_T1", "65"))
-        self.S_IMBAL_W1 = float(os.getenv("S_IMBAL_W1", "1"))
-        self.S_IMBAL_T2 = float(os.getenv("S_IMBAL_T2", "80"))
-        self.S_IMBAL_W2 = float(os.getenv("S_IMBAL_W2", "2"))
-        self.S_NOFI_T1 = float(os.getenv("S_NOFI_T1", "70"))
-        self.S_NOFI_W1 = float(os.getenv("S_NOFI_W1", "1"))
-        self.S_NOFI_T2 = float(os.getenv("S_NOFI_T2", "85"))
-        self.S_NOFI_W2 = float(os.getenv("S_NOFI_W2", "2"))
-        self.S_OI_T1 = float(os.getenv("S_OI_T1", "70"))
-        self.S_OI_W1 = float(os.getenv("S_OI_W1", "1"))
-        self.S_OI_T2 = float(os.getenv("S_OI_T2", "85"))
-        self.S_OI_W2 = float(os.getenv("S_OI_W2", "2"))
-        self.S_TICK_T1 = float(os.getenv("S_TICK_T1", "70"))
-        self.S_TICK_W1 = float(os.getenv("S_TICK_W1", "1"))
-        self.S_TICK_T2 = float(os.getenv("S_TICK_T2", "85"))
-        self.S_TICK_W2 = float(os.getenv("S_TICK_W2", "2"))
-        self.S_VOL_T1 = float(os.getenv("S_VOL_T1", "1.4"))
-        self.S_VOL_W1 = float(os.getenv("S_VOL_W1", "1"))
-        self.S_VOL_T2 = float(os.getenv("S_VOL_T2", "1.9"))
-        self.S_VOL_W2 = float(os.getenv("S_VOL_W2", "2"))
-        self.S_RSI_T1 = float(os.getenv("S_RSI_T1", "35"))
-        self.S_RSI_W1 = float(os.getenv("S_RSI_W1", "1"))
-        self.S_RSI_T2 = float(os.getenv("S_RSI_T2", "25"))
-        self.S_RSI_W2 = float(os.getenv("S_RSI_W2", "2"))
-        self.S_BUY_T1 = float(os.getenv("S_BUY_T1", "25"))
-        self.S_BUY_W1 = float(os.getenv("S_BUY_W1", "1"))
-        self.S_BUY_T2 = float(os.getenv("S_BUY_T2", "10"))
-        self.S_BUY_W2 = float(os.getenv("S_BUY_W2", "2"))
+    def _first_raw(self, key: str, aliases=None):
+        for candidate in [key] + (aliases or []):
+            variants = [candidate, str(candidate).lower(), str(candidate).upper()]
+            for variant in variants:
+                if variant in self._secrets and self._secrets[variant] not in (None, ""):
+                    return self._secrets[variant]
+                if variant in self._data and self._data[variant] not in (None, ""):
+                    return self._data[variant]
+        return None
+
+    def _get_str(self, key: str, default, aliases=None):
+        self._remember_keys(key, aliases)
+        raw = self._first_raw(key, aliases)
+        if raw is None:
+            return default
+        return str(raw)
+
+    def _get_int(self, key: str, default: int, aliases=None):
+        self._remember_keys(key, aliases)
+        raw = self._first_raw(key, aliases)
+        if raw is None:
+            return default
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return default
+
+    def _get_float(self, key: str, default: float, aliases=None):
+        self._remember_keys(key, aliases)
+        raw = self._first_raw(key, aliases)
+        if raw is None:
+            return default
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return default
+
+    def _get_bool(self, key: str, default: bool, aliases=None):
+        self._remember_keys(key, aliases)
+        raw = self._first_raw(key, aliases)
+        return _to_bool(raw, default)
+
+    def _get_list(self, key: str, aliases=None):
+        self._remember_keys(key, aliases)
+        raw = self._first_raw(key, aliases)
+        if raw is None:
+            return []
+        if isinstance(raw, list):
+            return [str(v).strip().upper() for v in raw if str(v).strip()]
+        return [s.strip().upper() for s in str(raw).split(",") if s.strip()]
+
+    def _log_unknown_keys(self):
+        unknown = sorted(k for k in self._data.keys() if k not in self._known_keys)
+        if unknown:
+            logger.warning("[Config] 미사용/알수없음 설정 키 감지: %s", ", ".join(unknown))
+
+    def rebuild_scoring_rules(self):
+        """settings.json 으로부터 스코어링 규칙을 다시 빌드합니다."""
+        raw_scoring_rules = self._first_raw("SCORING_RULES", aliases=["scoring_rules"])
+
+        def _normalize_tiers(tiers):
+            if not isinstance(tiers, list):
+                return []
+
+            normalized = []
+            for tier in tiers:
+                if not isinstance(tier, (list, tuple)) or len(tier) < 2:
+                    continue
+
+                try:
+                    threshold = float(tier[0])
+                    weight = float(tier[1])
+                except (TypeError, ValueError):
+                    continue
+
+                if len(tier) >= 3:
+                    normalized.append((threshold, weight, tier[2]))
+                else:
+                    normalized.append((threshold, weight))
+            return normalized
+
+        def _normalize_regime_map(regime_map):
+            if not isinstance(regime_map, dict):
+                return {}
+            return {feature: _normalize_tiers(tiers) for feature, tiers in regime_map.items()}
+
+        if isinstance(raw_scoring_rules, dict):
+            long_raw = raw_scoring_rules.get("long", {})
+            short_raw = raw_scoring_rules.get("short", {})
+            weights_raw = raw_scoring_rules.get("weights", {})
+
+            if isinstance(long_raw, dict) and isinstance(short_raw, dict):
+                self.SC_RULES_LONG = {
+                    "trend": _normalize_regime_map(long_raw.get("trend", {})),
+                    "mean_reversion": _normalize_regime_map(
+                        long_raw.get("mean_reversion", {})
+                    ),
+                }
+                self.SC_RULES_SHORT = {
+                    "trend": _normalize_regime_map(short_raw.get("trend", {})),
+                    "mean_reversion": _normalize_regime_map(
+                        short_raw.get("mean_reversion", {})
+                    ),
+                }
+
+                if isinstance(weights_raw, dict):
+                    self.SCORING_WEIGHTS = weights_raw
+                else:
+                    self.SCORING_WEIGHTS = {
+                        "atr": {"2": self._get_int("WEIGHT_ATR_2", 2)},
+                        "adx_boost": {"1": self._get_int("WEIGHT_ADX_1", 1)},
+                        "fr_boost": {"2": self._get_int("WEIGHT_FR_2", 2)},
+                        "htf_bias": {"2": self._get_int("WEIGHT_HTF_BIAS", 2)},
+                        "mtf_moment": {"2": self._get_int("WEIGHT_MTF_MOMENT", 2)},
+                        "mtf_regime": {"1": self._get_int("WEIGHT_MTF_REGIME", 1)},
+                        "vwap_dist": {"2": self._get_int("WEIGHT_VWAP_DIST", 2)},
+                    }
+                return
+
+        self.L_MACD_T1 = self._get_float("L_MACD_T1", 65)
+        self.L_MACD_W1 = self._get_float("L_MACD_W1", 1)
+        self.L_MACD_T2 = self._get_float("L_MACD_T2", 75)
+        self.L_MACD_W2 = self._get_float("L_MACD_W2", 2)
+        self.L_MACD_T4 = self._get_float("L_MACD_T4", 85)
+        self.L_MACD_W4 = self._get_float("L_MACD_W4", 4)
+        self.L_CVD_T1 = self._get_float("L_CVD_T1", 70)
+        self.L_CVD_W1 = self._get_float("L_CVD_W1", 1)
+        self.L_CVD_T2 = self._get_float("L_CVD_T2", 85)
+        self.L_CVD_W2 = self._get_float("L_CVD_W2", 2)
+        self.L_IMBAL_T1 = self._get_float("L_IMBAL_T1", 80)
+        self.L_IMBAL_W1 = self._get_float("L_IMBAL_W1", 1)
+        self.L_NOFI_T1 = self._get_float("L_NOFI_T1", 85)
+        self.L_NOFI_W1 = self._get_float("L_NOFI_W1", 1)
+        self.L_OI_T1 = self._get_float("L_OI_T1", 70)
+        self.L_OI_W1 = self._get_float("L_OI_W1", 2)
+        self.L_OI_T2 = self._get_float("L_OI_T2", 85)
+        self.L_OI_W2 = self._get_float("L_OI_W2", 4)
+        self.L_TICK_T1 = self._get_float("L_TICK_T1", 85)
+        self.L_TICK_W1 = self._get_float("L_TICK_W1", 1)
+        self.L_VOL_T1 = self._get_float("L_VOL_T1", 1.9)
+        self.L_VOL_W1 = self._get_float("L_VOL_W1", 1)
+        self.L_BUY_T1 = self._get_int("L_BUY_T1", 15)
+        self.L_BUY_W1 = self._get_int("L_BUY_W1", 1)
+
+        self.S_MACD_T1 = self._get_float("S_MACD_T1", 65)
+        self.S_MACD_W1 = self._get_float("S_MACD_W1", 1)
+        self.S_MACD_T2 = self._get_float("S_MACD_T2", 75)
+        self.S_MACD_W2 = self._get_float("S_MACD_W2", 2)
+        self.S_MACD_T4 = self._get_float("S_MACD_T4", 85)
+        self.S_MACD_W4 = self._get_float("S_MACD_W4", 4)
+        self.S_CVD_T1 = self._get_float("S_CVD_T1", 70)
+        self.S_CVD_W1 = self._get_float("S_CVD_W1", 1)
+        self.S_CVD_T2 = self._get_float("S_CVD_T2", 85)
+        self.S_CVD_W2 = self._get_float("S_CVD_W2", 2)
+        self.S_IMBAL_T1 = self._get_float("S_IMBAL_T1", 65)
+        self.S_IMBAL_W1 = self._get_float("S_IMBAL_W1", 1)
+        self.S_IMBAL_T2 = self._get_float("S_IMBAL_T2", 80)
+        self.S_IMBAL_W2 = self._get_float("S_IMBAL_W2", 2)
+        self.S_NOFI_T1 = self._get_float("S_NOFI_T1", 70)
+        self.S_NOFI_W1 = self._get_float("S_NOFI_W1", 1)
+        self.S_NOFI_T2 = self._get_float("S_NOFI_T2", 85)
+        self.S_NOFI_W2 = self._get_float("S_NOFI_W2", 2)
+        self.S_OI_T1 = self._get_float("S_OI_T1", 70)
+        self.S_OI_W1 = self._get_float("S_OI_W1", 1)
+        self.S_OI_T2 = self._get_float("S_OI_T2", 85)
+        self.S_OI_W2 = self._get_float("S_OI_W2", 2)
+        self.S_TICK_T1 = self._get_float("S_TICK_T1", 70)
+        self.S_TICK_W1 = self._get_float("S_TICK_W1", 1)
+        self.S_TICK_T2 = self._get_float("S_TICK_T2", 85)
+        self.S_TICK_W2 = self._get_float("S_TICK_W2", 2)
+        self.S_VOL_T1 = self._get_float("S_VOL_T1", 1.4)
+        self.S_VOL_W1 = self._get_float("S_VOL_W1", 1)
+        self.S_VOL_T2 = self._get_float("S_VOL_T2", 1.9)
+        self.S_VOL_W2 = self._get_float("S_VOL_W2", 2)
+        self.S_RSI_T1 = self._get_float("S_RSI_T1", 35)
+        self.S_RSI_W1 = self._get_float("S_RSI_W1", 1)
+        self.S_RSI_T2 = self._get_float("S_RSI_T2", 25)
+        self.S_RSI_W2 = self._get_float("S_RSI_W2", 2)
+        self.S_BUY_T1 = self._get_float("S_BUY_T1", 25)
+        self.S_BUY_W1 = self._get_float("S_BUY_W1", 1)
+        self.S_BUY_T2 = self._get_float("S_BUY_T2", 10)
+        self.S_BUY_W2 = self._get_float("S_BUY_W2", 2)
 
         self.SC_RULES_LONG = {
             "trend": {
-                "macd_hist": [(self.L_MACD_T1, self.L_MACD_W1), (self.L_MACD_T2, self.L_MACD_W2), (self.L_MACD_T4, self.L_MACD_W4)],
-                "cvd_delta_slope": [(self.L_CVD_T1, self.L_CVD_W1), (self.L_CVD_T2, self.L_CVD_W2)],
+                "macd_hist": [
+                    (self.L_MACD_T1, self.L_MACD_W1),
+                    (self.L_MACD_T2, self.L_MACD_W2),
+                    (self.L_MACD_T4, self.L_MACD_W4),
+                ],
+                "cvd_delta_slope": [
+                    (self.L_CVD_T1, self.L_CVD_W1),
+                    (self.L_CVD_T2, self.L_CVD_W2),
+                ],
                 "bid_ask_imbalance": [(self.L_IMBAL_T1, self.L_IMBAL_W1)],
                 "nofi_1m": [(self.L_NOFI_T1, self.L_NOFI_W1)],
-                "open_interest": [(self.L_OI_T1, self.L_OI_W1), (self.L_OI_T2, self.L_OI_W2)],
+                "open_interest": [
+                    (self.L_OI_T1, self.L_OI_W1),
+                    (self.L_OI_T2, self.L_OI_W2),
+                ],
                 "tick_count": [(self.L_TICK_T1, self.L_TICK_W1)],
                 "log_volume_zscore": [(self.L_VOL_T1, self.L_VOL_W1, "val")],
             },
@@ -213,30 +499,59 @@ class Config:
 
         self.SC_RULES_SHORT = {
             "trend": {
-                "macd_hist": [(self.S_MACD_T1, self.S_MACD_W1), (self.S_MACD_T2, self.S_MACD_W2), (self.S_MACD_T4, self.S_MACD_W4)],
-                "cvd_delta_slope": [(self.S_CVD_T1, self.S_CVD_W1), (self.S_CVD_T2, self.S_CVD_W2)],
-                "bid_ask_imbalance": [(self.S_IMBAL_T1, self.S_IMBAL_W1), (self.S_IMBAL_T2, self.S_IMBAL_W2)],
-                "nofi_1m": [(self.S_NOFI_T1, self.S_NOFI_W1), (self.S_NOFI_T2, self.S_NOFI_W2)],
-                "open_interest": [(self.S_OI_T1, self.S_OI_W1), (self.S_OI_T2, self.S_OI_W2)],
-                "tick_count": [(self.S_TICK_T1, self.S_TICK_W1), (self.S_TICK_T2, self.S_TICK_W2)],
-                "log_volume_zscore": [(self.S_VOL_T1, self.S_VOL_W1, "val"), (self.S_VOL_T2, self.S_VOL_W2, "val")],
+                "macd_hist": [
+                    (self.S_MACD_T1, self.S_MACD_W1),
+                    (self.S_MACD_T2, self.S_MACD_W2),
+                    (self.S_MACD_T4, self.S_MACD_W4),
+                ],
+                "cvd_delta_slope": [
+                    (self.S_CVD_T1, self.S_CVD_W1),
+                    (self.S_CVD_T2, self.S_CVD_W2),
+                ],
+                "bid_ask_imbalance": [
+                    (self.S_IMBAL_T1, self.S_IMBAL_W1),
+                    (self.S_IMBAL_T2, self.S_IMBAL_W2),
+                ],
+                "nofi_1m": [
+                    (self.S_NOFI_T1, self.S_NOFI_W1),
+                    (self.S_NOFI_T2, self.S_NOFI_W2),
+                ],
+                "open_interest": [
+                    (self.S_OI_T1, self.S_OI_W1),
+                    (self.S_OI_T2, self.S_OI_W2),
+                ],
+                "tick_count": [
+                    (self.S_TICK_T1, self.S_TICK_W1),
+                    (self.S_TICK_T2, self.S_TICK_W2),
+                ],
+                "log_volume_zscore": [
+                    (self.S_VOL_T1, self.S_VOL_W1, "val"),
+                    (self.S_VOL_T2, self.S_VOL_W2, "val"),
+                ],
             },
-            "mean_reversion": {"rsi": [(self.S_RSI_T1, self.S_RSI_W1), (self.S_RSI_T2, self.S_RSI_W2)], "buy_ratio": [(self.S_BUY_T1, self.S_BUY_W1), (self.S_BUY_T2, self.S_BUY_W2)]},
+            "mean_reversion": {
+                "rsi": [(self.S_RSI_T1, self.S_RSI_W1), (self.S_RSI_T2, self.S_RSI_W2)],
+                "buy_ratio": [
+                    (self.S_BUY_T1, self.S_BUY_W1),
+                    (self.S_BUY_T2, self.S_BUY_W2),
+                ],
+            },
         }
 
         self.SCORING_WEIGHTS = {
-            "atr": {"2": int(os.getenv("WEIGHT_ATR_2", "2"))},
-            "adx_boost": {"1": int(os.getenv("WEIGHT_ADX_1", "1"))},
-            "fr_boost": {"2": int(os.getenv("WEIGHT_FR_2", "2"))},
-            "htf_bias": {"2": int(os.getenv("WEIGHT_HTF_BIAS", "2"))},
-            "mtf_moment": {"2": int(os.getenv("WEIGHT_MTF_MOMENT", "2"))},
-            "mtf_regime": {"1": int(os.getenv("WEIGHT_MTF_REGIME", "1"))},
-            "vwap_dist": {"2": int(os.getenv("WEIGHT_VWAP_DIST", "2"))},
+            "atr": {"2": self._get_int("WEIGHT_ATR_2", 2)},
+            "adx_boost": {"1": self._get_int("WEIGHT_ADX_1", 1)},
+            "fr_boost": {"2": self._get_int("WEIGHT_FR_2", 2)},
+            "htf_bias": {"2": self._get_int("WEIGHT_HTF_BIAS", 2)},
+            "mtf_moment": {"2": self._get_int("WEIGHT_MTF_MOMENT", 2)},
+            "mtf_regime": {"1": self._get_int("WEIGHT_MTF_REGIME", 1)},
+            "vwap_dist": {"2": self._get_int("WEIGHT_VWAP_DIST", 2)},
         }
 
 
 class KSTFormatter(logging.Formatter):
     """로그 출력 시간을 항상 한국 시간(KST)으로 표시하기 위한 커스텀 포맷터"""
+
     def formatTime(self, record, datefmt=None):
         dt = datetime.fromtimestamp(record.created, tz=KST)
         if datefmt:
@@ -249,8 +564,7 @@ def get_logger(name="BinanceBot"):
     if logger.handlers:
         return logger
     logger.setLevel(logging.INFO)
-    
-    # [V18.6] KST 전용 포맷터 적용
+
     formatter = KSTFormatter(
         "%(asctime)s - %(name)s - [%(levelname)s] - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
@@ -268,6 +582,7 @@ def get_logger(name="BinanceBot"):
 
     try:
         from notification import TelegramLogHandler
+
         tg_handler = TelegramLogHandler()
         tg_handler.setLevel(logging.ERROR)
         tg_handler.setFormatter(formatter)
@@ -279,5 +594,5 @@ def get_logger(name="BinanceBot"):
 
 
 # Global settings and logger ready
-settings = Config()
 logger = get_logger()
+settings = Config()

@@ -701,12 +701,8 @@ class ExecutionEngine:
                 "is_partial_tp_done": False,
             }
 
-            # [V18.4] 기존 비동기 데몬 방식 제거 (check_active_positions_state 루프에서 통합 감시)
-            # if getattr(settings, "TIME_EXIT_MINUTES", 0) > 0:
-            #     asyncio.create_task(...)
-
             # 동기적(await)으로 TP/SL 즉시 생성 (대기열 통하지 않음)
-            success = await self.place_tp_sl_orders(symbol, entry_info)
+            await self.place_tp_sl_orders(symbol, entry_info)
 
             return True
 

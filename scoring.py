@@ -13,8 +13,148 @@ V18 변경:
 
 import numpy as np
 import pandas as pd
+import json
+from typing import Any, Literal
 from scipy.stats import percentileofscore
 from config import settings
+
+
+ComparisonOperator = Literal[">=", "<=", ">", "<", "=="]
+
+
+def load_config(filepath: str) -> dict[str, Any]:
+    """JSON 설정 파일을 로드해 파싱 결과(dict)를 반환합니다."""
+    with open(filepath, "r", encoding="utf-8") as fp:
+        parsed = json.load(fp)
+
+    if not isinstance(parsed, dict):
+        raise ValueError(f"Config root must be a JSON object: {filepath}")
+
+    return parsed
+
+
+def _compare(value: float, threshold: float, op: ComparisonOperator) -> bool:
+    if op == ">=":
+        return value >= threshold
+    if op == "<=":
+        return value <= threshold
+    if op == ">":
+        return value > threshold
+    if op == "<":
+        return value < threshold
+    if op == "==":
+        return value == threshold
+    return value >= threshold
+
+
+def _resolve_operator(
+    side: str,
+    regime: str,
+    feature: str,
+    scoring_rules: dict[str, Any],
+) -> ComparisonOperator:
+    """
+    feature 비교 연산자를 규칙에서 우선 탐색하고, 없으면 전략 기본값으로 결정합니다.
+
+    지원되는 연산자 설정 예시:
+    - scoring_rules["operators"]["long"]["mean_reversion"]["rsi"] = "<="
+    - scoring_rules["operators"]["long"]["rsi"] = "<="
+    - scoring_rules["operators"]["rsi"] = "<="
+    """
+    operators = scoring_rules.get("operators", {})
+    op_candidate = None
+
+    if isinstance(operators, dict):
+        side_ops = operators.get(side)
+        if isinstance(side_ops, dict):
+            regime_ops = side_ops.get(regime)
+            if isinstance(regime_ops, dict):
+                op_candidate = regime_ops.get(feature)
+            if op_candidate is None:
+                op_candidate = side_ops.get(feature)
+
+        if op_candidate is None:
+            op_candidate = operators.get(feature)
+
+    if op_candidate in {">=", "<=", ">", "<", "=="}:
+        return op_candidate
+
+    if regime == "mean_reversion":
+        return "<=" if side == "long" else ">="
+    return ">="
+
+
+def calculate_score(market_data: dict[str, Any], side: str, rules: dict[str, Any]) -> int:
+    """
+    계층형 scoring_rules를 순회하며 동적으로 점수를 계산합니다.
+
+    Parameters
+    ----------
+    market_data : dict
+        현재 캔들의 지표 값. 예: {"macd_hist": 78.2, "rsi": 31.0}
+    side : str
+        "long" 또는 "short"
+    rules : dict
+        load_config로 로드한 전체 설정 또는 scoring_rules 딕셔너리
+
+    Returns
+    -------
+    int
+        side 기준 총 점수
+    """
+    side_key = side.lower().strip()
+    if side_key not in {"long", "short"}:
+        raise ValueError("side must be either 'long' or 'short'")
+
+    scoring_rules = rules.get("scoring_rules", rules)
+    if not isinstance(scoring_rules, dict):
+        return 0
+
+    side_rules = scoring_rules.get(side_key, {})
+    if not isinstance(side_rules, dict):
+        return 0
+
+    total_score = 0
+
+    for regime, features in side_rules.items():
+        if regime == "operators" or not isinstance(features, dict):
+            continue
+
+        for feature, tiers in features.items():
+            if not isinstance(tiers, list):
+                continue
+            if feature not in market_data:
+                continue
+
+            feature_value = market_data[feature]
+            if feature_value is None:
+                continue
+
+            try:
+                current_value = float(feature_value)
+            except (TypeError, ValueError):
+                continue
+
+            operator = _resolve_operator(side_key, regime, feature, scoring_rules)
+            best_weight = 0
+
+            for tier in tiers:
+                if not isinstance(tier, (list, tuple)) or len(tier) < 2:
+                    continue
+
+                threshold, weight = tier[0], tier[1]
+                try:
+                    threshold_value = float(threshold)
+                    weight_value = int(weight)
+                except (TypeError, ValueError):
+                    continue
+
+                if _compare(current_value, threshold_value, operator):
+                    best_weight = max(best_weight, weight_value)
+
+            total_score += best_weight
+
+    return int(total_score)
 
 
 def compute_live_percentiles(df: pd.DataFrame, window: int = 100) -> dict:

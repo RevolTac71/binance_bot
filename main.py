@@ -1,6 +1,5 @@
 import asyncio
 import sys
-import time
 import json
 import aiohttp
 from datetime import datetime, timezone, timedelta
@@ -12,7 +11,7 @@ import gc
 
 # [V18.5.1] 데이터 부족/정적 데이터로 인한 Numpy 경고(0나누기 등) 전역 억제
 np.seterr(divide="ignore", invalid="ignore")
-from database import check_db_connection, TradeLog, MarketSnapshot, AsyncSessionLocal
+from database import check_db_connection, MarketSnapshot, AsyncSessionLocal
 from data_pipeline import DataPipeline
 from strategy import StrategyEngine, PortfolioState
 from risk_management import RiskManager

@@ -3,7 +3,6 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy import Column, Integer, String, Float, DateTime, Text, text, Boolean
 from sqlalchemy.dialects.postgresql import JSONB
 from config import settings, logger
-from datetime import datetime
 
 # 명시적으로 기존 DataBase 스키마를 선언합니다 (Reflection 대신 사용)
 # 자동화된 create_all은 호출하지 않으므로 기존 데이터를 파괴하지 않습니다.

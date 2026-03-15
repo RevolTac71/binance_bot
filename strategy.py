@@ -21,7 +21,6 @@ strategy.py  —  StrategyEngine V18
 from __future__ import annotations
 
 import pandas as pd
-import numpy as np
 from typing import Optional
 from scipy.stats import percentileofscore
 from schemas import MarketDataSnapshot

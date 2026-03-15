@@ -148,7 +148,6 @@ class RiskManager:
         # (진입+청산 수수료 * 2.5배 수준의 최소 변동폭 확보 권장)
         min_tp_dist = entry_price * (getattr(settings, "FEE_RATE", 0.00045) * 2.5)
         if tp_distance < min_tp_dist:
-            # logger.warning(f"[{symbol}] TP 거리가 너무 짧아 수수료 방어를 위해 조정됨: {tp_distance:.4f} -> {min_tp_dist:.4f}")
             tp_distance = min_tp_dist
 
         # 4. 최대 레버리지를 곱한 명목 진입 금액 (Notional Value)

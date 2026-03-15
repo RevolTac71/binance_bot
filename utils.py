@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-import json
 
 def clean_json_data(data):
     """

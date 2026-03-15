@@ -3,7 +3,7 @@ import functools
 import ccxt.async_support as ccxt
 import pandas as pd
 import numpy as np
-import pandas_ta as ta
+import pandas_ta as ta  # noqa: F401
 from ccxt.base.errors import RateLimitExceeded, RequestTimeout, NetworkError, AuthenticationError
 from config import settings, logger
 

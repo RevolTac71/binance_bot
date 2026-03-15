@@ -1,20 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { supabase } from './lib/supabase';
 import { 
   TrendingUp, 
-  TrendingDown, 
   Activity, 
   Clock, 
   ShieldCheck, 
-  LayoutDashboard,
-  Menu,
-  ChevronRight
+  LayoutDashboard
 } from 'lucide-react';
-import { motion } from 'framer-motion';
-import { format } from 'date-fns';
 import './index.css';
 
-// Components
 import StatsCard from './components/StatsCard';
 import EquityChart from './components/EquityChart';
 import TradeTable from './components/TradeTable';
@@ -36,7 +30,6 @@ function App() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      // Latest 50 trades
       const { data: tradeData, error: tradeError } = await supabase
         .from('trade_logs')
         .select('*')
@@ -46,7 +39,6 @@ function App() {
       if (tradeError) throw tradeError;
       setTrades(tradeData || []);
 
-      // Calculate simple stats (this would normally be handled by a more complex query)
       if (tradeData && tradeData.length > 0) {
         const wins = tradeData.filter(t => (t.realized_pnl || 0) > 0).length;
         const totalPnl = tradeData.reduce((acc, t) => acc + (t.realized_pnl || 0), 0);
@@ -118,7 +110,6 @@ function App() {
         <div className="glass-card">
           <h3 style={{ marginBottom: '1.5rem', fontSize: '1rem' }}>Engine Status</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            {/* Simple status list for now */}
             <StatusItem label="HFT Pipeline" status="Active" />
             <StatusItem label="Cortex Loop" status="Syncing" />
             <StatusItem label="Risk Manager" status="Healthy" />

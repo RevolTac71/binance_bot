@@ -1,11 +1,11 @@
 import asyncio
 import argparse
-from datetime import datetime, timezone, timedelta
+from datetime import timedelta
 from sqlalchemy.future import select
 import pandas as pd
 import ccxt.async_support as ccxt
 
-from config import settings, logger
+from config import logger
 from database import TradeLog, AsyncSessionLocal
 
 

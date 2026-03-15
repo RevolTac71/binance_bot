@@ -2,9 +2,9 @@ import asyncio
 import aiohttp
 import logging
 import html
-import time
 import threading
 import re
+import time
 
 
 class TelegramNotifier:
@@ -132,9 +132,6 @@ class TelegramLogHandler(logging.Handler):
         if record.module == "notification":
             return
 
-        # Defensive import for stale deployments where module-level imports may differ.
-        import time
-            
         # 텔레그램 핸들러 자체의 에러는 무시 (무한 루프 위험)
         if "텔레그램" in record.getMessage():
             return
@@ -164,6 +161,3 @@ class TelegramLogHandler(logging.Handler):
             asyncio.create_task(notifier.send_message(f"⚠️ <b>[BOT ERROR]</b>\n<pre>{safe_log}</pre>"))
         except Exception:
             self.handleError(record)
-
-
-import logging

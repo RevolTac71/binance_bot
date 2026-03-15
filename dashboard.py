@@ -48,13 +48,11 @@ st.divider()
 # 2. 거래 체결 기록
 st.header("최근 체결 / 포지션 등록 기록 (trade_logs)")
 if not trades.empty:
-    col1, col2 = st.columns([1, 3])
+    col1, _ = st.columns([1, 3])
     with col1:
         action_filter = st.selectbox(
             "Action 조건", options=["ALL", "LONG", "SHORT", "PARTIAL_CLOSED", "CLOSED"]
         )
-    with col2:
-        pass  # 빈 공간 여백
 
     # 필터 처리
     if action_filter != "ALL":
@@ -74,4 +72,4 @@ st.sidebar.metric(
     label="통제 리스크 자본(%)", value=f"{settings.RISK_PERCENTAGE * 100} %"
 )
 
-st.sidebar.markdown("*(위 지표는 `.env` 환경 파일을 기반으로 합니다.)*")
+st.sidebar.markdown("*(위 지표는 `settings.json` 설정 파일을 기반으로 합니다.)*")

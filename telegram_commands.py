@@ -1,4 +1,3 @@
-import os
 import asyncio
 from datetime import datetime, timedelta
 from telegram import Update
@@ -426,8 +425,8 @@ async def params_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "💡 <b>상세 조회:</b> <code>/params [risk|trade|score|weight]</code>"
             )
         elif category == "risk":
-            chandelier_mult = getattr(settings, "CHANDELIER_MULT", float(os.getenv("CHANDELIER_MULT", "2.0")))
-            chandelier_atr_len = getattr(settings, "CHANDELIER_ATR_LEN", int(os.getenv("CHANDELIER_ATR_LEN", "14")))
+            chandelier_mult = settings.CHANDELIER_MULT
+            chandelier_atr_len = settings.CHANDELIER_ATR_LEN
             msg = (
                 "🛡️ <b>[청산 및 리스크 상세 설정]</b>\n\n"
                 "🟢 <b>LONG Positions</b>:\n"
