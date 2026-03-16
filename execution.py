@@ -41,6 +41,27 @@ class ExecutionEngine:
         # 봇 재시작 없이 특정 심볼을 무시하는 블랙리스트
         self.blacklist: set = set()
 
+        # 포지션 종료 오탐 방지용 카운터 (거래소 일시 지연/심볼 포맷 불일치 방어)
+        self._zero_contract_seen_count: dict = {}
+
+    def _normalize_symbol(self, symbol: str) -> str:
+        """
+        CCXT/바이낸스 심볼 포맷 차이를 줄이기 위한 정규화 키를 반환합니다.
+        예: BTC/USDT:USDT, BTC/USDT, btcusdt -> BTCUSDT
+        """
+        if not symbol:
+            return ""
+
+        s = str(symbol).upper().replace("/", "").replace(":", "")
+        if s.endswith("USDTUSDT"):
+            s = s[: -len("USDT")]
+        return s
+
+    def _has_symbol_key(self, container: dict, symbol: str) -> bool:
+        """정규화 심볼 기준으로 dict 키 존재 여부를 확인합니다."""
+        norm = self._normalize_symbol(symbol)
+        return any(self._normalize_symbol(k) == norm for k in container.keys())
+
     def _snapshot_params(self) -> str:
         """
         거래 시점의 전략 파라미터를 JSON 문자열로 직렬화하여 반환합니다.
@@ -168,6 +189,7 @@ class ExecutionEngine:
                             "amount": contracts,
                             "entry_time": entry_time,
                             "last_summed_ts": last_ts,
+                            "opened_at_ms": self.exchange.milliseconds(),
                             "is_partial_tp_done": False,  # 필요시 DB 컬럼 추가 가능하나 현재는 봇 판단에 맡김
                             "tp_price": log.tp_price if log else 0.0,
                             "sl_price": log.sl_price if log else 0.0,
@@ -368,6 +390,7 @@ class ExecutionEngine:
                         "sl_price": log.sl_price or 0.0,
                         "entry_time": log.entry_time,
                         "last_summed_ts": int(time.time() * 1000),
+                        "opened_at_ms": int(time.time() * 1000),
                         "is_partial_tp_done": False,
                         "reason": log.entry_reason,
                         "market_data": None,
@@ -657,6 +680,19 @@ class ExecutionEngine:
                 raw_tp = average_price - tp_dist
                 raw_sl = average_price + sl_dist
 
+            # 설정값/지표 이상치로 TP/SL 방향이 뒤집히는 경우를 방지
+            min_dist = average_price * max(getattr(settings, "FEE_RATE", 0.00045) * 2, 0.0005)
+            if signal_type == "LONG":
+                if raw_tp <= average_price:
+                    raw_tp = average_price + max(abs(tp_dist), min_dist)
+                if raw_sl >= average_price:
+                    raw_sl = average_price - max(abs(sl_dist), min_dist)
+            else:
+                if raw_tp >= average_price:
+                    raw_tp = average_price - max(abs(tp_dist), min_dist)
+                if raw_sl <= average_price:
+                    raw_sl = average_price + max(abs(sl_dist), min_dist)
+
             # [V18.4] 진입 시점 기록 (Time-Exit 및 복구용)
             now_kst = datetime.now(timezone.utc) + timedelta(hours=9)
 
@@ -698,6 +734,7 @@ class ExecutionEngine:
                 "last_summed_ts": int(
                     time.time() * 1000
                 ),  # 진입 시점을 첫 합산 기준으로 설정
+                "opened_at_ms": int(time.time() * 1000),
                 "is_partial_tp_done": False,
             }
 
@@ -1008,6 +1045,7 @@ class ExecutionEngine:
                     "tp_order_id": str(tp_order_id) if tp_order_id else None,
                     "sl_order_id": str(sl_order_id) if sl_order_id else None,
                     "is_partial_tp_done": False,
+                    "opened_at_ms": self.exchange.milliseconds(),
                     "last_summed_ts": self.exchange.milliseconds(),  # PnL 합산 기준점
                 }
             )
@@ -1039,7 +1077,10 @@ class ExecutionEngine:
             try:
                 positions = await self.exchange.fetch_positions()
                 position_map = {
-                    p["symbol"]: float(p.get("contracts", 0)) for p in positions
+                    self._normalize_symbol(p["symbol"]): float(
+                        p.get("contracts", 0)
+                    )
+                    for p in positions
                 }
 
                 # 수동(외부) 진입 포지션 색출
@@ -1049,12 +1090,13 @@ class ExecutionEngine:
                     # [V18.1] 봇이 현재 진입 중(pending_entries)이거나 관리 중(active_positions)이면 수동 진입으로 간주하지 않음
                     if (
                         contracts > 0
-                        and sym not in self.active_positions
-                        and sym not in self.pending_entries
+                        and not self._has_symbol_key(self.active_positions, sym)
+                        and not self._has_symbol_key(self.pending_entries, sym)
                     ):
                         self.active_positions[sym] = {
                             "amount": contracts,
                             "last_summed_ts": self.exchange.milliseconds(),
+                            "opened_at_ms": self.exchange.milliseconds(),
                             "is_partial_tp_done": False,
                         }
                         entry_price = float(p.get("entryPrice", 0))
@@ -1154,7 +1196,9 @@ class ExecutionEngine:
                     logger.error(f"[{symbol}] DRY_RUN 가상 TP/SL 감시 중 에러: {e}")
                 continue
 
-            current_contracts = position_map.get(symbol, 0.0)
+            current_contracts = position_map.get(self._normalize_symbol(symbol), 0.0)
+            if current_contracts > 0:
+                self._zero_contract_seen_count[symbol] = 0
 
             # [V18] 부분 익절 감지 및 수익 누적 (REAL 모드 전용)
             if not settings.DRY_RUN and isinstance(self.active_positions[symbol], dict):
@@ -1277,6 +1321,20 @@ class ExecutionEngine:
                     tp_price = pos_info.get("tp_price", 0.0)
                     sl_price = pos_info.get("sl_price", 0.0)
                     is_partial_tp_done = pos_info.get("is_partial_tp_done", False)
+                    opened_at_ms = int(pos_info.get("opened_at_ms", 0) or 0)
+                    failsafe_grace_sec = int(
+                        getattr(settings, "FAILSAFE_GRACE_SEC", 15)
+                    )
+                    in_grace = False
+                    if opened_at_ms > 0:
+                        in_grace = (
+                            self.exchange.milliseconds() - opened_at_ms
+                        ) < failsafe_grace_sec * 1000
+
+                    if in_grace:
+                        # 진입 직후 수 초 동안은 거래소 TP/SL 주문 반영 지연이 있을 수 있어
+                        # 봇 레벨 Fail-safe 강제청산은 유예합니다.
+                        continue
 
                     # 1. Fail-safe TP (분할 익절)
                     if pos_info.get("signal") == "LONG":
@@ -1359,6 +1417,38 @@ class ExecutionEngine:
 
             if current_contracts == 0.0:
                 try:
+                    # 거래소 응답 지연/심볼 포맷 차이로 0으로 보일 수 있어 1회 재확인
+                    zero_seen = self._zero_contract_seen_count.get(symbol, 0) + 1
+                    self._zero_contract_seen_count[symbol] = zero_seen
+
+                    if zero_seen == 1:
+                        try:
+                            verify_positions = await self.exchange.fetch_positions(
+                                [symbol]
+                            )
+                            verified_qty = 0.0
+                            for vp in verify_positions:
+                                if (
+                                    self._normalize_symbol(vp.get("symbol"))
+                                    == self._normalize_symbol(symbol)
+                                ):
+                                    verified_qty = float(vp.get("contracts", 0.0))
+                                    break
+
+                            if verified_qty > 0:
+                                self._zero_contract_seen_count[symbol] = 0
+                                continue
+                        except Exception as verify_e:
+                            logger.warning(
+                                f"[{symbol}] 포지션 종료 재검증 실패(다음 루프 재시도): {verify_e}"
+                            )
+                            continue
+
+                        # 첫 0감지는 지연 가능성을 고려해 다음 폴링까지 보류
+                        continue
+
+                    self._zero_contract_seen_count[symbol] = 0
+
                     # 포지션이 청산됨 -> 반대쪽 찌꺼기 잔여 주문(TP or SL 중 발동 안된 쪽) 일괄 취소
                     try:
                         await self.exchange.cancel_all_orders(symbol)
@@ -1575,6 +1665,7 @@ class ExecutionEngine:
         # 처리 완료된 포지션은 메모리 감시열에서 제거
         for sym in symbols_to_remove:
             del self.active_positions[sym]
+            self._zero_contract_seen_count.pop(sym, None)
 
     async def close_position_market(
         self, symbol: str, amount: float = 0.0, reason: str = "시장가 청산"
