@@ -170,6 +170,7 @@ class Config:
         self._data = _SETTINGS_DATA
         self._secrets = _SECRET_DATA
         self._known_keys = set()
+        self._settings_mtime = self._get_settings_mtime()
 
         # 1. Binance API Settings
         self.BINANCE_API_KEY = self._get_str("BINANCE_API_KEY", None, aliases=["BINANCE_KEY"])
@@ -271,6 +272,48 @@ class Config:
 
         self.rebuild_scoring_rules()
         self._log_unknown_keys()
+
+    def _get_settings_mtime(self):
+        try:
+            return os.path.getmtime(SETTINGS_JSON_PATH)
+        except OSError:
+            return None
+
+    def refresh_runtime_scoring_settings(self, force: bool = False) -> bool:
+        """
+        실행 중 settings.json 변경을 감지해 스코어링 관련 설정을 즉시 반영합니다.
+        빈번한 호출을 고려해 mtime 변경 시에만 디스크를 다시 읽습니다.
+        """
+        current_mtime = self._get_settings_mtime()
+        if current_mtime is None:
+            return False
+
+        if (
+            not force
+            and self._settings_mtime is not None
+            and current_mtime <= self._settings_mtime
+        ):
+            return False
+
+        fresh_data = _load_settings_data()
+        if not isinstance(fresh_data, dict):
+            return False
+
+        global _SETTINGS_DATA
+        _SETTINGS_DATA = fresh_data
+        self._data = fresh_data
+        self._settings_mtime = current_mtime
+
+        # check_entry / scoring 경로에서 즉시 사용하는 값만 재적용
+        self.MACD_FILTER_ENABLED = self._get_bool("MACD_FILTER_ENABLED", True, aliases=["MTF_FILTER"])
+        self.MIN_SCORE_LONG = self._get_int("MIN_SCORE_LONG", 18)
+        self.MIN_SCORE_SHORT = self._get_int("MIN_SCORE_SHORT", 17)
+        self.ADX_BOOST_PCTL = self._get_float("ADX_BOOST_PCTL", 70.0)
+        self.PCTL_WINDOW = self._get_int("PCTL_WINDOW", 100)
+        self.ATR_RATIO_MULT = self._get_float("ATR_RATIO_MULT", 1.2)
+        self.ATR_LONG_LEN = self._get_int("ATR_LONG_LEN", 200)
+        self.rebuild_scoring_rules()
+        return True
 
     # [V18.6] API 장애 시 사용할 기본 메이저 알트코인 리스트
     DEFAULT_FALLBACK_SYMBOLS = [

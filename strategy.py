@@ -420,6 +420,12 @@ class StrategyEngine:
         [V18] 다중 시간 프레임 기반 진입 신호를 판단합니다.
         순서: 1) 데이터 수집/정규화 -> 2) 스코어 산출(무조건 실행) -> 3) 진입 조건 필터링
         """
+        # settings.json이 런타임 중 변경되면 스코어링 임계값/규칙을 즉시 반영
+        try:
+            settings.refresh_runtime_scoring_settings()
+        except Exception as refresh_err:
+            logger.debug(f"[{symbol}] 설정 핫리로드 스킵: {refresh_err}")
+
         # ── 1. 기초 데이터 검증 및 연산 ────────────────────────────────────
         if len(df) < 250:
             return {"signal": None, "reason": "데이터 부족 (최소 250개 필요)"}
