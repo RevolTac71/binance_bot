@@ -44,6 +44,9 @@ class ExecutionEngine:
         # 포지션 종료 오탐 방지용 카운터 (거래소 일시 지연/심볼 포맷 불일치 방어)
         self._zero_contract_seen_count: dict = {}
 
+        # 재부팅 직후 복구 포지션에 대한 과민 반응(즉시 Fail-safe/Time-Exit)을 줄이기 위한 유예 시간
+        self.restart_guard_sec = int(getattr(settings, "RESTART_GUARD_SEC", 90))
+
     def _normalize_symbol(self, symbol: str) -> str:
         """
         CCXT/바이낸스 심볼 포맷 차이를 줄이기 위한 정규화 키를 반환합니다.
@@ -190,6 +193,7 @@ class ExecutionEngine:
                             "entry_time": entry_time,
                             "last_summed_ts": last_ts,
                             "opened_at_ms": self.exchange.milliseconds(),
+                            "recovered_at_ms": self.exchange.milliseconds(),
                             "is_partial_tp_done": False,  # 필요시 DB 컬럼 추가 가능하나 현재는 봇 판단에 맡김
                             "tp_price": log.tp_price if log else 0.0,
                             "sl_price": log.sl_price if log else 0.0,
@@ -247,7 +251,7 @@ class ExecutionEngine:
 
                     # 판단 로직:
                     # 1. 이미 활성 포지션이 있고, 해당 주문이 '포지션 축소용(reduceOnly)'이라면 -> 정상적인 TP/SL이므로 살림
-                    if symbol in self.active_positions and is_reduce_only:
+                    if self._has_symbol_key(self.active_positions, symbol) and is_reduce_only:
                         continue
 
                     # 그 외: 포지션이 없거나, 포지션이 있더라도 reduceOnly가 아닌 '순수 신규 진입' 타점이 그대로 남은 경우 -> 찌꺼기이므로 파쇄
@@ -1325,15 +1329,20 @@ class ExecutionEngine:
                     failsafe_grace_sec = int(
                         getattr(settings, "FAILSAFE_GRACE_SEC", 15)
                     )
+                    recovered_at_ms = int(pos_info.get("recovered_at_ms", 0) or 0)
                     in_grace = False
                     if opened_at_ms > 0:
                         in_grace = (
                             self.exchange.milliseconds() - opened_at_ms
                         ) < failsafe_grace_sec * 1000
+                    if not in_grace and recovered_at_ms > 0:
+                        in_grace = (
+                            self.exchange.milliseconds() - recovered_at_ms
+                        ) < self.restart_guard_sec * 1000
 
                     if in_grace:
                         # 진입 직후 수 초 동안은 거래소 TP/SL 주문 반영 지연이 있을 수 있어
-                        # 봇 레벨 Fail-safe 강제청산은 유예합니다.
+                        # 봇 재시작 직후 복구 포지션에 대해서도 일정 시간 과민 반응을 유예합니다.
                         continue
 
                     # 1. Fail-safe TP (분할 익절)
@@ -1390,6 +1399,12 @@ class ExecutionEngine:
 
                     # [V18.5] Time-Exit는 실제 거래소에 포지션이 있을 때만 동작 (ReduceOnly Rejection 방지)
                     if wait_mins > 0 and entry_time and current_contracts > 0:
+                        # 재시작 직후 복구 포지션은 짧은 유예 시간을 둬 즉시 Time-Exit 발동을 방지
+                        if recovered_at_ms > 0 and (
+                            self.exchange.milliseconds() - recovered_at_ms
+                        ) < self.restart_guard_sec * 1000:
+                            continue
+
                         if isinstance(
                             entry_time, str
                         ):  # DB에서 문자열로 넘어올 경우 대비

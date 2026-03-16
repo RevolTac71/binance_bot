@@ -55,7 +55,8 @@ def _parse_env_file(file_path: str) -> dict:
 def _load_settings_data() -> dict:
     if os.path.exists(SETTINGS_JSON_PATH):
         try:
-            with open(SETTINGS_JSON_PATH, "r", encoding="utf-8") as f:
+            # Accept both UTF-8 and UTF-8 with BOM.
+            with open(SETTINGS_JSON_PATH, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
             if isinstance(data, dict):
                 return data
@@ -265,6 +266,8 @@ class Config:
 
         # 이전 버전 키는 경고만 억제하고 동작에는 영향이 없도록 알려진 키로 등록합니다.
         self._register_deprecated_keys()
+        self._remember_keys("SCORING_RULES", aliases=["scoring_rules"])
+        self._remember_keys("SCORING_THRESHOLDS", aliases=["scoring_thresholds"])
 
         self.rebuild_scoring_rules()
         self._log_unknown_keys()
