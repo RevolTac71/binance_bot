@@ -213,7 +213,9 @@ class Config:
         self.CHASING_MARKET_THRESHOLD = self._get_int("CHASING_MARKET_THRESHOLD", 2)
 
         # 6. Exit Modes & Multipliers
-        self.PARTIAL_TP_RATIO = self._get_float("PARTIAL_TP_RATIO", 0.5)
+        self.PARTIAL_TP_RATIO = self._get_float(
+            "PARTIAL_TP_RATIO", 0.5, aliases=["S_PARTIAL_TP_RATIO"]
+        )
         self.LONG_TP_MODE = self._get_str("LONG_TP_MODE", "ATR")
         self.LONG_SL_MODE = self._get_str("LONG_SL_MODE", "ATR")
         self.SHORT_TP_MODE = self._get_str("SHORT_TP_MODE", "PERCENT")
@@ -234,7 +236,9 @@ class Config:
         self.BREAKEVEN_PROFIT_MULT = self._get_float("BREAKEVEN_PROFIT_MULT", 0.2)
 
         # 7. System Settings
-        self.MACD_FILTER_ENABLED = self._get_bool("MACD_FILTER_ENABLED", True)
+        self.MACD_FILTER_ENABLED = self._get_bool(
+            "MACD_FILTER_ENABLED", True, aliases=["MTF_FILTER"]
+        )
         self.SYMBOL_REFRESH_INTERVAL = self._get_int("SYMBOL_REFRESH_INTERVAL", 3)
         self.CURRENT_TARGET_SYMBOLS = []
         self.BLACKLIST_SYMBOLS = self._get_list("BLACKLIST_SYMBOLS")
@@ -258,6 +262,9 @@ class Config:
         # MTF
         self.HTF_TIMEFRAME_1H = self._get_str("HTF_TIMEFRAME_1H", "1h")
         self.HTF_TIMEFRAME_15M = self._get_str("HTF_TIMEFRAME_15M", "15m")
+
+        # 이전 버전 키는 경고만 억제하고 동작에는 영향이 없도록 알려진 키로 등록합니다.
+        self._register_deprecated_keys()
 
         self.rebuild_scoring_rules()
         self._log_unknown_keys()
@@ -290,6 +297,13 @@ class Config:
                 self._known_keys.add(alias)
                 self._known_keys.add(str(alias).lower())
                 self._known_keys.add(str(alias).upper())
+
+    def _register_deprecated_keys(self):
+        deprecated = {
+            "ADX_THRESHOLD",  # legacy key; replaced by newer scoring/boost params
+        }
+        for key in deprecated:
+            self._remember_keys(key)
 
     def _first_raw(self, key: str, aliases=None):
         for candidate in [key] + (aliases or []):
