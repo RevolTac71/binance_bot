@@ -525,9 +525,29 @@ class StrategyEngine:
         percentiles["mtf_regime"] = 1 if mtf_regime_str == "TREND" else 0
         percentiles["vwap_dist"] = market_price - vwap_mid
 
+        scoring_inputs = dict(percentiles)
+        scoring_inputs.update(
+            {
+                "adx_15m": float(mtf["adx"]) if mtf.get("adx") is not None else 0.0,
+                "twap_imbalance": float(bid_ask_imbalance),
+                "bid_ask_imbalance": float(current.get("bid_ask_imbalance", bid_ask_imbalance)),
+                "cvd_delta_slope": float(current.get("cvd_delta_slope", 0.0)),
+                "nofi_1m": float(current.get("NOFI", 0.0)),
+                "buy_ratio": float(current.get("buy_ratio", 0.5)),
+                "open_interest": float(current.get("open_interest", 0.0)),
+                "tick_count": float(current.get("tick_count", 0.0)),
+                "log_volume_zscore": float(current.get("Log_Vol_ZScore", 0.0)),
+                "macd_hist": float(
+                    df_15m["MACD_H"].iloc[-1]
+                    if df_15m is not None and "MACD_H" in df_15m.columns and len(df_15m) > 0
+                    else current.get("MACD_H", 0.0)
+                ),
+            }
+        )
+
         # ── 3. 스코어링 엔진 실행 (무조건 실행 - 로깅 보장) ─────────────────
         adx_boost = getattr(settings, "ADX_BOOST_PCTL", 70.0)
-        score_result = calculate_entry_score(percentiles, adx_boost_pctl=adx_boost)
+        score_result = calculate_entry_score(scoring_inputs, adx_boost_pctl=adx_boost)
 
         long_score = score_result["long_score"]
         short_score = score_result["short_score"]

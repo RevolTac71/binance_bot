@@ -90,6 +90,44 @@ def _validate_scoring_rules(data: dict, errors: list[str]) -> None:
                 )
 
 
+def _validate_bot_ready_entry_config(data: dict, errors: list[str]) -> None:
+    config = data.get("bot_ready_entry_config")
+    if not isinstance(config, dict):
+        errors.append("bot_ready_entry_config must be an object")
+        return
+
+    for side in ("long", "short"):
+        side_obj = config.get(side)
+        if not isinstance(side_obj, dict):
+            errors.append(f"bot_ready_entry_config.{side} must be an object")
+            continue
+
+        if not _is_number(side_obj.get("min_entry_score")):
+            errors.append(f"bot_ready_entry_config.{side}.min_entry_score must be numeric")
+
+        features = side_obj.get("features")
+        if not isinstance(features, dict):
+            errors.append(f"bot_ready_entry_config.{side}.features must be an object")
+            continue
+
+        for feature, rule in features.items():
+            if not isinstance(rule, dict):
+                errors.append(f"bot_ready_entry_config.{side}.features.{feature} must be an object")
+                continue
+            if not isinstance(rule.get("enabled"), bool):
+                errors.append(
+                    f"bot_ready_entry_config.{side}.features.{feature}.enabled must be bool"
+                )
+            if rule.get("threshold") is not None and not _is_number(rule.get("threshold")):
+                errors.append(
+                    f"bot_ready_entry_config.{side}.features.{feature}.threshold must be numeric or null"
+                )
+            if not _is_number(rule.get("score", 0)):
+                errors.append(
+                    f"bot_ready_entry_config.{side}.features.{feature}.score must be numeric"
+                )
+
+
 def validate_settings(settings_path: Path) -> int:
     errors: list[str] = []
 
@@ -100,9 +138,7 @@ def validate_settings(settings_path: Path) -> int:
     raw_bytes = settings_path.read_bytes()
     has_utf8_bom = raw_bytes.startswith(codecs.BOM_UTF8)
     if has_utf8_bom:
-        errors.append(
-            "UTF-8 BOM detected: current bot loader in config.py uses utf-8 and may ignore this file"
-        )
+        print("[INFO] UTF-8 BOM detected: config.py uses utf-8-sig, so this is supported")
 
     try:
         data = json.loads(raw_bytes.decode("utf-8-sig"))
@@ -120,14 +156,21 @@ def validate_settings(settings_path: Path) -> int:
         "risk_percentage": "number",
         "leverage": "int",
         "macd_filter_enabled": "bool",
-        "min_score_long": "int",
-        "min_score_short": "int",
-        "scoring_rules": "object",
     }
     for key, expected in expected_top.items():
         _check_type(data, key, expected, errors)
 
-    _validate_scoring_rules(data, errors)
+    has_bot_ready_entry = isinstance(data.get("bot_ready_entry_config"), dict)
+    has_scoring_rules = isinstance(data.get("scoring_rules"), dict)
+
+    if not has_bot_ready_entry and not has_scoring_rules:
+        errors.append("either bot_ready_entry_config or scoring_rules must be present")
+
+    if has_bot_ready_entry:
+        _validate_bot_ready_entry_config(data, errors)
+
+    if has_scoring_rules:
+        _validate_scoring_rules(data, errors)
 
     # Try real loader path used by bot.
     try:
@@ -139,8 +182,6 @@ def validate_settings(settings_path: Path) -> int:
             "strategy_version": "STRATEGY_VERSION",
             "timeframe": "TIMEFRAME",
             "leverage": "LEVERAGE",
-            "min_score_long": "MIN_SCORE_LONG",
-            "min_score_short": "MIN_SCORE_SHORT",
             "risk_percentage": "RISK_PERCENTAGE",
         }
         for key, attr in attr_map.items():
@@ -159,6 +200,27 @@ def validate_settings(settings_path: Path) -> int:
                     errors.append(
                         f"loader mismatch: {key} file={expected} but Config.{attr}={actual}"
                     )
+
+        if has_bot_ready_entry:
+            long_expected = data["bot_ready_entry_config"].get("long", {}).get("min_entry_score")
+            short_expected = data["bot_ready_entry_config"].get("short", {}).get("min_entry_score")
+            if _is_number(long_expected) and cfg.MIN_SCORE_LONG != int(long_expected):
+                errors.append(
+                    "loader mismatch: MIN_SCORE_LONG does not match bot_ready_entry_config.long.min_entry_score"
+                )
+            if _is_number(short_expected) and cfg.MIN_SCORE_SHORT != int(short_expected):
+                errors.append(
+                    "loader mismatch: MIN_SCORE_SHORT does not match bot_ready_entry_config.short.min_entry_score"
+                )
+        else:
+            if "min_score_long" in data and cfg.MIN_SCORE_LONG != data["min_score_long"]:
+                errors.append(
+                    f"loader mismatch: min_score_long file={data['min_score_long']} but Config.MIN_SCORE_LONG={cfg.MIN_SCORE_LONG}"
+                )
+            if "min_score_short" in data and cfg.MIN_SCORE_SHORT != data["min_score_short"]:
+                errors.append(
+                    f"loader mismatch: min_score_short file={data['min_score_short']} but Config.MIN_SCORE_SHORT={cfg.MIN_SCORE_SHORT}"
+                )
 
         print(
             "[INFO] Config loaded: "

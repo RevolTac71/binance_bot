@@ -99,6 +99,13 @@ def _to_bool(value, default: bool = False) -> bool:
     return default
 
 
+def _to_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _load_secret_data() -> dict:
     parsed = _parse_env_file(LEGACY_DOTENV_PATH)
     secrets = {k: v for k, v in parsed.items() if k in ENV_ONLY_KEYS}
@@ -188,6 +195,9 @@ class Config:
         self._secrets = _SECRET_DATA
         self._known_keys = set()
         self._settings_mtime = self._get_settings_mtime()
+        self.BOT_READY_ENTRY_CONFIG = self._get_dict(
+            "BOT_READY_ENTRY_CONFIG", aliases=["bot_ready_entry_config"]
+        )
 
         # 1. Binance API Settings
         self.BINANCE_API_KEY = self._get_str("BINANCE_API_KEY", None, aliases=["BINANCE_KEY"])
@@ -284,8 +294,13 @@ class Config:
 
         # 이전 버전 키는 경고만 억제하고 동작에는 영향이 없도록 알려진 키로 등록합니다.
         self._register_deprecated_keys()
+        self._remember_keys("BOT_READY_ENTRY_CONFIG", aliases=["bot_ready_entry_config"])
         self._remember_keys("SCORING_RULES", aliases=["scoring_rules"])
         self._remember_keys("SCORING_THRESHOLDS", aliases=["scoring_thresholds"])
+        self._remember_keys("ENTRY_SCORING_LONG", aliases=["entry_scoring_long"])
+        self._remember_keys("ENTRY_SCORING_SHORT", aliases=["entry_scoring_short"])
+
+        self._apply_bot_ready_entry_config()
 
         self.rebuild_scoring_rules()
         self._log_unknown_keys()
@@ -320,6 +335,9 @@ class Config:
         _SETTINGS_DATA = fresh_data
         self._data = fresh_data
         self._settings_mtime = current_mtime
+        self.BOT_READY_ENTRY_CONFIG = self._get_dict(
+            "BOT_READY_ENTRY_CONFIG", aliases=["bot_ready_entry_config"]
+        )
 
         # check_entry / scoring 경로에서 즉시 사용하는 값만 재적용
         self.MACD_FILTER_ENABLED = self._get_bool("MACD_FILTER_ENABLED", True, aliases=["MTF_FILTER"])
@@ -329,6 +347,7 @@ class Config:
         self.PCTL_WINDOW = self._get_int("PCTL_WINDOW", 100)
         self.ATR_RATIO_MULT = self._get_float("ATR_RATIO_MULT", 1.2)
         self.ATR_LONG_LEN = self._get_int("ATR_LONG_LEN", 200)
+        self._apply_bot_ready_entry_config()
         self.rebuild_scoring_rules()
         return True
 
@@ -418,6 +437,26 @@ class Config:
         if isinstance(raw, list):
             return [str(v).strip().upper() for v in raw if str(v).strip()]
         return [s.strip().upper() for s in str(raw).split(",") if s.strip()]
+
+    def _get_dict(self, key: str, aliases=None):
+        self._remember_keys(key, aliases)
+        raw = self._first_raw(key, aliases)
+        if isinstance(raw, dict):
+            return raw
+        return {}
+
+    def _apply_bot_ready_entry_config(self):
+        config = self.BOT_READY_ENTRY_CONFIG
+        if not isinstance(config, dict):
+            return
+
+        long_cfg = config.get("long")
+        short_cfg = config.get("short")
+
+        if isinstance(long_cfg, dict):
+            self.MIN_SCORE_LONG = _to_int(long_cfg.get("min_entry_score"), self.MIN_SCORE_LONG)
+        if isinstance(short_cfg, dict):
+            self.MIN_SCORE_SHORT = _to_int(short_cfg.get("min_entry_score"), self.MIN_SCORE_SHORT)
 
     def _log_unknown_keys(self):
         unknown = sorted(k for k in self._data.keys() if k not in self._known_keys)
