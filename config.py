@@ -141,6 +141,19 @@ _SETTINGS_DATA = _load_settings_data()
 _SECRET_DATA = _load_secret_data()
 
 
+def _resolve_settings_key(key: str) -> str:
+    """settings.json에 저장할 실제 키명을 결정합니다.
+
+    기존 키가 있으면 그 casing을 유지하고,
+    없으면 현재 settings.json 스타일(소문자 스네이크 케이스)에 맞춰 저장합니다.
+    """
+    candidates = [key, str(key).lower(), str(key).upper()]
+    for candidate in candidates:
+        if candidate in _SETTINGS_DATA:
+            return candidate
+    return str(key).lower()
+
+
 def update_env_variable(key: str, value, silent: bool = False):
     """
     실행 중 설정값을 갱신하고 settings.json 파일에 영구 반영합니다.
@@ -148,19 +161,23 @@ def update_env_variable(key: str, value, silent: bool = False):
     """
     stored = _to_storage_value(value)
     try:
+        # settings.json을 단일 기준으로 저장합니다.
+        storage_key = _resolve_settings_key(key)
+        _SETTINGS_DATA[storage_key] = stored
+        _save_settings_data(_SETTINGS_DATA)
+
+        # 런타임 호환을 위해 환경변수도 동기화합니다.
+        os.environ[key] = stored
+
+        # 과거 .env 의존 경로를 깨지 않기 위해 민감 키는 레거시 파일에도 미러링합니다.
         if key in ENV_ONLY_KEYS:
             _SECRET_DATA[key] = stored
-            os.environ[key] = stored
             _save_secret_to_env_file(key, stored)
-            if not silent:
-                logger.info(f"💾 [Persistence] .env 전용 설정 '{key}' 가 저장되었습니다.")
-            return
 
-        _SETTINGS_DATA[key] = stored
-        os.environ[key] = stored
-        _save_settings_data(_SETTINGS_DATA)
         if not silent:
-            logger.info(f"💾 [Persistence] 설정 '{key}' 가 {stored}로 저장되었습니다.")
+            logger.info(
+                f"💾 [Persistence] 설정 '{key}' 가 {stored}로 저장되었습니다. (settings key: {storage_key})"
+            )
     except Exception as e:
         logger.error(f"❌ [Persistence] settings.json 갱신 실패 ({key}): {e}")
 
@@ -355,10 +372,10 @@ class Config:
         for candidate in [key] + (aliases or []):
             variants = [candidate, str(candidate).lower(), str(candidate).upper()]
             for variant in variants:
-                if variant in self._secrets and self._secrets[variant] not in (None, ""):
-                    return self._secrets[variant]
                 if variant in self._data and self._data[variant] not in (None, ""):
                     return self._data[variant]
+                if variant in self._secrets and self._secrets[variant] not in (None, ""):
+                    return self._secrets[variant]
         return None
 
     def _get_str(self, key: str, default, aliases=None):
