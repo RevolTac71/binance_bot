@@ -1,0 +1,443 @@
+﻿{
+  "adx_boost_pctl": 70,
+  "atr_long_len": 200,
+  "atr_ratio_mult": 1.05,
+  "breakeven_profit_mult": 0.2,
+  "breakeven_trigger_mult": 1.5,
+  "chandelier_atr_len": 14,
+  "chandelier_mult": 3,
+  "chasing_wait_sec": 2.5,
+  "fee_rate": 0.00045,
+  "htf_timeframe_15m": "15m",
+  "htf_timeframe_1h": "1h",
+  "kelly_max_fraction": 0.05,
+  "kelly_min_trades": 20,
+  "kelly_sizing": false,
+  "leverage": 10,
+  "long_sl_mode": "ATR",
+  "long_sl_mult": 1.2000000000000002,
+  "long_sl_pct": 0.02,
+  "long_tp_mode": "ATR",
+  "long_tp_mult": 2.5,
+  "long_tp_pct": 0.05,
+  "loss_cooldown_minutes": 5,
+  "macd_filter_enabled": false,
+  "max_concurrent_same_dir": 3,
+  "max_trades": 3,
+  "partial_tp_ratio": 0.3,
+  "pctl_window": 100,
+  "risk_percentage": 0.05,
+  "short_sl_mode": "ATR",
+  "short_sl_mult": 2.2,
+  "short_sl_pct": 0.015,
+  "short_tp_mode": "PERCENT",
+  "short_tp_mult": 3.0,
+  "short_tp_pct": 0.03,
+  "sl_mult": 1.2000000000000002,
+  "strategy_version": "V18",
+  "timeframe": "5m",
+  "tp_mult": 2.5,
+  "min_score_long": 6,
+  "min_score_short": 6,
+  "scoring_rules": {
+    "long": {
+      "trend": {
+        "bid_ask_imbalance": [
+          [
+            80.0,
+            0
+          ]
+        ],
+        "cvd_delta_slope": [
+          [
+            70.0,
+            0
+          ],
+          [
+            85.0,
+            0
+          ]
+        ],
+        "log_volume_zscore": [
+          [
+            1.9,
+            4,
+            "val"
+          ]
+        ],
+        "macd_hist": [
+          [
+            65.0,
+            1
+          ],
+          [
+            75.0,
+            2
+          ],
+          [
+            85.0,
+            4
+          ]
+        ],
+        "nofi_1m": [
+          [
+            85.0,
+            0
+          ]
+        ],
+        "open_interest": [
+          [
+            70.0,
+            0
+          ],
+          [
+            85.0,
+            0
+          ]
+        ],
+        "tick_count": [
+          [
+            85.0,
+            0
+          ]
+        ]
+      },
+      "mean_reversion": {
+        "buy_ratio": [
+          [
+            15.0,
+            0
+          ]
+        ],
+        "rsi": []
+      }
+    },
+    "short": {
+      "trend": {
+        "bid_ask_imbalance": [
+          [
+            65.0,
+            0
+          ],
+          [
+            80.0,
+            0
+          ]
+        ],
+        "cvd_delta_slope": [
+          [
+            70.0,
+            0
+          ],
+          [
+            85.0,
+            0
+          ]
+        ],
+        "log_volume_zscore": [
+          [
+            1.4,
+            0,
+            "val"
+          ],
+          [
+            1.9,
+            0,
+            "val"
+          ]
+        ],
+        "macd_hist": [
+          [
+            65.0,
+            1
+          ],
+          [
+            75.0,
+            2
+          ],
+          [
+            85.0,
+            4
+          ]
+        ],
+        "nofi_1m": [
+          [
+            70.0,
+            0
+          ],
+          [
+            85.0,
+            0
+          ]
+        ],
+        "open_interest": [
+          [
+            70.0,
+            1
+          ],
+          [
+            85.0,
+            2
+          ]
+        ],
+        "tick_count": [
+          [
+            70.0,
+            1
+          ],
+          [
+            85.0,
+            2
+          ]
+        ]
+      },
+      "mean_reversion": {
+        "buy_ratio": [
+          [
+            25.0,
+            0
+          ],
+          [
+            10.0,
+            0
+          ]
+        ],
+        "rsi": [
+          [
+            35.0,
+            0
+          ],
+          [
+            25.0,
+            0
+          ]
+        ]
+      }
+    },
+    "weights": {
+      "atr": {
+        "2": 2
+      },
+      "adx_boost": {
+        "1": 2
+      },
+      "fr_boost": {
+        "2": 2
+      },
+      "htf_bias": {
+        "2": 2
+      },
+      "mtf_moment": {
+        "2": 3
+      },
+      "mtf_regime": {
+        "1": 2
+      },
+      "vwap_dist": {
+        "2": 2
+      }
+    }
+  },
+  "scoring_thresholds": {},
+  "bot_ready_entry_config": {
+    "long": {
+      "min_entry_score": 6,
+      "max_score": 7,
+      "required_ratio": 0.8571428571428571,
+      "features": {
+        "rsi": {
+          "enabled": true,
+          "op": "<=",
+          "threshold": 48.964264,
+          "score": 2
+        },
+        "adx_15m": {
+          "enabled": false,
+          "op": ">=",
+          "threshold": null,
+          "score": 0
+        },
+        "twap_imbalance": {
+          "enabled": false,
+          "op": ">=",
+          "threshold": null,
+          "score": 0
+        },
+        "bid_ask_imbalance": {
+          "enabled": false,
+          "op": ">=",
+          "threshold": null,
+          "score": 0
+        },
+        "cvd_delta_slope": {
+          "enabled": false,
+          "op": ">=",
+          "threshold": null,
+          "score": 0
+        },
+        "nofi_1m": {
+          "enabled": false,
+          "op": ">=",
+          "threshold": null,
+          "score": 0
+        },
+        "buy_ratio": {
+          "enabled": false,
+          "op": ">=",
+          "threshold": null,
+          "score": 0
+        },
+        "open_interest": {
+          "enabled": false,
+          "op": ">=",
+          "threshold": null,
+          "score": 0
+        },
+        "tick_count": {
+          "enabled": false,
+          "op": ">=",
+          "threshold": null,
+          "score": 0
+        },
+        "log_volume_zscore": {
+          "enabled": true,
+          "op": ">=",
+          "threshold": 0.013924,
+          "score": 3
+        },
+        "macd_hist": {
+          "enabled": true,
+          "op": ">=",
+          "threshold": 0.002347,
+          "score": 2
+        }
+      },
+      "scores": {
+        "rsi": 2,
+        "adx_15m": 0,
+        "twap_imbalance": 0,
+        "bid_ask_imbalance": 0,
+        "cvd_delta_slope": 0,
+        "nofi_1m": 0,
+        "buy_ratio": 0,
+        "open_interest": 0,
+        "tick_count": 0,
+        "log_volume_zscore": 3,
+        "macd_hist": 2
+      }
+    },
+    "short": {
+      "min_entry_score": 6,
+      "max_score": 6,
+      "required_ratio": 1.0,
+      "features": {
+        "rsi": {
+          "enabled": false,
+          "op": ">=",
+          "threshold": null,
+          "score": 0
+        },
+        "adx_15m": {
+          "enabled": false,
+          "op": ">=",
+          "threshold": null,
+          "score": 0
+        },
+        "twap_imbalance": {
+          "enabled": false,
+          "op": "<=",
+          "threshold": null,
+          "score": 0
+        },
+        "bid_ask_imbalance": {
+          "enabled": false,
+          "op": "<=",
+          "threshold": null,
+          "score": 0
+        },
+        "cvd_delta_slope": {
+          "enabled": false,
+          "op": "<=",
+          "threshold": null,
+          "score": 0
+        },
+        "nofi_1m": {
+          "enabled": false,
+          "op": "<=",
+          "threshold": null,
+          "score": 0
+        },
+        "buy_ratio": {
+          "enabled": false,
+          "op": "<=",
+          "threshold": null,
+          "score": 0
+        },
+        "open_interest": {
+          "enabled": true,
+          "op": ">=",
+          "threshold": 5539015.5,
+          "score": 2
+        },
+        "tick_count": {
+          "enabled": true,
+          "op": ">=",
+          "threshold": 1565.0,
+          "score": 2
+        },
+        "log_volume_zscore": {
+          "enabled": false,
+          "op": ">=",
+          "threshold": null,
+          "score": 0
+        },
+        "macd_hist": {
+          "enabled": true,
+          "op": "<=",
+          "threshold": -0.142778,
+          "score": 2
+        }
+      },
+      "scores": {
+        "rsi": 0,
+        "adx_15m": 0,
+        "twap_imbalance": 0,
+        "bid_ask_imbalance": 0,
+        "cvd_delta_slope": 0,
+        "nofi_1m": 0,
+        "buy_ratio": 0,
+        "open_interest": 2,
+        "tick_count": 2,
+        "log_volume_zscore": 0,
+        "macd_hist": 2
+      }
+    }
+  },
+  "entry_scoring_long": {
+    "rsi": 2,
+    "adx_15m": 0,
+    "twap_imbalance": 0,
+    "bid_ask_imbalance": 0,
+    "cvd_delta_slope": 0,
+    "nofi_1m": 0,
+    "buy_ratio": 0,
+    "open_interest": 0,
+    "tick_count": 0,
+    "log_volume_zscore": 3,
+    "macd_hist": 2
+  },
+  "entry_scoring_short": {
+    "rsi": 0,
+    "adx_15m": 0,
+    "twap_imbalance": 0,
+    "bid_ask_imbalance": 0,
+    "cvd_delta_slope": 0,
+    "nofi_1m": 0,
+    "buy_ratio": 0,
+    "open_interest": 2,
+    "tick_count": 2,
+    "log_volume_zscore": 0,
+    "macd_hist": 2
+  },
+  "time_exit_minutes": 125
+}
