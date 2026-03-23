@@ -37,6 +37,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/help — 전체 명령어 도움말\n"
         "/status — 봇 상태 및 포지션 요약\n"
         "/pause / /resume — 신규 진입 일시정지 / 재개\n"
+        "/real / /dryrun — 실전매매 / 모의투자 전환\n"
         "/panic — 비상! 전량 시장가 청산 후 정지\n"
         "/restart — 봇 재부팅\n\n"
         "⚙️ 파라미터 변경 (재시작 불필요)\n"
@@ -73,6 +74,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "▫ `/params` — 현재 설정된 모든 파라미터 조회\n"
             "▫ `/pause`  — 새로운 진입 일시 중단\n"
             "▫ `/resume` — 중단된 진입 다시 시작\n"
+            "▫ `/real`   — 실전매매(REAL) 모드로 변경\n"
+            "▫ `/dryrun` — 모의투자(DRY_RUN) 모드로 변경\n"
             "▫ `/refresh` — 즉시 상위 거래량 종목 갱신\n"
             "▫ `/ignore [코인]` — 해당 종목 감시 제외\n"
             "▫ `/allow [코인]` — 종목 제외 해제\n"
@@ -208,6 +211,22 @@ async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     shutdown_event = context.bot_data.get("shutdown_event")
     if shutdown_event:
         shutdown_event.set()
+
+
+async def real_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_admin(update):
+        return
+    setattr(settings, "DRY_RUN", False)
+    update_env_variable("DRY_RUN", "False")
+    await reply(update, "⚠️ 봇이 <b>실전매매(REAL)</b> 모드로 전환되었습니다!\n(포지션 충돌을 방지하기 위해 봇 재시작을 권장합니다: /restart)", parse_mode="HTML")
+
+
+async def dryrun_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_admin(update):
+        return
+    setattr(settings, "DRY_RUN", True)
+    update_env_variable("DRY_RUN", "True")
+    await reply(update, "✅ 봇이 <b>모의투자(DRY_RUN)</b> 모드로 전환되었습니다.\n(가상 체결로 동작합니다. 재시작 권장: /restart)", parse_mode="HTML")
 
 
 async def panic_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -538,6 +557,8 @@ def setup_telegram_bot(execution_engine, refresh_event=None):
     application.add_handler(CommandHandler("status", status_cmd))
     application.add_handler(CommandHandler("pause", pause_cmd))
     application.add_handler(CommandHandler("resume", resume_cmd))
+    application.add_handler(CommandHandler("real", real_cmd))
+    application.add_handler(CommandHandler("dryrun", dryrun_cmd))
     application.add_handler(CommandHandler("restart", restart_cmd))
     application.add_handler(CommandHandler("panic", panic_cmd))
     application.add_handler(CommandHandler("setparam", setparam_cmd))
