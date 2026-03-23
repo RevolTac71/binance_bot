@@ -100,6 +100,13 @@ class HFTDataPipeline:
                     f"[HFT] WS Connection Closed: Code {e.code}, Reason {e.reason}. Reconnecting in {wait_time}s..."
                 )
                 await asyncio.sleep(wait_time)
+            except (asyncio.TimeoutError, TimeoutError) as e:
+                attempt += 1
+                wait_time = min(2**attempt, 60)
+                logger.warning(
+                    f"[HFT] WS Timeout Error: 서버 응답 지연. Reconnecting in {wait_time}s..."
+                )
+                await asyncio.sleep(wait_time)
             except Exception as e:
                 attempt += 1
                 wait_time = min(2**attempt, 60)  # Max 60초 대기

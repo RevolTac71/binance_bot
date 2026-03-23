@@ -1196,8 +1196,34 @@ class ExecutionEngine:
                             await self.close_position_virtually(
                                 symbol, reason=reason, close_price=current_price
                             )
+                            continue
+
+                        # [V18.4] Time-Exit 감시 (DRY_RUN 전용)
+                        wait_mins = getattr(settings, "TIME_EXIT_MINUTES", 0)
+                        entry_time = pos_info.get("entry_time")
+                        current_contracts = pos_info.get("amount", 0.0)
+
+                        if wait_mins > 0 and entry_time and current_contracts > 0:
+                            if isinstance(entry_time, str):
+                                entry_time = datetime.fromisoformat(entry_time.replace("Z", "+00:00"))
+
+                            now_kst = datetime.now(timezone.utc) + timedelta(hours=9)
+                            if entry_time.tzinfo is None:
+                                now_kst = now_kst.replace(tzinfo=None)
+
+                            elapsed_mins = (now_kst - entry_time).total_seconds() / 60
+                            if elapsed_mins >= wait_mins:
+                                logger.warning(
+                                    f"⏰ [{symbol}] 🧪 [DRY RUN] {wait_mins}분 보유 시간 초과 ({elapsed_mins:.1f}분 경과) → 가상 강제 탈출 시도."
+                                )
+                                await self.close_position_virtually(
+                                    symbol,
+                                    reason=f"Time Exit ({wait_mins}분 시간 초과)",
+                                    close_price=current_price
+                                )
+
                 except Exception as e:
-                    logger.error(f"[{symbol}] DRY_RUN 가상 TP/SL 감시 중 에러: {e}")
+                    logger.error(f"[{symbol}] DRY_RUN 가상 TP/SL 및 Time-Exit 감시 중 에러: {e}")
                 continue
 
             current_contracts = position_map.get(self._normalize_symbol(symbol), 0.0)
