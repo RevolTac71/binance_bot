@@ -15,30 +15,30 @@
   "kelly_sizing": false,
   "leverage": 10,
   "long_sl_mode": "ATR",
-  "long_sl_mult": 1.2000000000000002,
+  "long_sl_mult": 1.9000000000000001,
   "long_sl_pct": 0.02,
   "long_tp_mode": "ATR",
-  "long_tp_mult": 2.5,
+  "long_tp_mult": 2.1,
   "long_tp_pct": 0.05,
-  "loss_cooldown_minutes": 5,
+  "loss_cooldown_minutes": 10,
   "macd_filter_enabled": false,
   "max_concurrent_same_dir": 3,
-  "max_trades": 3,
-  "partial_tp_ratio": 0.3,
+  "max_trades": 2,
+  "partial_tp_ratio": 0.4,
   "pctl_window": 100,
   "risk_percentage": 0.05,
   "short_sl_mode": "ATR",
-  "short_sl_mult": 2.2,
+  "short_sl_mult": 0.6,
   "short_sl_pct": 0.015,
   "short_tp_mode": "PERCENT",
-  "short_tp_mult": 3.0,
+  "short_tp_mult": 5.1,
   "short_tp_pct": 0.03,
-  "sl_mult": 1.2000000000000002,
+  "sl_mult": 1.9000000000000001,
   "strategy_version": "V18",
   "timeframe": "5m",
-  "tp_mult": 2.5,
-  "min_score_long": 6,
-  "min_score_short": 6,
+  "tp_mult": 2.1,
+  "min_score_long": 7,
+  "min_score_short": 8,
   "scoring_rules": {
     "long": {
       "trend": {
@@ -68,15 +68,15 @@
         "macd_hist": [
           [
             65.0,
-            1
+            0
           ],
           [
             75.0,
-            2
+            0
           ],
           [
             85.0,
-            4
+            0
           ]
         ],
         "nofi_1m": [
@@ -88,11 +88,11 @@
         "open_interest": [
           [
             70.0,
-            0
+            2
           ],
           [
             85.0,
-            0
+            4
           ]
         ],
         "tick_count": [
@@ -142,22 +142,22 @@
           ],
           [
             1.9,
-            0,
+            1,
             "val"
           ]
         ],
         "macd_hist": [
           [
             65.0,
-            1
+            0
           ],
           [
             75.0,
-            2
+            0
           ],
           [
             85.0,
-            4
+            0
           ]
         ],
         "nofi_1m": [
@@ -183,11 +183,11 @@
         "tick_count": [
           [
             70.0,
-            1
+            0
           ],
           [
             85.0,
-            2
+            0
           ]
         ]
       },
@@ -205,11 +205,11 @@
         "rsi": [
           [
             35.0,
-            0
+            1
           ],
           [
             25.0,
-            0
+            2
           ]
         ]
       }
@@ -241,21 +241,21 @@
   "scoring_thresholds": {},
   "bot_ready_entry_config": {
     "long": {
-      "min_entry_score": 6,
+      "min_entry_score": 7,
       "max_score": 7,
-      "required_ratio": 0.8571428571428571,
+      "required_ratio": 1.0,
       "features": {
         "rsi": {
-          "enabled": true,
-          "op": "<=",
-          "threshold": 48.964264,
-          "score": 2
-        },
-        "adx_15m": {
           "enabled": false,
-          "op": ">=",
+          "op": "<=",
           "threshold": null,
           "score": 0
+        },
+        "adx_15m": {
+          "enabled": true,
+          "op": ">=",
+          "threshold": 24.376618,
+          "score": 3
         },
         "twap_imbalance": {
           "enabled": false,
@@ -288,10 +288,10 @@
           "score": 0
         },
         "open_interest": {
-          "enabled": false,
+          "enabled": true,
           "op": ">=",
-          "threshold": null,
-          "score": 0
+          "threshold": 0.113209,
+          "score": 3
         },
         "tick_count": {
           "enabled": false,
@@ -302,14 +302,100 @@
         "log_volume_zscore": {
           "enabled": true,
           "op": ">=",
-          "threshold": 0.013924,
+          "threshold": 0.021554,
+          "score": 1
+        },
+        "macd_hist": {
+          "enabled": false,
+          "op": ">=",
+          "threshold": null,
+          "score": 0
+        }
+      },
+      "scores": {
+        "rsi": 0,
+        "adx_15m": 3,
+        "twap_imbalance": 0,
+        "bid_ask_imbalance": 0,
+        "cvd_delta_slope": 0,
+        "nofi_1m": 0,
+        "buy_ratio": 0,
+        "open_interest": 3,
+        "tick_count": 0,
+        "log_volume_zscore": 1,
+        "macd_hist": 0
+      }
+    },
+    "short": {
+      "min_entry_score": 8,
+      "max_score": 8,
+      "required_ratio": 1.0,
+      "features": {
+        "rsi": {
+          "enabled": true,
+          "op": ">=",
+          "threshold": 0.202441,
+          "score": 2
+        },
+        "adx_15m": {
+          "enabled": false,
+          "op": ">=",
+          "threshold": null,
+          "score": 0
+        },
+        "twap_imbalance": {
+          "enabled": false,
+          "op": "<=",
+          "threshold": null,
+          "score": 0
+        },
+        "bid_ask_imbalance": {
+          "enabled": false,
+          "op": "<=",
+          "threshold": null,
+          "score": 0
+        },
+        "cvd_delta_slope": {
+          "enabled": false,
+          "op": "<=",
+          "threshold": null,
+          "score": 0
+        },
+        "nofi_1m": {
+          "enabled": false,
+          "op": "<=",
+          "threshold": null,
+          "score": 0
+        },
+        "buy_ratio": {
+          "enabled": false,
+          "op": "<=",
+          "threshold": null,
+          "score": 0
+        },
+        "open_interest": {
+          "enabled": true,
+          "op": ">=",
+          "threshold": 51865611.0,
+          "score": 3
+        },
+        "tick_count": {
+          "enabled": false,
+          "op": ">=",
+          "threshold": null,
+          "score": 0
+        },
+        "log_volume_zscore": {
+          "enabled": true,
+          "op": ">=",
+          "threshold": 0.034594,
           "score": 3
         },
         "macd_hist": {
-          "enabled": true,
-          "op": ">=",
-          "threshold": 0.002347,
-          "score": 2
+          "enabled": false,
+          "op": "<=",
+          "threshold": null,
+          "score": 0
         }
       },
       "scores": {
@@ -320,100 +406,27 @@
         "cvd_delta_slope": 0,
         "nofi_1m": 0,
         "buy_ratio": 0,
-        "open_interest": 0,
+        "open_interest": 3,
         "tick_count": 0,
         "log_volume_zscore": 3,
-        "macd_hist": 2
-      }
-    },
-    "short": {
-      "min_entry_score": 6,
-      "max_score": 6,
-      "required_ratio": 1.0,
-      "features": {
-        "rsi": {
-          "enabled": false,
-          "op": ">=",
-          "threshold": null,
-          "score": 0
-        },
-        "adx_15m": {
-          "enabled": false,
-          "op": ">=",
-          "threshold": null,
-          "score": 0
-        },
-        "twap_imbalance": {
-          "enabled": false,
-          "op": "<=",
-          "threshold": null,
-          "score": 0
-        },
-        "bid_ask_imbalance": {
-          "enabled": false,
-          "op": "<=",
-          "threshold": null,
-          "score": 0
-        },
-        "cvd_delta_slope": {
-          "enabled": false,
-          "op": "<=",
-          "threshold": null,
-          "score": 0
-        },
-        "nofi_1m": {
-          "enabled": false,
-          "op": "<=",
-          "threshold": null,
-          "score": 0
-        },
-        "buy_ratio": {
-          "enabled": false,
-          "op": "<=",
-          "threshold": null,
-          "score": 0
-        },
-        "open_interest": {
-          "enabled": true,
-          "op": ">=",
-          "threshold": 5539015.5,
-          "score": 2
-        },
-        "tick_count": {
-          "enabled": true,
-          "op": ">=",
-          "threshold": 1565.0,
-          "score": 2
-        },
-        "log_volume_zscore": {
-          "enabled": false,
-          "op": ">=",
-          "threshold": null,
-          "score": 0
-        },
-        "macd_hist": {
-          "enabled": true,
-          "op": "<=",
-          "threshold": -0.142778,
-          "score": 2
-        }
-      },
-      "scores": {
-        "rsi": 0,
-        "adx_15m": 0,
-        "twap_imbalance": 0,
-        "bid_ask_imbalance": 0,
-        "cvd_delta_slope": 0,
-        "nofi_1m": 0,
-        "buy_ratio": 0,
-        "open_interest": 2,
-        "tick_count": 2,
-        "log_volume_zscore": 0,
-        "macd_hist": 2
+        "macd_hist": 0
       }
     }
   },
   "entry_scoring_long": {
+    "rsi": 0,
+    "adx_15m": 3,
+    "twap_imbalance": 0,
+    "bid_ask_imbalance": 0,
+    "cvd_delta_slope": 0,
+    "nofi_1m": 0,
+    "buy_ratio": 0,
+    "open_interest": 3,
+    "tick_count": 0,
+    "log_volume_zscore": 1,
+    "macd_hist": 0
+  },
+  "entry_scoring_short": {
     "rsi": 2,
     "adx_15m": 0,
     "twap_imbalance": 0,
@@ -421,23 +434,10 @@
     "cvd_delta_slope": 0,
     "nofi_1m": 0,
     "buy_ratio": 0,
-    "open_interest": 0,
+    "open_interest": 3,
     "tick_count": 0,
     "log_volume_zscore": 3,
-    "macd_hist": 2
+    "macd_hist": 0
   },
-  "entry_scoring_short": {
-    "rsi": 0,
-    "adx_15m": 0,
-    "twap_imbalance": 0,
-    "bid_ask_imbalance": 0,
-    "cvd_delta_slope": 0,
-    "nofi_1m": 0,
-    "buy_ratio": 0,
-    "open_interest": 2,
-    "tick_count": 2,
-    "log_volume_zscore": 0,
-    "macd_hist": 2
-  },
-  "time_exit_minutes": 125
+  "time_exit_minutes": 105
 }
