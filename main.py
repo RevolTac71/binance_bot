@@ -162,6 +162,10 @@ cvd_history: dict[str, list] = {}
 imbalance_history: dict[str, list] = {}
 snapshot_queue: list[dict] = []
 
+# [V18.6] 동시 진입 시그널 우선순위 큐
+entry_signal_queue: list[dict] = []
+entry_signal_lock = asyncio.Lock()
+
 
 async def warm_up_data(symbols: list, pipeline: DataPipeline):
     """
@@ -500,31 +504,27 @@ async def process_closed_kline(
             qty = sizing["size"]
             side = "buy" if decision["signal"] == "LONG" else "sell"
 
+            signal_score = decision["long_score"] if decision["signal"] == "LONG" else decision["short_score"]
             logger.info(
-                f"[Execute] 🎯 {symbol} 진입 타점 포착! "
-                f"{side.upper()} (qty={qty}, price={market_price})"
+                f"[Signal Queue] 🎯 {symbol} 진입 시그널 큐에 대기 등록 (방향={side.upper()}, 점수={signal_score})"
             )
 
-            # 4. 추격 매수(Chasing) 방식 진입 시도
-            entry_success = await execution.place_chasing_entry_order(
-                symbol=symbol,
-                side=side,
-                amount=qty,
-                reason=reason,
-                tp_dist=sizing["tp_dist"],
-                sl_dist=sizing["sl_dist"],
-                market_data=decision.get("market_data"),
-            )
-
-            # V18 포트폴리오 상태에 포지션 등록 (Chandelier 추적 시작)
-            # 진입이 실제로 시작된 경우에만 등록 (False 반환 시 등록하면 청산 없이 PortfolioState만 쌓임)
-            if entry_success:
-                portfolio.register_position(
-                    symbol=symbol,
-                    direction=decision["signal"],
-                    entry_price=market_price,
-                    atr=atr_val,
-                )
+            async with entry_signal_lock:
+                entry_signal_queue.append({
+                    "symbol": symbol,
+                    "side": side,
+                    "direction": decision["signal"],
+                    "market_price": market_price,
+                    "atr_val": atr_val,
+                    "amount": qty,
+                    "reason": reason,
+                    "tp_dist": sizing["tp_dist"],
+                    "sl_dist": sizing["sl_dist"],
+                    "market_data": decision.get("market_data"),
+                    "signal_score": signal_score,
+                    "volume_usd": float(curr_df["volume"].iloc[-1] * market_price),
+                    "kline_close_time": int(kline.get("T", time.time() * 1000))
+                })
 
     except Exception as e:
         logger.error(f"[{symbol}] KLINE 마감 처리 중 에러: {e}")
@@ -638,6 +638,73 @@ async def snapshot_flush_loop():
                 # 불필요한 로그 생략 (정상 작동 시 조용히)
             except Exception as e:
                 logger.error(f"[Snapshot Bulk Insert] 처리 실패: {e}")
+
+
+async def signal_processor_loop(execution: ExecutionEngine):
+    """
+    [V18.6] 여러 종목의 캔들이 동시에 마감될 때 발생하는 복수의 진입 시그널을 수집하여,
+    1. 초과 점수(excess_score)
+    2. 거래대금(volume_usd)
+    순으로 우선순위를 매겨 순차적으로 체결을 요청합니다.
+    """
+    global entry_signal_queue
+    while True:
+        await asyncio.sleep(1.5)  # 캔들 마감 시 1.5초간 시그널을 모음
+        
+        async with entry_signal_lock:
+            if not entry_signal_queue:
+                continue
+            
+            # 큐 복사 및 초기화
+            signals_to_process = entry_signal_queue[:]
+            entry_signal_queue.clear()
+            
+        if not signals_to_process:
+            continue
+            
+        # 정렬: 
+        # 1. kline_close_time (오름차순): 물리적으로 먼저 마감된 캔들 우선
+        # 2. signal_score (내림차순): 같은 시간대라면 점수가 더 높은 종목 우선
+        # 3. volume_usd (내림차순): 점수까지 같다면 거래대금이 큰 종목 우선 (슬리피지 방어)
+        # 4. symbol (오름차순): 위 3개가 모두 같다면 마지막 타이브레이커
+        signals_to_process.sort(
+            key=lambda x: (
+                x["kline_close_time"], 
+                -x["signal_score"], 
+                -x["volume_usd"], 
+                x["symbol"]
+            )
+        )
+        
+        logger.info(f"[Signal Processor] {len(signals_to_process)}개의 동시 시그널을 정렬하여 진입을 시도합니다.")
+        for idx, sig in enumerate(signals_to_process):
+            logger.info(
+                f"  -> {idx+1}위: [{sig['symbol']}] (시간: {sig['kline_close_time']}, 점수: {sig['signal_score']}, 대금: $ {sig['volume_usd']:,.0f})"
+            )
+            
+        # 순차적으로 진입 로직 수행 (포트폴리오 한도/중복진입 등은 execution 내부에서 방어됨)
+        for sig in signals_to_process:
+            try:
+                entry_success = await execution.place_chasing_entry_order(
+                    symbol=sig["symbol"],
+                    side=sig["side"],
+                    amount=sig["amount"],
+                    reason=sig["reason"],
+                    tp_dist=sig["tp_dist"],
+                    sl_dist=sig["sl_dist"],
+                    market_data=sig["market_data"],
+                )
+
+                # 진입이 실제로 시작된 경우에만 등록
+                if entry_success:
+                    portfolio.register_position(
+                        symbol=sig["symbol"],
+                        direction=sig["direction"],
+                        entry_price=sig["market_price"],
+                        atr=sig["atr_val"],
+                    )
+            except Exception as e:
+                logger.error(f"[Signal Processor] {sig['symbol']} 체결 시도 중 내부 에러: {e}")
 
 
 async def chandelier_monitoring_loop(
@@ -1018,10 +1085,11 @@ async def main():
         asyncio.create_task(htf_refresh_loop(pipeline))
         asyncio.create_task(orderbook_twap_loop(pipeline))
         asyncio.create_task(snapshot_flush_loop())
+        asyncio.create_task(signal_processor_loop(execution))
         # [V18.3] 12시간 주기 동적 타임프레임 갱신 루프 가동
         asyncio.create_task(target_refresh_loop(pipeline, execution))
         logger.info(
-            "[V18] 백그라운드 태스크(HTF / TWAP / Snapshot Flush / Refresher) 가동 완료."
+            "[V18] 백그라운드 태스크(HTF / TWAP / Snapshot / Signal Processor / Refresher) 가동 완료."
         )
 
         # V18 메인 웹소켓 루프 / 스테이트 머신 / 샹들리에 모니터링 병렬 가동
