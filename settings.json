@@ -15,30 +15,30 @@
   "kelly_sizing": false,
   "leverage": 10,
   "long_sl_mode": "ATR",
-  "long_sl_mult": 1.9000000000000001,
+  "long_sl_mult": 2.0,
   "long_sl_pct": 0.02,
   "long_tp_mode": "ATR",
-  "long_tp_mult": 2.1,
+  "long_tp_mult": 6.0,
   "long_tp_pct": 0.05,
-  "loss_cooldown_minutes": 10,
+  "loss_cooldown_minutes": 15,
   "macd_filter_enabled": false,
   "max_concurrent_same_dir": 3,
   "max_trades": 2,
-  "partial_tp_ratio": 0.4,
+  "partial_tp_ratio": 0.5,
   "pctl_window": 100,
   "risk_percentage": 0.05,
   "short_sl_mode": "ATR",
-  "short_sl_mult": 0.6,
+  "short_sl_mult": 2.3,
   "short_sl_pct": 0.015,
   "short_tp_mode": "PERCENT",
-  "short_tp_mult": 5.1,
+  "short_tp_mult": 6.0,
   "short_tp_pct": 0.03,
-  "sl_mult": 1.9000000000000001,
+  "sl_mult": 2.0,
   "strategy_version": "V18",
   "timeframe": "5m",
-  "tp_mult": 2.1,
-  "min_score_long": 7,
-  "min_score_short": 8,
+  "tp_mult": 6.0,
+  "min_score_long": 9,
+  "min_score_short": 7,
   "scoring_rules": {
     "long": {
       "trend": {
@@ -61,7 +61,7 @@
         "log_volume_zscore": [
           [
             1.9,
-            4,
+            0,
             "val"
           ]
         ],
@@ -88,17 +88,17 @@
         "open_interest": [
           [
             70.0,
-            2
+            0
           ],
           [
             85.0,
-            4
+            0
           ]
         ],
         "tick_count": [
           [
             85.0,
-            0
+            2
           ]
         ]
       },
@@ -173,11 +173,11 @@
         "open_interest": [
           [
             70.0,
-            1
+            0
           ],
           [
             85.0,
-            2
+            0
           ]
         ],
         "tick_count": [
@@ -241,20 +241,20 @@
   "scoring_thresholds": {},
   "bot_ready_entry_config": {
     "long": {
-      "min_entry_score": 7,
-      "max_score": 7,
+      "min_entry_score": 9,
+      "max_score": 9,
       "required_ratio": 1.0,
       "features": {
         "rsi": {
-          "enabled": false,
+          "enabled": true,
           "op": "<=",
-          "threshold": null,
-          "score": 0
+          "threshold": -0.123116,
+          "score": 3
         },
         "adx_15m": {
           "enabled": true,
           "op": ">=",
-          "threshold": 24.376618,
+          "threshold": 23.904491,
           "score": 3
         },
         "twap_imbalance": {
@@ -288,22 +288,22 @@
           "score": 0
         },
         "open_interest": {
-          "enabled": true,
-          "op": ">=",
-          "threshold": 0.113209,
-          "score": 3
-        },
-        "tick_count": {
           "enabled": false,
           "op": ">=",
           "threshold": null,
           "score": 0
         },
-        "log_volume_zscore": {
+        "tick_count": {
           "enabled": true,
           "op": ">=",
-          "threshold": 0.021554,
-          "score": 1
+          "threshold": 1469.0,
+          "score": 3
+        },
+        "log_volume_zscore": {
+          "enabled": false,
+          "op": ">=",
+          "threshold": null,
+          "score": 0
         },
         "macd_hist": {
           "enabled": false,
@@ -313,35 +313,35 @@
         }
       },
       "scores": {
-        "rsi": 0,
+        "rsi": 3,
         "adx_15m": 3,
         "twap_imbalance": 0,
         "bid_ask_imbalance": 0,
         "cvd_delta_slope": 0,
         "nofi_1m": 0,
         "buy_ratio": 0,
-        "open_interest": 3,
-        "tick_count": 0,
-        "log_volume_zscore": 1,
+        "open_interest": 0,
+        "tick_count": 3,
+        "log_volume_zscore": 0,
         "macd_hist": 0
       }
     },
     "short": {
-      "min_entry_score": 8,
-      "max_score": 8,
+      "min_entry_score": 7,
+      "max_score": 7,
       "required_ratio": 1.0,
       "features": {
         "rsi": {
           "enabled": true,
           "op": ">=",
-          "threshold": 0.202441,
+          "threshold": 0.205139,
           "score": 2
         },
         "adx_15m": {
-          "enabled": false,
+          "enabled": true,
           "op": ">=",
-          "threshold": null,
-          "score": 0
+          "threshold": -0.082571,
+          "score": 3
         },
         "twap_imbalance": {
           "enabled": false,
@@ -374,10 +374,10 @@
           "score": 0
         },
         "open_interest": {
-          "enabled": true,
+          "enabled": false,
           "op": ">=",
-          "threshold": 51865611.0,
-          "score": 3
+          "threshold": null,
+          "score": 0
         },
         "tick_count": {
           "enabled": false,
@@ -388,8 +388,8 @@
         "log_volume_zscore": {
           "enabled": true,
           "op": ">=",
-          "threshold": 0.034594,
-          "score": 3
+          "threshold": 0.0021,
+          "score": 2
         },
         "macd_hist": {
           "enabled": false,
@@ -400,44 +400,44 @@
       },
       "scores": {
         "rsi": 2,
-        "adx_15m": 0,
+        "adx_15m": 3,
         "twap_imbalance": 0,
         "bid_ask_imbalance": 0,
         "cvd_delta_slope": 0,
         "nofi_1m": 0,
         "buy_ratio": 0,
-        "open_interest": 3,
+        "open_interest": 0,
         "tick_count": 0,
-        "log_volume_zscore": 3,
+        "log_volume_zscore": 2,
         "macd_hist": 0
       }
     }
   },
   "entry_scoring_long": {
-    "rsi": 0,
+    "rsi": 3,
     "adx_15m": 3,
     "twap_imbalance": 0,
     "bid_ask_imbalance": 0,
     "cvd_delta_slope": 0,
     "nofi_1m": 0,
     "buy_ratio": 0,
-    "open_interest": 3,
-    "tick_count": 0,
-    "log_volume_zscore": 1,
+    "open_interest": 0,
+    "tick_count": 3,
+    "log_volume_zscore": 0,
     "macd_hist": 0
   },
   "entry_scoring_short": {
     "rsi": 2,
-    "adx_15m": 0,
+    "adx_15m": 3,
     "twap_imbalance": 0,
     "bid_ask_imbalance": 0,
     "cvd_delta_slope": 0,
     "nofi_1m": 0,
     "buy_ratio": 0,
-    "open_interest": 3,
+    "open_interest": 0,
     "tick_count": 0,
-    "log_volume_zscore": 3,
+    "log_volume_zscore": 2,
     "macd_hist": 0
   },
-  "time_exit_minutes": 105
+  "time_exit_minutes": 30
 }
