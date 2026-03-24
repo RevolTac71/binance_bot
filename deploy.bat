@@ -1,6 +1,6 @@
 @echo off
 echo ======= 1. Git Push (Local to Github) =======
-git add *.py *.txt *.sh *.md dashboard/ .gitignore requirements.txt
+git add *.py *.txt *.sh *.md settings.json dashboard/ .gitignore requirements.txt
 git commit -m "Auto-deploy update"
 git push origin main
 
