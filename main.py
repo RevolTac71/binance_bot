@@ -8,6 +8,7 @@ from config import logger, settings
 import numpy as np
 import traceback
 import gc
+import time
 
 # [V18.5.1] 데이터 부족/정적 데이터로 인한 Numpy 경고(0나누기 등) 전역 억제
 np.seterr(divide="ignore", invalid="ignore")
@@ -242,7 +243,6 @@ async def warm_up_data(symbols: list, pipeline: DataPipeline):
                 )
                 logger.info(f"[{sym}] HTF(1H/15m) 지표 웜업 완료.")
             except Exception as e:
-
                 logger.error(f"[{sym}] HTF(1H/15m) 지표 웜업 중 치명적 예외 발생: {e}")
                 logger.error(traceback.format_exc())
                 continue
@@ -504,27 +504,33 @@ async def process_closed_kline(
             qty = sizing["size"]
             side = "buy" if decision["signal"] == "LONG" else "sell"
 
-            signal_score = decision["long_score"] if decision["signal"] == "LONG" else decision["short_score"]
+            signal_score = (
+                decision["long_score"]
+                if decision["signal"] == "LONG"
+                else decision["short_score"]
+            )
             logger.info(
                 f"[Signal Queue] 🎯 {symbol} 진입 시그널 큐에 대기 등록 (방향={side.upper()}, 점수={signal_score})"
             )
 
             async with entry_signal_lock:
-                entry_signal_queue.append({
-                    "symbol": symbol,
-                    "side": side,
-                    "direction": decision["signal"],
-                    "market_price": market_price,
-                    "atr_val": atr_val,
-                    "amount": qty,
-                    "reason": reason,
-                    "tp_dist": sizing["tp_dist"],
-                    "sl_dist": sizing["sl_dist"],
-                    "market_data": decision.get("market_data"),
-                    "signal_score": signal_score,
-                    "volume_usd": float(curr_df["volume"].iloc[-1] * market_price),
-                    "kline_close_time": int(kline.get("T", time.time() * 1000))
-                })
+                entry_signal_queue.append(
+                    {
+                        "symbol": symbol,
+                        "side": side,
+                        "direction": decision["signal"],
+                        "market_price": market_price,
+                        "atr_val": atr_val,
+                        "amount": qty,
+                        "reason": reason,
+                        "tp_dist": sizing["tp_dist"],
+                        "sl_dist": sizing["sl_dist"],
+                        "market_data": decision.get("market_data"),
+                        "signal_score": signal_score,
+                        "volume_usd": float(curr_df["volume"].iloc[-1] * market_price),
+                        "kline_close_time": int(kline.get("T", time.time() * 1000)),
+                    }
+                )
 
     except Exception as e:
         logger.error(f"[{symbol}] KLINE 마감 처리 중 에러: {e}")
@@ -650,38 +656,40 @@ async def signal_processor_loop(execution: ExecutionEngine):
     global entry_signal_queue
     while True:
         await asyncio.sleep(1.5)  # 캔들 마감 시 1.5초간 시그널을 모음
-        
+
         async with entry_signal_lock:
             if not entry_signal_queue:
                 continue
-            
+
             # 큐 복사 및 초기화
             signals_to_process = entry_signal_queue[:]
             entry_signal_queue.clear()
-            
+
         if not signals_to_process:
             continue
-            
-        # 정렬: 
+
+        # 정렬:
         # 1. kline_close_time (오름차순): 물리적으로 먼저 마감된 캔들 우선
         # 2. signal_score (내림차순): 같은 시간대라면 점수가 더 높은 종목 우선
         # 3. volume_usd (내림차순): 점수까지 같다면 거래대금이 큰 종목 우선 (슬리피지 방어)
         # 4. symbol (오름차순): 위 3개가 모두 같다면 마지막 타이브레이커
         signals_to_process.sort(
             key=lambda x: (
-                x["kline_close_time"], 
-                -x["signal_score"], 
-                -x["volume_usd"], 
-                x["symbol"]
+                x["kline_close_time"],
+                -x["signal_score"],
+                -x["volume_usd"],
+                x["symbol"],
             )
         )
-        
-        logger.info(f"[Signal Processor] {len(signals_to_process)}개의 동시 시그널을 정렬하여 진입을 시도합니다.")
+
+        logger.info(
+            f"[Signal Processor] {len(signals_to_process)}개의 동시 시그널을 정렬하여 진입을 시도합니다."
+        )
         for idx, sig in enumerate(signals_to_process):
             logger.info(
-                f"  -> {idx+1}위: [{sig['symbol']}] (시간: {sig['kline_close_time']}, 점수: {sig['signal_score']}, 대금: $ {sig['volume_usd']:,.0f})"
+                f"  -> {idx + 1}위: [{sig['symbol']}] (시간: {sig['kline_close_time']}, 점수: {sig['signal_score']}, 대금: $ {sig['volume_usd']:,.0f})"
             )
-            
+
         # 순차적으로 진입 로직 수행 (포트폴리오 한도/중복진입 등은 execution 내부에서 방어됨)
         for sig in signals_to_process:
             try:
@@ -704,7 +712,9 @@ async def signal_processor_loop(execution: ExecutionEngine):
                         atr=sig["atr_val"],
                     )
             except Exception as e:
-                logger.error(f"[Signal Processor] {sig['symbol']} 체결 시도 중 내부 에러: {e}")
+                logger.error(
+                    f"[Signal Processor] {sig['symbol']} 체결 시도 중 내부 에러: {e}"
+                )
 
 
 async def chandelier_monitoring_loop(
@@ -838,11 +848,14 @@ async def target_refresh_loop(pipeline: DataPipeline, execution: ExecutionEngine
         base_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
         try:
             # 블랙리스트에 기본 종목이 있으면 제외
-            base_symbols = [s for s in base_symbols if s not in settings.BLACKLIST_SYMBOLS]
-            
+            base_symbols = [
+                s for s in base_symbols if s not in settings.BLACKLIST_SYMBOLS
+            ]
+
             alts = await pipeline.fetch_top_altcoins_by_volume(
-                limit=13 + len(settings.BLACKLIST_SYMBOLS), # 블랙리스트 대비 넉넉하게 추출
-                exclude_symbols=base_symbols + settings.BLACKLIST_SYMBOLS
+                limit=13
+                + len(settings.BLACKLIST_SYMBOLS),  # 블랙리스트 대비 넉넉하게 추출
+                exclude_symbols=base_symbols + settings.BLACKLIST_SYMBOLS,
             )
             # 최종적으로 다시 한번 블랙리스트 필터링 (fetch_top_altcoins_by_volume 내부 혹은 외부)
             alts = [s for s in alts if s not in settings.BLACKLIST_SYMBOLS][:13]
@@ -1041,9 +1054,11 @@ async def main():
         return
 
     # [V19] 텔레그램 알림이 시작 절차를 블로킹하지 않도록 비동기 태스크로 실행
-    asyncio.create_task(notifier.send_message(
-        f"🚀 [시작] 바이낸스 V18 MTF {settings.TIMEFRAME} 스캘핑 봇 웹소켓 대기열 접속 중..."
-    ))
+    asyncio.create_task(
+        notifier.send_message(
+            f"🚀 [시작] 바이낸스 V18 MTF {settings.TIMEFRAME} 스캘핑 봇 웹소켓 대기열 접속 중..."
+        )
+    )
 
     pipeline = DataPipeline()
     strategy = StrategyEngine()
@@ -1063,11 +1078,13 @@ async def main():
         if not getattr(settings, "CURRENT_TARGET_SYMBOLS", None):
             base_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
             # 블랙리스트 필터링
-            base_symbols = [s for s in base_symbols if s not in settings.BLACKLIST_SYMBOLS]
-            
+            base_symbols = [
+                s for s in base_symbols if s not in settings.BLACKLIST_SYMBOLS
+            ]
+
             alts = await pipeline.fetch_top_altcoins_by_volume(
                 limit=13 + len(settings.BLACKLIST_SYMBOLS),
-                exclude_symbols=base_symbols + settings.BLACKLIST_SYMBOLS
+                exclude_symbols=base_symbols + settings.BLACKLIST_SYMBOLS,
             )
             alts = [s for s in alts if s not in settings.BLACKLIST_SYMBOLS][:13]
             settings.CURRENT_TARGET_SYMBOLS = base_symbols + alts
@@ -1106,7 +1123,7 @@ async def main():
 
         # 텔레그램에서 넘겨받은 이벤트 사용 (혹은 새로 생성)
         shutdown_event = app.bot_data.get("shutdown_event", asyncio.Event())
-        
+
         task_state = asyncio.create_task(
             guarded(state_machine_loop(execution), "StateMachine")
         )
@@ -1124,10 +1141,10 @@ async def main():
 
         # shutdown_event가 set될 때까지 대기 (혹은 태스크들이 종료될 때까지)
         wait_shutdown = asyncio.create_task(shutdown_event.wait())
-        
+
         done, pending = await asyncio.wait(
             [task_state, task_trade, task_chandelier, wait_shutdown],
-            return_when=asyncio.FIRST_COMPLETED
+            return_when=asyncio.FIRST_COMPLETED,
         )
 
         logger.info(f"봇 종료 신호 감지됨. (활성 태스크 수: {len(done)})")
@@ -1138,8 +1155,10 @@ async def main():
         for task in [task_state, task_trade, task_chandelier, wait_shutdown]:
             if not task.done():
                 task.cancel()
-        
-        await asyncio.gather(task_state, task_trade, task_chandelier, return_exceptions=True)
+
+        await asyncio.gather(
+            task_state, task_trade, task_chandelier, return_exceptions=True
+        )
 
     except KeyboardInterrupt:
         logger.warning("CTRL+C(키보드 인터럽트)로 시스템이 정지되었습니다.")
@@ -1149,7 +1168,9 @@ async def main():
         exit_code = 0
         if "app" in locals() and app:
             exit_code = app.bot_data.get("exit_code", 0)
-            logger.info(f"텔레그램 인터랙티브 커맨더를 안전하게 종료합니다... (Exit Code: {exit_code})")
+            logger.info(
+                f"텔레그램 인터랙티브 커맨더를 안전하게 종료합니다... (Exit Code: {exit_code})"
+            )
             try:
                 if app.updater and app.updater.running:
                     await app.updater.stop()
@@ -1165,7 +1186,7 @@ async def main():
         try:
             # [V19] Telegram Notifier 세션 종료
             await notifier.close()
-            
+
             # [V18] HFT 파이프라인 세션 종료
             if "hft_pipeline" in globals() and hft_pipeline:
                 await hft_pipeline.close_session()
