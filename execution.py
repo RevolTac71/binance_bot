@@ -187,6 +187,24 @@ class ExecutionEngine:
                             else int(time.time() * 1000)
                         )
 
+                        # [V18.6] PortfolioState(샹들리에 추적) 복구 추가
+                        if self.portfolio:
+                            # market_data에서 진입 시점 ATR 복구 시도 (없으면 현재가 기준 0.5% fallback)
+                            recovered_atr = 0.0
+                            if log and log.market_data:
+                                recovered_atr = float(log.market_data.get("atr_14", 0.0))
+                            
+                            if recovered_atr <= 0:
+                                recovered_atr = (p.get("entryPrice", 0.0) or float(p.get("markPrice", 0.0))) * 0.005
+                                logger.warning(f"⚠️ [{symbol}] 복구용 ATR이 없어 기본값(0.5%)으로 샹들리에를 설정합니다.")
+
+                            self.portfolio.register_position(
+                                symbol=symbol,
+                                direction="LONG" if p.get("side") == "long" else "SHORT",
+                                entry_price=float(p.get("entryPrice", 0.0)),
+                                atr=recovered_atr
+                            )
+
                         self.active_positions[symbol] = {
                             "signal": "LONG" if p.get("side") == "long" else "SHORT",
                             "amount": contracts,
@@ -194,7 +212,7 @@ class ExecutionEngine:
                             "last_summed_ts": last_ts,
                             "opened_at_ms": self.exchange.milliseconds(),
                             "recovered_at_ms": self.exchange.milliseconds(),
-                            "is_partial_tp_done": False,  # 필요시 DB 컬럼 추가 가능하나 현재는 봇 판단에 맡김
+                            "is_partial_tp_done": False,
                             "tp_price": log.tp_price if log else 0.0,
                             "sl_price": log.sl_price if log else 0.0,
                         }
@@ -384,6 +402,21 @@ class ExecutionEngine:
                             f"⚠️ [DRY RUN 복구] MAX_TRADES({max_trades}) 한도 도달 — 나머지 복구 생략."
                         )
                         break
+
+                    # [V18.6] PortfolioState 가상 복구 추가
+                    if self.portfolio:
+                        recovered_atr = 0.0
+                        if log.market_data:
+                            recovered_atr = float(log.market_data.get("atr_14", 0.0))
+                        if recovered_atr <= 0:
+                            recovered_atr = log.execution_price * 0.005
+
+                        self.portfolio.register_position(
+                            symbol=log.symbol,
+                            direction=log.direction,
+                            entry_price=log.execution_price,
+                            atr=recovered_atr
+                        )
 
                     seen_symbols.add(log.symbol)
                     self.active_positions[log.symbol] = {
@@ -1105,6 +1138,17 @@ class ExecutionEngine:
                         }
                         entry_price = float(p.get("entryPrice", 0))
                         side = p.get("side", "long").upper()
+
+                        # [V18.6] 수동 진입 시에도 샹들리에 추적 시작
+                        if self.portfolio:
+                            # 수동 진입은 당시 ATR을 모르므로 현재가 0.5%로 가정한 초기 손절선 설정
+                            # (이후 chandelier_monitoring_loop에서 실시간 ATR로 보정됨)
+                            self.portfolio.register_position(
+                                symbol=sym,
+                                direction=side,
+                                entry_price=entry_price,
+                                atr=entry_price * 0.005
+                            )
 
                         logger.info(
                             f"[{sym}] 수동/외부 진입 감지. 봇 메모리에 편입합니다."
