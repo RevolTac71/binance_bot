@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+import os
+import signal
 from collections import deque
 from datetime import datetime, timezone, timedelta
 
@@ -56,15 +58,14 @@ class HFTDataPipeline:
 
         # [V18] 동시성 제어 락 (주기적인 Snapshot 시 스레드 경합 방지)
         self.buffer_locks = {}
-        # [V18] DB Insert 실패 시 재적재를 위한 메모리 큐
-        self.retry_queue = []
+        # [V19] Batch DB Insert Buffer
+        self.db_insert_buffer = []
 
-        # V18: OI/펀딩비 5분 캐시 (Rate Limit 회피)
+        # V18: OI/펀딩비 캐시
         self._derivatives_cache = {}  # {sym: (oi, funding)}
-        self._derivatives_last_fetch = 0  # UTC timestamp
-        self._nofi_cache = {}  # {sym: last_nofi}
+        self._derivatives_last_fetch = 0  
+        self._nofi_cache = {}  
 
-        # Initialize deques for each symbol
         for sym in self.symbols:
             self.orderbook_buffer[sym] = deque(maxlen=MAX_DEQUE_SIZE)
             self.trade_buffer[sym] = deque(maxlen=MAX_DEQUE_SIZE)
@@ -90,37 +91,28 @@ class HFTDataPipeline:
                     url, ping_interval=60, ping_timeout=60
                 ) as ws:
                     logger.info(f"[HFT] Connected to WS Successfully: {url}")
-                    attempt = 0  # 연결 성공 시 백오프 초기화
+                    attempt = 0  
                     async for message in ws:
                         await handler(json.loads(message))
             except websockets.exceptions.ConnectionClosed as e:
                 attempt += 1
                 wait_time = min(2**attempt, 60)
-                logger.warning(
-                    f"[HFT] WS Connection Closed: Code {e.code}, Reason {e.reason}. Reconnecting in {wait_time}s..."
-                )
+                logger.warning(f"[HFT] WS Closed Code {e.code}. Reconnecting in {wait_time}s...")
                 await asyncio.sleep(wait_time)
-            except (asyncio.TimeoutError, TimeoutError) as e:
+            except (asyncio.TimeoutError, TimeoutError):
                 attempt += 1
                 wait_time = min(2**attempt, 60)
-                logger.warning(
-                    f"[HFT] WS Timeout Error: 서버 응답 지연. Reconnecting in {wait_time}s..."
-                )
+                logger.warning(f"[HFT] WS Timeout. Reconnecting in {wait_time}s...")
                 await asyncio.sleep(wait_time)
             except Exception as e:
                 attempt += 1
-                wait_time = min(2**attempt, 60)  # Max 60초 대기
-                logger.error(
-                    f"[HFT] WS Unexpected Error: {type(e).__name__} - {e}. Reconnecting in {wait_time}s..."
-                )
+                wait_time = min(2**attempt, 60)
+                logger.error(f"[HFT] WS Error: {type(e).__name__} - {e}. Reconnecting in {wait_time}s...")
                 await asyncio.sleep(wait_time)
 
-    # ── 2. 인메모리 버퍼 적재 핸들러 (DB Insert 아님) ──
+    # ── 2. 인메모리 버퍼 적재 핸들러 ──
     async def handle_bookticker(self, msg: dict):
-        """Best Bid/Ask 스냅샷 핸들링 (@bookTicker)"""
-        if "s" not in msg:
-            return
-
+        if "s" not in msg: return
         sym = msg["s"].lower()
         if sym in self.orderbook_buffer:
             record = {
@@ -134,148 +126,155 @@ class HFTDataPipeline:
                 self.orderbook_buffer[sym].append(record)
 
     async def handle_aggtrade(self, msg: dict):
-        """틱 단위 체결 내역 핸들링 (@aggTrade)"""
-        if "s" not in msg:
-            return
-
+        if "s" not in msg: return
         sym = msg["s"].lower()
         if sym in self.trade_buffer:
             record = {
                 "timestamp": msg.get("E", 0),
                 "price": float(msg["p"]),
                 "qty": float(msg["q"]),
-                "is_buyer_maker": msg["m"],  # True = Sell Trade
+                "is_buyer_maker": msg["m"],
             }
             async with self.buffer_locks[sym]:
                 self.trade_buffer[sym].append(record)
 
+    async def handle_kline(self, msg: dict):
+        """[V19] 1분봉 캔들 마감 이벤트 핸들링 (@kline_1m) - Race Condition 방어"""
+        kdata = msg.get("k")
+        if not kdata or not kdata.get("x"):  # 마감 봉인 경우만
+            return
+
+        sym = msg["s"].lower()
+        k_start = kdata["t"]
+        k_end = kdata["T"]
+
+        open_p = float(kdata["o"])
+        high_p = float(kdata["h"])
+        low_p = float(kdata["l"])
+        close_p = float(kdata["c"])
+        volume = float(kdata["v"])
+
+        snapshot_time = datetime.fromtimestamp(k_start / 1000)
+
+        # 자체 파생 데이터 (OI 등)
+        oi, funding = self.fetch_derivatives_data_cached(sym)
+
+        ob_ticks = []
+        tr_ticks = []
+
+        # 타임스탬프 슬라이싱 처리
+        if sym in self.buffer_locks:
+            async with self.buffer_locks[sym]:
+                # --- 체결 틱 ---
+                while self.trade_buffer[sym] and self.trade_buffer[sym][0]["timestamp"] < k_start:
+                    self.trade_buffer[sym].popleft()
+                for t in self.trade_buffer[sym]:
+                    if t["timestamp"] <= k_end:
+                        tr_ticks.append(t)
+                    else: break
+                for _ in range(len(tr_ticks)):
+                    self.trade_buffer[sym].popleft()
+
+                # --- 호가 틱 ---
+                while self.orderbook_buffer[sym] and self.orderbook_buffer[sym][0]["timestamp"] < k_start:
+                    self.orderbook_buffer[sym].popleft()
+                for o in self.orderbook_buffer[sym]:
+                    if o["timestamp"] <= k_end:
+                        ob_ticks.append(o)
+                    else: break
+                for _ in range(len(ob_ticks)):
+                    self.orderbook_buffer[sym].popleft()
+
+        # 스레드로 미시구조 연산 밀어내기
+        asyncio.create_task(
+            self._process_1m_kline_async(
+                sym, snapshot_time, open_p, high_p, low_p, close_p, volume,
+                oi, funding, ob_ticks, tr_ticks
+            )
+        )
+
+    # Helper 메서드들
     def get_recent_tick_count(self, symbol: str) -> int:
-        """현재 버퍼에 쌓인 틱 갯수 반환 (main.py 스냅샷용)"""
         sym = symbol.lower().replace("/", "").replace(":usdt", "")
         if sym in self.trade_buffer:
             return len(self.trade_buffer[sym])
         return 0
 
     def get_recent_nofi(self, symbol: str) -> float:
-        """최근 계산된 NOFI(Normalized OFI) 값 반환 (main.py 스냅샷용)"""
         sym = symbol.lower().replace("/", "").replace(":usdt", "")
         return self._nofi_cache.get(sym, 0.0)
 
-    # ── 2.5 V18: OI/펀딩비 5분 캐시 조회 ──
+    # ── 3. V18: OI/펀딩비 5분 캐시 로직 ──
     async def _fetch_single_derivatives(self, sym: str) -> tuple:
-        """단일 종목 OI·펀딩비 REST 조회"""
         raw_sym = sym.upper()
-        oi = 0.0
-        funding = 0.0
-
+        oi, funding = 0.0, 0.0
         try:
-            # 미결제약정 (OI)
             async with self.session.get(
-                f"{REST_BASE_URL}/fapi/v1/openInterest",
-                params={"symbol": raw_sym},
-                timeout=aiohttp.ClientTimeout(total=5),
+                f"{REST_BASE_URL}/fapi/v1/openInterest", params={"symbol": raw_sym},
+                timeout=aiohttp.ClientTimeout(total=5)
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     oi = float(data.get("openInterest", 0.0))
-        except Exception as e:
-            logger.warning(f"[HFT] {raw_sym} OI 조회 실패: {type(e).__name__} - {e}")
-
+        except Exception:
+            pass
         try:
-            # 펀딩비
             async with self.session.get(
-                f"{REST_BASE_URL}/fapi/v1/premiumIndex",
-                params={"symbol": raw_sym},
-                timeout=aiohttp.ClientTimeout(total=5),
+                f"{REST_BASE_URL}/fapi/v1/premiumIndex", params={"symbol": raw_sym},
+                timeout=aiohttp.ClientTimeout(total=5)
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     funding = float(data.get("lastFundingRate", 0.0))
-                else:
-                    logger.warning(
-                        f"[HFT] {raw_sym} 펀딩비 조회 HTTP API 에러: Status {resp.status}"
-                    )
-        except Exception as e:
-            logger.warning(
-                f"[HFT] {raw_sym} 펀딩비 조회 실패: {type(e).__name__} - {e}"
-            )
-
+        except Exception:
+            pass
         return oi, funding
 
-    async def _refresh_derivatives_cache(self):
-        """5분마다 종목별 OI·펀딩비를 직렬 조회 (Rate Limit 회피)"""
-        now = datetime.utcnow().timestamp()
-        if now - self._derivatives_last_fetch < DERIVATIVES_FETCH_INTERVAL:
-            return  # 아직 갱신 주기 도달 안 함
-
-        await self.init_session()
-        logger.info("[HFT] OI/펀딩비 캐시 갱신 시작")
-
-        for sym in self.symbols:
-            try:
+    async def refresh_derivatives_loop(self):
+        while True:
+            await self.init_session()
+            for sym in self.symbols:
                 oi, funding = await self._fetch_single_derivatives(sym)
                 self._derivatives_cache[sym] = (oi, funding)
-            except Exception as e:
-                logger.warning(f"[HFT] {sym} OI/Funding 캐시 갱신 실패: {e}")
-            # 종목당 300ms 간격으로 Rate Limit 방어
-            await asyncio.sleep(0.3)
-
-        self._derivatives_last_fetch = now
-        logger.info(
-            f"[HFT] OI/펀딩비 캐시 갱신 완료 ({len(self._derivatives_cache)}종목)"
-        )
+                await asyncio.sleep(0.3)
+            logger.info(f"[HFT] OI/펀딩비 캐시 갱신 완료 ({len(self._derivatives_cache)}종목)")
+            await asyncio.sleep(DERIVATIVES_FETCH_INTERVAL)
 
     def fetch_derivatives_data_cached(self, sym: str) -> tuple:
-        """캐시된 OI/펀딩비 반환 (없으면 0.0)"""
         return self._derivatives_cache.get(sym, (0.0, 0.0))
 
-    # ── 3. 1분 단위 데이터 백업 & OFI 계산 (스레드 분리) ──
-    def _process_1m_snapshot_sync(
-        self,
-        sym: str,
-        timestamp_1m: datetime,
-        oi: float,
-        funding: float,
-        ob_ticks: list,
-        tr_ticks: list,
+    # ── 4. 미시구조 피처 동기식 계산 ──
+    async def _process_1m_kline_async(self, sym, snapshot_time, open_p, high_p, low_p, close_p, volume, oi, funding, ob_ticks, tr_ticks):
+        result = await asyncio.to_thread(
+            self._compute_features_sync,
+            sym, snapshot_time, open_p, high_p, low_p, close_p, volume, oi, funding, ob_ticks, tr_ticks
+        )
+        if result:
+            self.db_insert_buffer.append(result)
+
+    def _compute_features_sync(
+        self, sym, timestamp_1m, open_p, high_p, low_p, close_p, volume, oi, funding, ob_ticks, tr_ticks
     ) -> dict | None:
-        """CPU Bound 연산: OFI, 체결 강도, 스프레드, 로그 Z-Score 계산"""
-        if not tr_ticks:
-            return None
+        buy_qty = 0.0
+        sell_qty = 0.0
+        if tr_ticks:
+            df_tr = pd.DataFrame(tr_ticks)
+            buy_qty = df_tr[df_tr["is_buyer_maker"] == False]["qty"].sum()
+            sell_qty = df_tr[df_tr["is_buyer_maker"] == True]["qty"].sum()
 
-        # DataFrame 변환
-        df_tr = pd.DataFrame(tr_ticks)
-
-        # 1분봉 OHLCV 기초 생성
-        open_p = df_tr["price"].iloc[0]
-        high_p = df_tr["price"].max()
-        low_p = df_tr["price"].min()
-        close_p = df_tr["price"].iloc[-1]
-        volume = df_tr["qty"].sum()
-
-        # OFI (Order Flow Imbalance) 계산
-        buy_qty = df_tr[df_tr["is_buyer_maker"] == False]["qty"].sum()
-        sell_qty = df_tr[df_tr["is_buyer_maker"] == True]["qty"].sum()
         ofi = buy_qty - sell_qty
-
-        # NOFI (Normalized OFI)
         nofi = ofi / volume if volume > 0 else 0.0
-
-        # V18: 매수 체결 비율 (Buy Ratio) — 체결 강도 지표
         buy_ratio = float(buy_qty / volume) if volume > 0 else 0.5
 
-        # V18: 평균 호가 스프레드 — 유동성 지표
         spread_avg = 0.0
         if ob_ticks:
             spreads = [
-                t["ask_price"] - t["bid_price"]
-                for t in ob_ticks
+                t["ask_price"] - t["bid_price"] for t in ob_ticks
                 if t.get("ask_price", 0) > 0 and t.get("bid_price", 0) > 0
             ]
             if spreads:
                 spread_avg = float(np.mean(spreads))
 
-        # V18: 로그 Z-Score 거래량 — 극단 스파이크 통계 판별
         log_vol_zscore = 0.0
         vol_hist = self.log_volume_history.get(sym, deque(maxlen=100))
         log_vol = float(np.log1p(volume))
@@ -284,12 +283,10 @@ class HFTDataPipeline:
 
         if len(vol_hist) >= 20:
             arr = np.array(vol_hist)
-            mean_val = arr.mean()
             std_val = arr.std()
             if std_val > 0:
-                log_vol_zscore = float((log_vol - mean_val) / std_val)
+                log_vol_zscore = float((log_vol - arr.mean()) / std_val)
 
-        # features JSONB 구성
         features_dict = HFTFeatures1m(
             ofi_1m=float(ofi),
             nofi_1m=float(nofi),
@@ -301,7 +298,6 @@ class HFTDataPipeline:
             log_volume_zscore=log_vol_zscore,
         ).model_dump()
 
-        # [V18.6] main.py 스냅샷 연동을 위한 NOFI 캐시 업데이트
         self._nofi_cache[sym] = float(nofi)
 
         return {
@@ -315,93 +311,58 @@ class HFTDataPipeline:
             "features": features_dict,
         }
 
-    async def aggregator_loop(self):
-        """매 정각 1분(00초)마다 스냅샷을 찍고 DB에 1 Row Insert"""
-        # 한국 시간 KST (UTC+9)
-        kst = timezone(timedelta(hours=9))
-
+    # ── 5. DB Bulk Insert & Fallback ──
+    async def batch_insert_loop(self):
+        """[V19] 5분 주기로 db_insert_buffer Bulk Insert 워커"""
         while True:
-            now = datetime.now(tz=kst)
-            # 정확히 다음 1분 정각까지 대기
-            sleep_sec = 60 - now.second - (now.microsecond / 1_000_000)
-            await asyncio.sleep(sleep_sec)
+            await asyncio.sleep(300)
+            await self.flush_db_buffer()
 
-            # DB 저장을 위해 Timezone 인식 정보를 제거 (Naive datetime으로 변환)
-            snapshot_time = datetime.now(tz=kst).replace(
-                second=0, microsecond=0, tzinfo=None
-            )
+    async def flush_db_buffer(self):
+        if not self.db_insert_buffer:
+            return
 
-            logger.info(f"[HFT] Creating 1-Min Snapshot at {snapshot_time}")
+        insert_batch = self.db_insert_buffer[:]
+        self.db_insert_buffer.clear()
 
-            # V18: 5분 주기 OI/펀딩비 캐시 갱신
-            await self._refresh_derivatives_cache()
+        try:
+            async with AsyncSessionLocal() as session:
+                for res in insert_batch:
+                    new_row = MarketData_1m(
+                        timestamp=res["timestamp"],
+                        symbol=res["symbol"],
+                        open=res["open"],
+                        high=res["high"],
+                        low=res["low"],
+                        close=res["close"],
+                        volume=res["volume"],
+                        features=clean_json_data(res["features"]),
+                    )
+                    session.add(new_row)
+                await session.commit()
+                logger.info(f"[HFT] Successfully bulk-inserted {len(insert_batch)} 1M snapshots.")
+        except IntegrityError:
+            logger.warning("[HFT] Bulk Insert 중 중복 데이터 발생 건너뜀.")
+        except Exception as e:
+            logger.error(f"[HFT] Bulk Insert Failed: {e}. Writing to fallback JSONL.")
+            self._write_fallback_jsonl(insert_batch)
 
-            # 모든 심볼 연산 완료 대기 및 큐 스왑
-            snapshot_tasks = []
-            for sym in self.symbols:
-                # V18: 캐시된 OI/펀딩비 사용
-                oi, funding = self.fetch_derivatives_data_cached(sym)
+    def _write_fallback_jsonl(self, batch: list):
+        if not batch: return
+        filename = f"fallback_1m_{int(datetime.now().timestamp())}.jsonl"
+        try:
+            with open(filename, "a", encoding="utf-8") as f:
+                for item in batch:
+                    item_copy = item.copy()
+                    if isinstance(item_copy["timestamp"], datetime):
+                        item_copy["timestamp"] = item_copy["timestamp"].isoformat()
+                    f.write(json.dumps(item_copy) + "\n")
+            logger.info(f"[HFT Fallback] {len(batch)} records backup saved to {filename}.")
+        except Exception as e:
+            logger.error(f"[HFT Fallback] Failed to write local backup: {e}")
 
-                # [V18] O(1) Queue Swap with AsyncLock
-                async with self.buffer_locks[sym]:
-                    ob_ticks = list(self.orderbook_buffer[sym])
-                    tr_ticks = list(self.trade_buffer[sym])
-                    self.orderbook_buffer[sym].clear()
-                    self.trade_buffer[sym].clear()
-
-                task = asyncio.to_thread(
-                    self._process_1m_snapshot_sync,
-                    sym,
-                    snapshot_time,
-                    oi,
-                    funding,
-                    ob_ticks,
-                    tr_ticks,
-                )
-                snapshot_tasks.append(task)
-
-            results = await asyncio.gather(*snapshot_tasks)
-            valid_results = [r for r in results if r is not None]
-
-            # [V18] DB Bulk Insert 및 Retry Fallback
-            insert_batch = self.retry_queue + valid_results
-
-            if insert_batch:
-                async with AsyncSessionLocal() as session:
-                    for res in insert_batch:
-                        new_row = MarketData_1m(
-                            timestamp=res["timestamp"],
-                            symbol=res["symbol"],
-                            open=res["open"],
-                            high=res["high"],
-                            low=res["low"],
-                            close=res["close"],
-                            volume=res["volume"],
-                            features=clean_json_data(res["features"]),
-                        )
-                        session.add(new_row)
-                    try:
-                        await session.commit()
-                        logger.info(
-                            f"[HFT] Successfully inserted {len(insert_batch)} 1M snapshots."
-                        )
-                        self.retry_queue.clear()
-                    except IntegrityError:
-                        await session.rollback()
-                        logger.warning(
-                            "[HFT] 중복된 1분 스냅샷 건너뜀 (IntegrityError)."
-                        )
-                        self.retry_queue.clear()
-                    except Exception as e:
-                        await session.rollback()
-                        logger.error(
-                            f"[HFT] 1-Min Insert Failed: {e}. Clearing retry queue to avoid infinite DB lock."
-                        )
-                        self.retry_queue.clear()
-
-    # ── 4. DB 용량 관리 (Retention Policy) ──
+    # ── 6. Retention & Bootstrap ──
     async def retention_policy_loop(self):
-        """매일 1회 실행하여 RETENTION_DAYS 초과 데이터를 삭제하는 GC 워커"""
         while True:
             cutoff = datetime.utcnow() - timedelta(days=RETENTION_DAYS)
             try:
@@ -409,46 +370,52 @@ class HFTDataPipeline:
                     stmt = delete(MarketData_1m).where(MarketData_1m.timestamp < cutoff)
                     result = await session.execute(stmt)
                     await session.commit()
-                    deleted_count = result.rowcount
-                    logger.info(
-                        f"[HFT GC] Pruned {deleted_count} old records (Before {cutoff})"
-                    )
+                    logger.info(f"[HFT GC] Pruned {result.rowcount} old records (Before {cutoff})")
             except Exception as e:
                 logger.error(f"[HFT GC] Pruning Error: {e}")
-
-            # 24시간 대기
             await asyncio.sleep(86400)
 
     async def start(self):
         await self.init_session()
 
-        # 1. 묶음 스트림 생성 (ex: btcusdt@bookTicker/btcusdt@aggTrade)
         streams = []
         for sym in self.symbols:
             streams.append(f"{sym}@bookTicker")
             streams.append(f"{sym}@aggTrade")
+            streams.append(f"{sym}@kline_1m")
 
         stream_param = "/".join(streams)
 
-        # 바이낸스는 한번에 여러 스트림을 구독할 수 있습니다
         async def combined_handler(msg):
-            # Combined stream wrapper format: {"stream": "...", "data": {...}}
             if "data" in msg and "e" in msg["data"]:
-                evt_type = msg["data"]["e"]
-                if evt_type == "bookTicker":
+                evt = msg["data"]["e"]
+                if evt == "bookTicker":
                     await self.handle_bookticker(msg["data"])
-                elif evt_type == "aggTrade":
+                elif evt == "aggTrade":
                     await self.handle_aggtrade(msg["data"])
+                elif evt == "kline":
+                    await self.handle_kline(msg["data"])
 
-        # 2. 백그라운드 태스크 구동
+        # [V19] Graceful Shutdown: 시그널 발생 시 백업 동작 (동기적 처리로 루프 문제 차단)
+        def handle_exit(signum, frame):
+            logger.warning(f"⚠️ [HFT Graceful Shutdown] Exit signal({signum}) received! Force-dumping {len(self.db_insert_buffer)} records to JSONL...")
+            if self.db_insert_buffer:
+                self._write_fallback_jsonl(self.db_insert_buffer)
+                self.db_insert_buffer.clear()
+            os._exit(0)
+
+        try:
+            signal.signal(signal.SIGINT, handle_exit)
+            signal.signal(signal.SIGTERM, handle_exit)
+        except Exception as e:
+            logger.warning(f"[HFT] Could not bind signal handlers (normal on some Windows env): {e}")
+
         tasks = [
-            asyncio.create_task(
-                self.connect_websocket(
-                    f"stream?streams={stream_param}", combined_handler
-                )
-            ),
-            asyncio.create_task(self.aggregator_loop()),
+            asyncio.create_task(self.connect_websocket(f"stream?streams={stream_param}", combined_handler)),
+            asyncio.create_task(self.refresh_derivatives_loop()),
+            asyncio.create_task(self.batch_insert_loop()),
             asyncio.create_task(self.retention_policy_loop()),
         ]
 
         await asyncio.gather(*tasks)
+
