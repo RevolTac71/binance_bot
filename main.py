@@ -98,8 +98,10 @@ async def warm_up_differential_data(new_symbols: set, pipeline: DataPipeline):
     global df_map, htf_df_1h, htf_df_15m
     logger.info(f"🆕 신규 편입 종목 웜업 시작: {new_symbols}")
 
-    # [V18] 1500 -> 1000으로 단축 (RAM 절감)
-    since_ts = get_today_0000_utc_timestamp() - (1000 * 60 * 1000)
+    # [V18] TIMEFRAME 동적 파싱을 통한 최소 1000봉 확보
+    tf_str = getattr(settings, "TIMEFRAME", "3m")
+    tf_min = int(tf_str[:-1]) if tf_str.endswith("m") else (int(tf_str[:-1]) * 60 if tf_str.endswith("h") else 3)
+    since_ts = get_today_0000_utc_timestamp() - (tf_min * 1000 * 60 * 1000)
 
     tasks_3m = [
         pipeline.fetch_ohlcv_since(sym, timeframe=settings.TIMEFRAME, since=since_ts)
@@ -175,9 +177,10 @@ async def warm_up_data(symbols: list, pipeline: DataPipeline):
     """
     global df_map, htf_df_1h, htf_df_15m
 
-    since_ts = get_today_0000_utc_timestamp() - (
-        1500 * 60 * 1000
-    )  # ATR200 등 장기 지표 계산을 위해 최소 과거 500봉(1500분) 이상 여유있게 가져옴
+    # [V18] TIMEFRAME 동적 파싱을 통한 최소 1000봉 확보
+    tf_str = getattr(settings, "TIMEFRAME", "3m")
+    tf_min = int(tf_str[:-1]) if tf_str.endswith("m") else (int(tf_str[:-1]) * 60 if tf_str.endswith("h") else 3)
+    since_ts = get_today_0000_utc_timestamp() - (tf_min * 1000 * 60 * 1000)
 
     logger.info(
         f"[WarmUp] TIMEFRAME='{settings.TIMEFRAME}', HTF_1H='{settings.HTF_TIMEFRAME_1H}', HTF_15M='{settings.HTF_TIMEFRAME_15M}'"
