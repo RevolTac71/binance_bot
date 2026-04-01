@@ -258,6 +258,7 @@ async def process_closed_kline(
     strategy: StrategyEngine,
     risk: RiskManager,
     execution: ExecutionEngine,
+    interval: str = "3m",
 ):
     """
     웹소켓으로 수신된 '마감된(x: True)' 캔들을 기존 df에 병합하고 판단을 내립니다.
@@ -466,6 +467,7 @@ async def process_closed_kline(
             bid_ask_imbalance=twap_imbalance,
             all_htf_15m=htf_df_15m,
             hft_features=hft_feats,
+            interval=interval,
         )
 
         # 3. [V18] 스코어 및 확장 피처를 MarketSnapshot에 기록 (DB 적재용)
@@ -933,9 +935,14 @@ async def websocket_loop(
             }
             binance_to_ccxt = {v: k for k, v in ccxt_to_binance.items()}
 
-            # 바이낸스 Streams 생성
-            tf = getattr(settings, "TIMEFRAME", "3m")
-            streams = [f"{v}@kline_{tf}" for v in ccxt_to_binance.values()]
+            # [V19.5 Dual-TF] 롱/숏 타임프레임 동적 구독 (L/S 개별 주기 지원)
+            l_tf = getattr(settings, "L_TIMEFRAME", "15m")
+            s_tf = getattr(settings, "S_TIMEFRAME", "3m")
+            unique_tfs = list(set([l_tf, s_tf]))
+            streams = []
+            for tf_item in unique_tfs:
+                streams.extend([f"{v}@kline_{tf_item}" for v in ccxt_to_binance.values()])
+
             agg_streams = [f"{v}@aggTrade" for v in ccxt_to_binance.values()]
             streams.extend(agg_streams)
 
@@ -995,6 +1002,7 @@ async def websocket_loop(
                                                 strategy,
                                                 risk,
                                                 execution,
+                                                interval=kline["i"],
                                             )
                                         )
 

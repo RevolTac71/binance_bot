@@ -393,6 +393,7 @@ class StrategyEngine:
         symbol: str,
         df: pd.DataFrame,
         portfolio: PortfolioState,
+        interval: str = "3m",
         df_1h: Optional[pd.DataFrame] = None,
         df_15m: Optional[pd.DataFrame] = None,
         cvd_trend: Optional[str] = None,
@@ -409,6 +410,13 @@ class StrategyEngine:
             settings.refresh_runtime_scoring_settings()
         except Exception as refresh_err:
             logger.debug(f"[{symbol}] 설정 핫리로드 스킵: {refresh_err}")
+
+        l_tf = getattr(settings, "L_TIMEFRAME", "15m")
+        s_tf = getattr(settings, "S_TIMEFRAME", "3m")
+
+        # [V19.5 Dual-TF] 현재 캔들의 주기에 따라 분석 방향 결정
+        analyze_long = (interval == l_tf)
+        analyze_short = (interval == s_tf)
 
         # ── 1. 기초 데이터 검증 및 연산 ────────────────────────────────────
         if len(df) < 250:
@@ -555,7 +563,7 @@ class StrategyEngine:
         reason = ""
 
         # 롱 진입 검증
-        if raw_signal == 1 and long_score >= min_score_long:
+        if analyze_long and raw_signal == 1 and long_score >= min_score_long:
             # [V18.4] MACD 하드 필터 체크
             if settings.MACD_FILTER_ENABLED:
                 macd_p = percentiles.get("macd_hist_pctl", 50.0)
@@ -566,7 +574,7 @@ class StrategyEngine:
                     )
 
         # 숏 진입 검증
-        if raw_signal == -1 and short_score >= min_score_short:
+        if analyze_short and raw_signal == -1 and short_score >= min_score_short:
             # [V18.4] MACD 하드 필터 체크
             if settings.MACD_FILTER_ENABLED:
                 macd_p = percentiles.get("macd_hist_pctl", 50.0)
@@ -577,10 +585,10 @@ class StrategyEngine:
                     )
 
         # 필터 통과 후 최종 시그널 결정
-        if raw_signal == 1 and long_score >= min_score_long:
+        if analyze_long and raw_signal == 1 and long_score >= min_score_long:
             signal_type = "LONG"
             reason = f"[V18 SCORE LONG] {score_detail} (≥{min_score_long}, Type={entry_type})"
-        elif raw_signal == -1 and short_score >= min_score_short:
+        elif analyze_short and raw_signal == -1 and short_score >= min_score_short:
             signal_type = "SHORT"
             reason = f"[V18 SCORE SHORT] {score_detail} (≥{min_score_short}, Type={entry_type})"
 
