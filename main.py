@@ -951,7 +951,7 @@ async def websocket_loop(
             ws_reconnect_flag = False
 
             logger.info(
-                f"⚡ 무지연 WebSocket 스트림({tf} {len(target_symbols)}종목) 접속 시도 중..."
+                f"⚡ 무지연 WebSocket 스트림(L={l_tf}/S={s_tf}, {len(target_symbols)}종목) 접속 시도 중..."
             )
             async with aiohttp.ClientSession() as session:
                 # Binance 푸시핑에 응답하기 위한 heartbeat
