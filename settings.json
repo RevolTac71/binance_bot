@@ -35,7 +35,7 @@
   "short_tp_pct": 0.03,
   "sl_mult": 1.7000000000000002,
   "strategy_version": "V18",
-  "timeframe": "15m",
+  "timeframe": "1h",
   "tp_mult": 4.6,
   "min_score_long": 3,
   "min_score_short": 2,

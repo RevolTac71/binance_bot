@@ -245,63 +245,93 @@ async def process_closed_kline(
     웹소켓으로 수신된 '마감된(x: True)' 캔들을 기존 df에 병합하고 판단을 내립니다.
     V18 HTF 데이터(df_1h, df_15m)와 PortfolioState를 strategy에 함께 전달합니다.
     """
-    if symbol not in df_map:
-        return
-
-    # 캔들 마감 시, 해당 종목에 대기 중인 진입 주문이 있다면 경과 봉 수를 1 증가시킴
-    if symbol in execution.pending_entries:
-        execution.pending_entries[symbol]["bars_elapsed"] = execution.pending_entries[symbol].get("bars_elapsed", 0) + 1
-
-    # [V18.2] 데이터 업데이트는 포지션 유무와 상관없이 지속 (지표 연속성 확보)
-    # 진입 체크만 하단에서 필터링합니다.
-
+    target_tf = getattr(settings, "TIMEFRAME", "1h")
+    htf_1h = getattr(settings, "HTF_TIMEFRAME_1H", "1h")
+    htf_15m = getattr(settings, "HTF_TIMEFRAME_15M", "15m")
+ 
     try:
         new_ts = int(kline["t"])
         new_dt = pd.to_datetime(new_ts, unit="ms") + pd.Timedelta(
             hours=9
         )  # UTC → KST 통일
-
+ 
         # 새 캔들 row
         new_row = pd.DataFrame(
             [
                 {
-                    "datetime": new_dt,
                     "open": float(kline["o"]),
                     "high": float(kline["h"]),
                     "low": float(kline["l"]),
                     "close": float(kline["c"]),
                     "volume": float(kline["v"]),
                 }
-            ]
+            ],
+            index=[new_dt]
         )
-        # [V18] float32 타겟팅: LossySetitemError(float64->float32) 방지
         new_row = new_row.astype(
             {col: "float32" for col in ["open", "high", "low", "close", "volume"]}
         )
-        new_row.set_index("datetime", inplace=True)
-
-        df = df_map[symbol]
-
-        # 캔들 병합 (웹소켓 중복 수신 방어)
-        if new_dt in df.index:
+ 
+        # 1. 타임프레임별 라우팅 분기 처리
+        if interval == target_tf:
+            if symbol not in df_map:
+                return
+            
+            # 캔들 마감 시, 해당 종목에 대기 중인 진입 주문이 있다면 경과 봉 수를 1 증가시킴 (메인 봉 마감일 때만 경과함)
+            if symbol in execution.pending_entries:
+                execution.pending_entries[symbol]["bars_elapsed"] = execution.pending_entries[symbol].get("bars_elapsed", 0) + 1
+ 
+            df = df_map[symbol]
             df.loc[new_dt] = new_row.iloc[0]
+            df = df.astype(
+                {col: "float32" for col in df.select_dtypes(include=["float64"]).columns}
+            ).tail(1000)
+            df_map[symbol] = df
+            gc.collect()
+ 
+        elif interval == htf_1h:
+            if symbol not in htf_df_1h:
+                return
+            df = htf_df_1h[symbol]
+            df.loc[new_dt] = new_row.iloc[0]
+            df = df.astype(
+                {col: "float32" for col in df.select_dtypes(include=["float64"]).columns}
+            ).tail(1000)
+            htf_df_1h[symbol] = df
+            
+            # 상위 지표 갱신
+            if htf_df_1h.get(symbol) is not None and htf_df_15m.get(symbol) is not None:
+                htf_df_1h[symbol], htf_df_15m[symbol] = pipeline.calculate_htf_indicators(
+                    htf_df_1h[symbol], htf_df_15m[symbol]
+                )
+            return  # 상위 캔들 갱신은 진입 검사를 생략하고 즉시 종료
+ 
+        elif interval == htf_15m:
+            if symbol not in htf_df_15m:
+                return
+            df = htf_df_15m[symbol]
+            df.loc[new_dt] = new_row.iloc[0]
+            df = df.astype(
+                {col: "float32" for col in df.select_dtypes(include=["float64"]).columns}
+            ).tail(1000)
+            htf_df_15m[symbol] = df
+            
+            # 상위 지표 갱신
+            if htf_df_1h.get(symbol) is not None and htf_df_15m.get(symbol) is not None:
+                htf_df_1h[symbol], htf_df_15m[symbol] = pipeline.calculate_htf_indicators(
+                    htf_df_1h[symbol], htf_df_15m[symbol]
+                )
+            return  # 하위 캔들 갱신은 진입 검사를 생략하고 즉시 종료
         else:
-            df.loc[new_dt] = new_row.iloc[0]
-
-        # [V18] 메모리 점유 방지를 위해 1000개만 유지 및 다운캐스팅
-        df = df.astype(
-            {col: "float32" for col in df.select_dtypes(include=["float64"]).columns}
-        ).tail(1000)
-        df_map[symbol] = df
-        gc.collect()  # 매 캔들 마감 연산 후 GC 호출 (선택적)
-
+            return  # 정의되지 않은 타임프레임은 스킵
+ 
         curr_df = df_map[symbol]
-
+ 
         if is_funding_fee_cutoff():
             # 펀딩비 시간대면 캔들 저장만 하고 진입은 하지 않음
             return
-
-        # 1. 3분봉 지표 연산 (비동기 블로킹 방지를 위해 스레드 위임)
+ 
+        # 2. 메인 타임프레임 지표 연산 (비동기 블로킹 방지를 위해 스레드 위임)
         df_ind = await asyncio.to_thread(
             pipeline.calculate_vwap_indicators, curr_df.copy()
         )
@@ -867,10 +897,11 @@ async def websocket_loop(
             }
             binance_to_ccxt = {v: k for k, v in ccxt_to_binance.items()}
 
-            # [V19.5 Dual-TF] 롱/숏 타임프레임 동적 구독 (L/S 개별 주기 지원)
-            l_tf = getattr(settings, "L_TIMEFRAME", "15m")
-            s_tf = getattr(settings, "S_TIMEFRAME", "3m")
-            unique_tfs = list(set([l_tf, s_tf]))
+            # [V18.7] 메인 타임프레임 및 상위/하위 타임프레임들을 동적으로 구독
+            main_tf = getattr(settings, "TIMEFRAME", "1h")
+            htf_1h = getattr(settings, "HTF_TIMEFRAME_1H", "1h")
+            htf_15m = getattr(settings, "HTF_TIMEFRAME_15M", "15m")
+            unique_tfs = list(set([main_tf, htf_1h, htf_15m]))
             streams = []
             for tf_item in unique_tfs:
                 streams.extend([f"{v}@kline_{tf_item}" for v in ccxt_to_binance.values()])
@@ -883,7 +914,7 @@ async def websocket_loop(
             ws_reconnect_flag = False
 
             logger.info(
-                f"⚡ 무지연 WebSocket 스트림(L={l_tf}/S={s_tf}, {len(target_symbols)}종목) 접속 시도 중..."
+                f"⚡ 무지연 WebSocket 스트림(TFs={unique_tfs}, {len(target_symbols)}종목) 접속 시도 중..."
             )
             async with aiohttp.ClientSession() as session:
                 # Binance 푸시핑에 응답하기 위한 heartbeat

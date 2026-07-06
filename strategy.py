@@ -257,20 +257,35 @@ class BBSqueezeVolatilityBreakout(Strategy):
         # 각 티커별 상태 추적 딕셔너리
         self.ticker_status = {}
 
-    def _calculate_poc(self, df: pd.DataFrame, num_bins: int = 50) -> float:
-        """최근 200개 캔들의 종가와 거래량을 활용하여 볼륨 프로파일의 POC(Point of Control)를 산출합니다."""
+    def _calculate_poc(self, df: pd.DataFrame) -> float:
+        """
+        [V18.7] 최근 200개 캔들의 종가와 거래량을 활용하여 볼륨 프로파일의 POC(Point of Control)를 산출합니다.
+        ATR 변동성 해상도를 대조 평가하여 Bins의 개수를 유동적(30~200)으로 결정해 가격 왜곡을 최소화합니다.
+        """
         recent_df = df.tail(200)
         closes = recent_df["close"].astype(float)
         volumes = recent_df["volume"].astype(float)
 
         min_price = closes.min()
         max_price = closes.max()
+        price_range = max_price - min_price
         
-        if max_price == min_price:
+        if price_range <= 0:
             return min_price
+
+        # ATR 변동성 단위 획득 (최근 ATR_20 지표의 5% 수준을 최소 해상도 단위로 simulated 적용)
+        last_row = df.iloc[-1]
+        atr20 = float(last_row.get("ATR_20", price_range * 0.05))
+        if atr20 <= 0:
+            atr20 = price_range * 0.05
+            
+        tick_unit = atr20 * 0.05
         
-        bin_width = (max_price - min_price) / num_bins
-        bins = [min_price + i * bin_width for i in range(num_bins + 1)]
+        # Bins 수 동적 결정 (최소 30개, 최대 200개 해상도로 클리핑)
+        num_bins = int(price_range / tick_unit)
+        num_bins = min(max(num_bins, 30), 200)
+
+        bin_width = price_range / num_bins
         
         bin_volumes = [0.0] * num_bins
         for close, vol in zip(closes, volumes):

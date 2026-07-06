@@ -955,8 +955,8 @@ class ExecutionEngine:
                         avg_price = float(fetched_after.get("average", fetched_after.get("price", entry_info["price"])))
                         if avg_price <= 0:
                             avg_price = entry_info["price"]
-                        logger.info(f"⚠️ [{symbol}] 타임아웃 취소 성공했으나 부분 체결 감지 ({final_filled}개). 부분 포지션 활성화.")
-                        await self._activate_position_after_fill(symbol, entry_info, avg_price, final_filled)
+                        # Min Notional 가치 검사 및 가드 연동
+                        await self._handle_partial_fill_safely(symbol, entry_info, avg_price, final_filled)
                     else:
                         logger.info(f"✅ [{symbol}] 주문 취소 완료. 대기열에서 제거합니다.")
                         # DB에 취소 내역 로그 추가
@@ -967,8 +967,8 @@ class ExecutionEngine:
                 elif status in ["canceled", "rejected"]:
                     if filled > 0:
                         avg_price = float(fetched_order.get("average", fetched_order.get("price", entry_info["price"])))
-                        logger.info(f"⚠️ [{symbol}] 외부 취소/만료 되었으나 부분 체결 감지 ({filled}개).")
-                        await self._activate_position_after_fill(symbol, entry_info, avg_price, filled)
+                        # Min Notional 가치 검사 및 가드 연동
+                        await self._handle_partial_fill_safely(symbol, entry_info, avg_price, filled)
                     else:
                         logger.info(f"❌ [{symbol}] 외부 취소/만료 감지. 대기열 제거.")
                         await self._write_cancel_log(symbol, entry_info, f"외부 {status.upper()}")
@@ -977,6 +977,37 @@ class ExecutionEngine:
             except Exception as e:
                 logger.error(f"❌ [{symbol}] 대기 주문 감시 중 에러 발생: {e}")
                 logger.error(traceback.format_exc())
+
+    async def _handle_partial_fill_safely(self, symbol: str, entry_info: dict, avg_price: float, filled_qty: float) -> bool:
+        """
+        [V18.7] 부분 체결 물량에 대해 평가 가치(수량 * 평단)를 검사하고,
+        최소 주문 금액(5 USDT) 미만일 경우 즉시 시장가 청산(Market Close)을 실행하여 방치 리스크를 완전히 소멸시킵니다.
+        5 USDT 이상일 때는 기존처럼 포지션을 활성화하고 TP/SL 주문을 연동합니다.
+        """
+        notional_value = filled_qty * avg_price
+        if notional_value < 5.0:
+            logger.warning(
+                f"🚨 [{symbol}] 부분 체결 가치({notional_value:.2f} USDT)가 최소 주문 금액(5 USDT) 미만입니다. "
+                f"부분 포지션 방치 방지를 위해 즉시 시장가 청산을 수행합니다."
+            )
+            try:
+                direction = entry_info["direction"]
+                exit_side = "sell" if direction == "LONG" else "buy"
+                # 반대 방향 시장가 주문으로 전량 긴급 청산
+                await self.exchange.create_market_order(symbol, exit_side, filled_qty)
+                logger.info(f"⚡ [{symbol}] 최소 노셔널 미만 부분 체결분 시장가 긴급 청산 주문 완료.")
+            except Exception as close_err:
+                logger.error(f"❌ [{symbol}] 최소 노셔널 미만 부분 체결분 시장가 청산 실패: {close_err}")
+                logger.error(traceback.format_exc())
+            
+            # DB 기록 및 대기큐 제거
+            await self._write_cancel_log(symbol, entry_info, f"최소금액 미만 부분 체결 시장가 긴급 청산 ({notional_value:.2f} USDT)")
+            self.pending_entries.pop(symbol, None)
+            return True
+            
+        # 5 USDT 이상일 경우 정상 포지션 활성화
+        await self._activate_position_after_fill(symbol, entry_info, avg_price, filled_qty)
+        return False
 
     async def _activate_position_after_fill(self, symbol: str, entry_info: dict, avg_price: float, filled_qty: float):
         """체결 완료(또는 부분 체결) 시 포지션을 활성화하고 TP/SL 주문을 연동 제출합니다."""
