@@ -19,6 +19,11 @@ class ExecutionEngine:
         # 시스템 문제 검출(DB-서버 간 Mismatch 등) 시 자가 정지 처리를 위한 Flag
         self.is_halted = False
 
+        # 바이낸스 수수료 파라미터 (BNB 수수료 할인 계산 고려)
+        self.fee_rate = 0.0004
+        self.use_post_only = True
+        self.tick_offset = 0
+
         # 대기 중인 진입 지정가 주문 추적. 구조:
         # { "SOL/USDT:USDT": {
         #     "order_id": "12345",
@@ -42,10 +47,24 @@ class ExecutionEngine:
         self.blacklist: set = set()
 
         # 포지션 종료 오탐 방지용 카운터 (거래소 일시 지연/심볼 포맷 불일치 방어)
-        self._zero_contract_seen_count: dict = {}
+        self. _zero_contract_seen_count: dict = {}
 
         # 재부팅 직후 복구 포지션에 대한 과민 반응(즉시 Fail-safe/Time-Exit)을 줄이기 위한 유예 시간
         self.restart_guard_sec = int(getattr(settings, "RESTART_GUARD_SEC", 90))
+
+    def _get_tick_size(self, symbol: str) -> float:
+        """
+        바이낸스 선물 시장에서 해당 심볼의 최소 호가 틱 사이즈(tickSize)를 조회합니다.
+        """
+        try:
+            market = self.exchange.market(symbol)
+            filters = market.get("info", {}).get("filters", [])
+            for f in filters:
+                if f.get("filterType") == "PRICE_FILTER":
+                    return float(f.get("tickSize", 0.0001))
+        except Exception as e:
+            logger.warning(f"[{symbol}] 틱 사이즈 조회 실패, 기본값 0.0001 사용: {e}")
+        return 0.0001
 
     def _normalize_symbol(self, symbol: str) -> str:
         """
@@ -130,11 +149,7 @@ class ExecutionEngine:
                 "htf_timeframe_1h": getattr(settings, "HTF_TIMEFRAME_1H", None),
                 "htf_timeframe_15m": getattr(settings, "HTF_TIMEFRAME_15M", None),
                 # [V19] 상세 스코어링 규칙 정적 스냅샷 (최적화 분석용)
-                "scoring_rules": {
-                    "long": getattr(settings, "SC_RULES_LONG", {}),
-                    "short": getattr(settings, "SC_RULES_SHORT", {}),
-                    "weights": getattr(settings, "SCORING_WEIGHTS", {}),
-                },
+                "bot_ready_entry_config": getattr(settings, "BOT_READY_ENTRY_CONFIG", {}),
             },
             ensure_ascii=False,
         )
@@ -483,314 +498,115 @@ class ExecutionEngine:
         market_data: dict = None,
     ) -> bool:
         """
-        [V18] 시장가(Market) 대신 포스트 온리(Maker) 지정가로 호가를 추격(Chasing)하며 진입합니다.
-        3.5초 내 미체결 시 취소하고 최우선 호가로 재생성하여 수수료(Taker Fee)를 절약합니다.
-        체결 성공 시, 실제 체결가(average price)를 기반으로 TP/SL 주문을 연이어 등록합니다.
+        [V18.6 Refactored] 비블로킹(Non-blocking) 지정가 진입 주문 발송
+        - Post-Only 옵션 활성화 시 GTX 주문을 제출하여 수수료 절감.
+        - Post-Only 비활성화 시 현재가 대비 tick_offset만큼 유리한 호가로 주문을 제출하여 즉시 체결 유도.
+        - 주문 발송 즉시 pending_entries에 등록하고 리턴.
+        - 체결 감시 및 3봉 타임아웃은 check_pending_orders_state 및 캔들 마감 카운팅에서 처리.
         """
         if self.is_halted:
-            logger.warning(
-                f"시스템이 일시 중지(Halted) 상태입니다. 신규 진입 요청[{symbol}] 거부."
-            )
+            logger.warning(f"시스템이 일시 중지(Halted) 상태입니다. 신규 진입 요청[{symbol}] 거부.")
             return False
 
-        # 블랙리스트 체크
         if symbol in self.blacklist:
-            logger.info(
-                f"[{symbol}] 블랙리스트(차단)에 등록된 종목이므로 진입을 스킵합니다."
-            )
+            logger.info(f"[{symbol}] 블랙리스트에 등록된 종목이므로 진입을 스킵합니다.")
             return False
 
-        # [V18.2] 중복 진입 방어 강화: 이미 Chasing 시도 중이라면 중복 요청 거부
         if symbol in self.pending_entries:
-            logger.info(
-                f"[{symbol}] 이미 Chasing 진입 시도 중(Pending)입니다. 중복 요청을 무시합니다."
-            )
+            logger.info(f"[{symbol}] 이미 진입 시도 중(Pending)입니다. 중복 요청 무시.")
             return False
 
-        # 포지션이 이미 존재하면 추가 진입 억제
         if symbol in self.active_positions:
             logger.info(f"[{symbol}] 이미 활성 포지션이 존재합니다. 진입 생략.")
             return False
 
-        # 포트폴리오 동시 진입 최대 개수(MAX_TRADES) 체크
-        # pending_entries(체결 진행 중)도 합산하여 레이스 컨디션으로 인한 초과 진입 방지
         max_trades = getattr(settings, "MAX_TRADES", 3)
         current_count = len(self.active_positions) + len(self.pending_entries)
         if current_count >= max_trades:
-            logger.info(
-                f"[{symbol}] 전체 활성 포지션 한도 도달 "
-                f"(활성 {len(self.active_positions)} + 대기 {len(self.pending_entries)} = {current_count}/최대 {max_trades}). 연쇄 손실 방지를 위해 진입 생략."
-            )
+            logger.info(f"[{symbol}] 전체 활성 포지션 한도 도달 ({current_count}/{max_trades}). 진입 생략.")
             return False
 
-        # 연속 손실 쿨다운 체크
         now_kst = datetime.utcnow() + timedelta(hours=9)
         cooldown_until = self.loss_cooldown.get(symbol)
         if cooldown_until and now_kst < cooldown_until:
             remaining = int((cooldown_until - now_kst).total_seconds() / 60)
-            logger.info(f"[{symbol}] 손실 쿨다운 중. {remaining}분 후 진입 가능. 스킵.")
+            logger.info(f"[{symbol}] 손실 쿨다운 중 ({remaining}분 남음). 스킵.")
             return False
 
         try:
-            # [HOTFIX] 진입 시도 시작 시 즉각 pending_entries에 등록하여 수동진입 오탐지 방지
-            self.pending_entries[symbol] = {
-                "side": side,
-                "amount": amount,
-                "reason": reason,
-                "timestamp": time.time(),
-            }
-
-            logger.info(
-                f"[{symbol}] 스마트 지정가(Chasing) 진입 시도. "
-                f"수량: {amount} (DRY_RUN: {settings.DRY_RUN})"
-            )
-            start_time_ms = int(time.time() * 1000)
-
-            # 레버리지 및 마진 환경 사전 세팅
+            logger.info(f"[{symbol}] 신규 지정가 진입 시도 시작. 수량: {amount} (DRY_RUN: {settings.DRY_RUN})")
+            
+            # 레버리지 및 마진 세팅
             await self.setup_margin_and_leverage(symbol)
 
             signal_type = "LONG" if side == "buy" else "SHORT"
-            average_price = 0.0
-
+            
             if not settings.DRY_RUN:
-                max_retries = getattr(settings, "CHASING_MAX_RETRY", 10)
-                market_threshold = getattr(settings, "CHASING_MARKET_THRESHOLD", 3)
-                remaining_amount = amount
-                total_cost = 0.0
-                filled_amount = 0.0
-
-                for attempt in range(max_retries):
-                    try:
-                        # [V18.2] Hybrid Chasing: 일정 횟수 실패 시 시장가로 전환하여 진입 보장
-                        is_market_fallback = attempt >= market_threshold
-
-                        if is_market_fallback:
-                            logger.info(
-                                f"[{symbol}] Chasing {attempt + 1}/{max_retries}: 지정가 체결 실패로 인한 '시장가' 전환 진입 수행"
-                            )
-                            # [V18.4] 시장가 전환 시에도 수량 정밀도(BTC 등 0.001 단위) 및 minQty 체크 적용
-                            formatted_remaining = self.exchange.amount_to_precision(
-                                symbol, remaining_amount
-                            )
-                            market = self.exchange.market(symbol)
-                            min_qty = (
-                                market.get("limits", {})
-                                .get("amount", {})
-                                .get("min", 0.0)
-                            )
-
-                            if float(formatted_remaining) < min_qty:
-                                logger.warning(
-                                    f"[{symbol}] 잔여 수량({formatted_remaining})이 최소 주문 수량({min_qty}) 미달로 시장가 진입을 중단합니다."
-                                )
-                                break
-
-                            entry_order = await self.exchange.create_order(
-                                symbol=symbol,
-                                type="market",
-                                side=side,
-                                amount=float(formatted_remaining),
-                            )
-                        else:
-                            # 1. 호가창(Orderbook) 조회하여 최우선 호가 파악
-                            ob = await self.exchange.fetch_order_book(symbol, limit=5)
-                            if side == "buy":
-                                target_price = float(ob["bids"][0][0])
-                            else:
-                                target_price = float(ob["asks"][0][0])
-
-                            price_str = self.exchange.price_to_precision(
-                                symbol, target_price
-                            )
-                            amount_str = self.exchange.amount_to_precision(
-                                symbol, remaining_amount
-                            )
-
-                            if float(amount_str) <= 0:
-                                break
-
-                            # 2. Limit Maker (Post-Only) 주문 제출
-                            logger.info(
-                                f"[{symbol}] Chasing {attempt + 1}/{max_retries}: {target_price}에 Post-Only 지정가 {amount_str}개 제출"
-                            )
-                            entry_order = await self.exchange.create_order(
-                                symbol=symbol,
-                                type="limit",
-                                side=side,
-                                amount=float(amount_str),
-                                price=float(price_str),
-                                params={"timeInForce": "GTX"},  # Post-Only 강제
-                            )
-                        order_id = entry_order.get("id")
-
-                        pass
-
-                        # 3. V18
-                        chasing_wait = getattr(settings, "CHASING_WAIT_SEC", 5.0)
-                        await asyncio.sleep(chasing_wait)
-
-                        # 4. 체결 상태 확인
-                        fetched_order = await self.exchange.fetch_order(
-                            order_id, symbol
-                        )
-                        status = fetched_order.get("status")
-                        filled = float(fetched_order.get("filled", 0.0))
-
-                        if filled > 0:
-                            avg = float(
-                                fetched_order.get(
-                                    "average", fetched_order.get("price", 0.0)
-                                )
-                            )
-                            if avg > 0:
-                                total_cost += filled * avg
-                                filled_amount += filled
-
-                        if status == "closed":
-                            break
-                        elif status in ["open", "canceled", "rejected"]:
-                            if status == "open":
-                                try:
-                                    await self.exchange.cancel_order(order_id, symbol)
-                                    pass
-                                except Exception as e:
-                                    logger.warning(
-                                        f"[{symbol}] 주문 취소 중 예외 발생 (이미 체결됨?): {e}"
-                                    )
-
-                            # 취소 후 상태 한 번 더 갱신하여 취소 직전 체결분 마저 합산
-                            fetched_after = await self.exchange.fetch_order(
-                                order_id, symbol
-                            )
-                            final_filled = float(fetched_after.get("filled", 0.0))
-
-                            newly_filled = final_filled - filled
-                            if newly_filled > 0:
-                                avg2 = float(
-                                    fetched_after.get(
-                                        "average", fetched_after.get("price", 0.0)
-                                    )
-                                )
-                                if avg2 > 0:
-                                    total_cost += newly_filled * avg2
-                                    filled_amount += newly_filled
-
-                            remaining_amount = amount - filled_amount
-                            if (
-                                remaining_amount <= float(amount_str) * 0.05
-                            ):  # 95% 이상 체결되면 종료
-                                break
-                    except Exception as e:
-                        # -5022 Post Only Rejection 등은 Chasing 루프에서 흔히 발생하므로 Warning 처리하여 텔레그램 스팸 방지
-                        logger.warning(
-                            f"[{symbol}] Chasing 루프 내 에러(재시도됨): {e}"
-                        )
-                        pass
-                        await asyncio.sleep(2)  # 밴 방지
-
-                if filled_amount > 0:
-                    average_price = total_cost / filled_amount
+                # 1. 호가창 최우선 호가 조회
+                ob = await self.exchange.fetch_order_book(symbol, limit=5)
+                bid_price = float(ob["bids"][0][0])
+                ask_price = float(ob["asks"][0][0])
+                
+                tick_size = self._get_tick_size(symbol)
+                
+                # 2. 호가 결정 (유리한 호가 틱오프셋 적용)
+                if side == "buy":
+                    if self.use_post_only:
+                        # Post-Only: 나에게 가격적으로 유리(더 싸게 사기 위해 매수호가 아래로 대기)
+                        target_price = bid_price - (tick_size * self.tick_offset)
+                    else:
+                        # 일반 지정가: 체결을 빨리 시키기 위해 현재 매수호가 위(또는 매도호가 기준)로 긁음
+                        target_price = bid_price + (tick_size * self.tick_offset)
                 else:
-                    average_price = 0.0
+                    if self.use_post_only:
+                        target_price = ask_price + (tick_size * self.tick_offset)
+                    else:
+                        target_price = ask_price - (tick_size * self.tick_offset)
+                
+                price_str = self.exchange.price_to_precision(symbol, target_price)
+                amount_str = self.exchange.amount_to_precision(symbol, amount)
+                
+                if float(amount_str) <= 0:
+                    logger.error(f"[{symbol}] 주문 정밀도 변환 후 수량이 0 이하입니다. 진입 취소.")
+                    return False
 
+                # 3. 주문 파라미터 세팅
+                params = {}
+                if self.use_post_only:
+                    params["timeInForce"] = "GTX"  # Post-Only 강제
             else:
-                # DRY RUN 일 경우 현재 시장가(Ticker)를 체결가로 임시 가정
+                # DRY RUN일 경우 가상 체결
+                order_id = "DRY_RUN_ID"
                 ticker = await self.exchange.fetch_ticker(symbol)
-                average_price = float(ticker.get("last", 0.0))
+                target_price = float(ticker.get("last", 0.0))
 
-            if average_price <= 0:
-                logger.error(
-                    f"[{symbol}] 지정가 Chasing을 완주했으나 단 한 주도 체결되지 않거나 단가를 확인할 수 없습니다! 진입 포기."
-                )
-                return False
-
-            # 체결 완료 로깅 및 알림
-            logger.info(
-                f"🎯 [{symbol}] 스마트 메이커(Post-Only) 진입 성공! 평균 단가: {average_price:.4f}. TP/SL 즉각 계산 및 전송 개시."
-            )
-
-            # V12: 진입 단가에서 ATR 거리(tp_dist, sl_dist)만큼 가감산
-            if signal_type == "LONG":
-                raw_tp = average_price + tp_dist
-                raw_sl = average_price - sl_dist
-            else:
-                raw_tp = average_price - tp_dist
-                raw_sl = average_price + sl_dist
-
-            # 설정값/지표 이상치로 TP/SL 방향이 뒤집히는 경우를 방지
-            min_dist = average_price * max(getattr(settings, "FEE_RATE", 0.00045) * 2, 0.0005)
-            if signal_type == "LONG":
-                if raw_tp <= average_price:
-                    raw_tp = average_price + max(abs(tp_dist), min_dist)
-                if raw_sl >= average_price:
-                    raw_sl = average_price - max(abs(sl_dist), min_dist)
-            else:
-                if raw_tp >= average_price:
-                    raw_tp = average_price - max(abs(tp_dist), min_dist)
-                if raw_sl <= average_price:
-                    raw_sl = average_price + max(abs(sl_dist), min_dist)
-
-            # [V18.4] 진입 시점 기록 (Time-Exit 및 복구용)
-            now_kst = datetime.now(timezone.utc) + timedelta(hours=9)
-
-            # 호가 단위(precisions) 보정
-            tp_price = (
-                float(self.exchange.price_to_precision(symbol, raw_tp))
-                if self.exchange
-                else raw_tp
-            )
-            sl_price = (
-                float(self.exchange.price_to_precision(symbol, raw_sl))
-                if self.exchange
-                else raw_sl
-            )
-
-            # TP/SL 생성 코루틴으로 정보 패스
-            # target_price: 처음 진입 시도 당시의 최우선 호가(의도한 기준가)
-            # 여기서는 fetch_order_book 호출 직전의 값이 유실되었으므로 (최후호출값만 남으므로),
-            # 단순히 average_price를 limit_price로 세팅하거나, 첫 번째 limit_price를 로깅해둬야 하지만, 간단히 유지
-            entry_info = {
-                "signal": signal_type,
+            # pending_entries에 등록
+            self.pending_entries[symbol] = {
+                "order_id": order_id,
+                "side": side,
+                "direction": signal_type,
                 "amount": amount,
-                "limit_price": average_price,
-                "tp_price": tp_price,
-                "sl_price": sl_price,
-                "execution_time_ms": int(time.time() * 1000) - start_time_ms,
                 "reason": reason,
+                "timestamp": time.time(),
+                "bars_elapsed": 0,          # 경과 봉 수 카운트 시작
+                "tp_dist": tp_dist,
+                "sl_dist": sl_dist,
                 "market_data": market_data,
+                "price": target_price,
+                "placed_at_ms": int(time.time() * 1000)
             }
-
-            # --- [HOTFIX] 진입 직후 봇 추적망에 즉각 편입하여 수동진입 감지(오작동) 방지 ---
-            self.active_positions[symbol] = {
-                "signal": signal_type,
-                "amount": amount,
-                "limit_price": average_price,
-                "tp_price": tp_price,
-                "sl_price": sl_price,
-                "entry_time": now_kst,
-                "last_summed_ts": int(
-                    time.time() * 1000
-                ),  # 진입 시점을 첫 합산 기준으로 설정
-                "opened_at_ms": int(time.time() * 1000),
-                "is_partial_tp_done": False,
-            }
-
-            # 동기적(await)으로 TP/SL 즉시 생성 (대기열 통하지 않음)
-            await self.place_tp_sl_orders(symbol, entry_info)
+            
+            if settings.DRY_RUN:
+                # DRY_RUN 모드에서는 대기하지 않고 즉시 체결된 것으로 보고 활성 포지션으로 전환 처리
+                logger.info(f"🧪 [DRY RUN] {symbol} 진입 성공 가정. 활성 포지션 등록 처리 진행.")
+                await self._process_dry_run_entry(symbol)
 
             return True
 
         except Exception as e:
-            logger.error(
-                f"[{symbol}] 시장가 진입 로직 처리 중 예외 발생: {e}",
-                exc_info=True,
-            )
-            # TP/SL 생성 도중 에러가 나더라도 포지션은 체결되어 있으므로 봇 루프에서 관리되도록 True 반환
-            return True
-        finally:
-            # 진입 프로세스(성공/실패/예외 전구간) 종료 후 대기열에서 제거
-            if symbol in self.pending_entries:
-                self.pending_entries.pop(symbol, None)
+            logger.error(f"[{symbol}] 지정가 진입 주문 발송 중 에러: {e}")
+            logger.error(traceback.format_exc())
+            return False
 
     async def cancel_pending_order(
         self, symbol: str, reason: str = "취소 요청"
@@ -901,18 +717,7 @@ class ExecutionEngine:
                 raw_market_data = entry_info.get("market_data")
                 cleaned_market_data = clean_json_data(raw_market_data)
                 
-                # params는 이미 _snapshot_params()에서 json.dumps()된 문자열일 수 있으나
-                # 만약 dict라면 세척 후 저장 (TradeLog.params는 String 혹은 JSONB일 수 있음)
-                raw_params = self._snapshot_params()
-                if isinstance(raw_params, str):
-                    try:
-                        # 이미 JSON 문자열이면 파싱 후 다시 세척하여 직렬화 (이중 안전장치)
-                        params_dict = json.loads(raw_params)
-                        cleaned_params = json.dumps(clean_json_data(params_dict), ensure_ascii=False)
-                    except:
-                        cleaned_params = raw_params
-                else:
-                    cleaned_params = json.dumps(clean_json_data(raw_params), ensure_ascii=False)
+                strategy_params = cleaned_market_data.get("strategy_params") if isinstance(cleaned_market_data, dict) else None
 
                 # [V19] 모든 기록을 TradeLog로 단일화
                 new_tradelog = TradeLog(
@@ -924,13 +729,14 @@ class ExecutionEngine:
                     target_price=entry_price,
                     execution_price=entry_price,
                     slippage=0.0,
-                    entry_reason=f"{dr_prefix}V18 시장가/추격 진입 완료 (분할TP {partial_ratio * 100:.0f}%)",
+                    entry_reason=f"{dr_prefix}BB Squeeze Breakout 진입 완료 (분할TP {partial_ratio * 100:.0f}%)",
                     execution_time_ms=entry_info.get("execution_time_ms", 0),
                     dry_run=settings.DRY_RUN,
                     tp_price=tp_price,
                     sl_price=sl_price,
-                    market_data=cleaned_market_data,
-                    params=cleaned_params,
+                    strategy_name="BB_SQUEEZE_BREAKOUT",
+                    strategy_params=strategy_params,
+                    market_snapshot=cleaned_market_data,
                 )
                 session.add(new_tradelog)
                 await session.commit()
@@ -1096,9 +902,179 @@ class ExecutionEngine:
 
     async def check_pending_orders_state(self):
         """
-        (더 이상 신규 진입 시 사용되지 않으나, 기존 대기 주문 잔여물 정리를 위해 빈 메서드로 유지)
+        [V18.6 Refactored] 비블로킹 미체결 진입 지정가 주문의 상태를 감시하고 처리합니다.
+        - 체결 완료(closed) 감지 시: 활성 포지션 편입 및 TP/SL 세팅.
+        - 3개의 봉 경과(bars_elapsed >= 3) 시: 주문 취소(cancel_order) 실행.
+          부분 체결량이 있다면 그에 비례해 포지션 편입 및 TP/SL 설정.
         """
-        pass
+        if settings.DRY_RUN:
+            # DRY RUN은 place_chasing_entry_order 내에서 즉시 처리되므로 스킵
+            return
+
+        for symbol in list(self.pending_entries.keys()):
+            entry_info = self.pending_entries.get(symbol)
+            if not entry_info:
+                continue
+
+            order_id = entry_info["order_id"]
+            if order_id == "DRY_RUN_ID":
+                continue
+
+            try:
+                # 1. 거래소 주문 상태 조회
+                fetched_order = await self.exchange.fetch_order(order_id, symbol)
+                status = fetched_order.get("status")
+                filled = float(fetched_order.get("filled", 0.0))
+                
+                logger.debug(f"🔍 [{symbol}] 대기 주문 감시: 상태={status}, 체결수량={filled}/{entry_info['amount']}")
+
+                # ── 1) 체결 완료 ──
+                if status == "closed":
+                    avg_price = float(fetched_order.get("average", fetched_order.get("price", entry_info["price"])))
+                    if avg_price <= 0:
+                        avg_price = entry_info["price"]
+                    logger.info(f"🎯 [{symbol}] 비블로킹 지정가 진입 체결 완료! 평단가: {avg_price:.4f}")
+                    
+                    await self._activate_position_after_fill(symbol, entry_info, avg_price, filled)
+                    
+                # ── 2) 미체결 상태 및 3봉 타임아웃 경과 ──
+                elif status in ["open"] and entry_info.get("bars_elapsed", 0) >= 3:
+                    logger.warning(f"⏰ [{symbol}] 진입 주문 3봉 경과 미체결 타임아웃! 주문 취소를 실행합니다. (주문ID: {order_id})")
+                    
+                    try:
+                        await self.exchange.cancel_order(order_id, symbol)
+                    except Exception as cancel_err:
+                        logger.error(f"[{symbol}] 타임아웃 주문 취소 전송 중 에러 (이미 체결되었을 수 있음): {cancel_err}")
+                    
+                    # 취소 직후 최종 체결 수량 확인을 위해 재갱신
+                    await asyncio.sleep(0.5) # 체결 지연 대기
+                    fetched_after = await self.exchange.fetch_order(order_id, symbol)
+                    final_filled = float(fetched_after.get("filled", 0.0))
+                    
+                    if final_filled > 0:
+                        avg_price = float(fetched_after.get("average", fetched_after.get("price", entry_info["price"])))
+                        if avg_price <= 0:
+                            avg_price = entry_info["price"]
+                        logger.info(f"⚠️ [{symbol}] 타임아웃 취소 성공했으나 부분 체결 감지 ({final_filled}개). 부분 포지션 활성화.")
+                        await self._activate_position_after_fill(symbol, entry_info, avg_price, final_filled)
+                    else:
+                        logger.info(f"✅ [{symbol}] 주문 취소 완료. 대기열에서 제거합니다.")
+                        # DB에 취소 내역 로그 추가
+                        await self._write_cancel_log(symbol, entry_info, "3봉 미체결 타임아웃 취소")
+                        self.pending_entries.pop(symbol, None)
+
+                # ── 3) 외부에서 임의 취소/만료 ──
+                elif status in ["canceled", "rejected"]:
+                    if filled > 0:
+                        avg_price = float(fetched_order.get("average", fetched_order.get("price", entry_info["price"])))
+                        logger.info(f"⚠️ [{symbol}] 외부 취소/만료 되었으나 부분 체결 감지 ({filled}개).")
+                        await self._activate_position_after_fill(symbol, entry_info, avg_price, filled)
+                    else:
+                        logger.info(f"❌ [{symbol}] 외부 취소/만료 감지. 대기열 제거.")
+                        await self._write_cancel_log(symbol, entry_info, f"외부 {status.upper()}")
+                        self.pending_entries.pop(symbol, None)
+
+            except Exception as e:
+                logger.error(f"❌ [{symbol}] 대기 주문 감시 중 에러 발생: {e}")
+                logger.error(traceback.format_exc())
+
+    async def _activate_position_after_fill(self, symbol: str, entry_info: dict, avg_price: float, filled_qty: float):
+        """체결 완료(또는 부분 체결) 시 포지션을 활성화하고 TP/SL 주문을 연동 제출합니다."""
+        now_kst = datetime.now(timezone.utc) + timedelta(hours=9)
+        tp_dist = entry_info["tp_dist"]
+        sl_dist = entry_info["sl_dist"]
+        signal_type = entry_info["direction"]
+        reason = entry_info["reason"]
+        market_data = entry_info["market_data"]
+        
+        # TP/SL 범위 연산
+        if signal_type == "LONG":
+            raw_tp = avg_price + tp_dist
+            raw_sl = avg_price - sl_dist
+        else:
+            raw_tp = avg_price - tp_dist
+            raw_sl = avg_price + sl_dist
+
+        min_dist = avg_price * 0.0005
+        if signal_type == "LONG":
+            if raw_tp <= avg_price:
+                raw_tp = avg_price + max(abs(tp_dist), min_dist)
+            if raw_sl >= avg_price:
+                raw_sl = avg_price - max(abs(sl_dist), min_dist)
+        else:
+            if raw_tp >= avg_price:
+                raw_tp = avg_price - max(abs(tp_dist), min_dist)
+            if raw_sl <= avg_price:
+                raw_sl = avg_price + max(abs(sl_dist), min_dist)
+
+        tp_price = float(self.exchange.price_to_precision(symbol, raw_tp))
+        sl_price = float(self.exchange.price_to_precision(symbol, raw_sl))
+        
+        entry_info_processed = {
+            "signal": signal_type,
+            "amount": filled_qty,
+            "limit_price": avg_price,
+            "tp_price": tp_price,
+            "sl_price": sl_price,
+            "execution_time_ms": int(time.time() * 1000) - entry_info.get("placed_at_ms", int(time.time() * 1000)),
+            "reason": reason,
+            "market_data": market_data,
+        }
+        
+        # active_positions에 편입
+        self.active_positions[symbol] = {
+            "signal": signal_type,
+            "amount": filled_qty,
+            "limit_price": avg_price,
+            "tp_price": tp_price,
+            "sl_price": sl_price,
+            "entry_time": now_kst,
+            "last_summed_ts": int(time.time() * 1000),
+            "opened_at_ms": int(time.time() * 1000),
+            "is_partial_tp_done": False,
+        }
+        
+        # 포트폴리오에 등록
+        if self.portfolio:
+            self.portfolio.register_position(
+                symbol=symbol,
+                direction=signal_type,
+                entry_price=avg_price,
+                atr=tp_dist / 5.0 if tp_dist > 0 else avg_price * 0.005
+            )
+
+        # 거래소에 TP/SL 주문 걸기
+        await self.place_tp_sl_orders(symbol, entry_info_processed)
+        
+        # pending_entries에서 제거
+        self.pending_entries.pop(symbol, None)
+
+    async def _write_cancel_log(self, symbol: str, entry_info: dict, cancel_reason: str):
+        """주문 취소 사실을 DB에 기록합니다."""
+        try:
+            async with AsyncSessionLocal() as session:
+                new_log = TradeLog(
+                    entry_time=datetime.utcnow() + timedelta(hours=9),
+                    exit_time=datetime.utcnow() + timedelta(hours=9),
+                    action="CANCEL",
+                    symbol=symbol,
+                    direction=entry_info.get("direction", "UNKNOWN"),
+                    target_price=entry_info.get("price", 0.0),
+                    execution_price=0.0,
+                    slippage=0.0,
+                    execution_time_ms=0,
+                    qty=entry_info.get("amount", 0.0),
+                    entry_reason=f"진입 주문 취소: {cancel_reason}",
+                    realized_pnl=0.0,
+                    dry_run=settings.DRY_RUN,
+                    strategy_name="BB_SQUEEZE_BREAKOUT",
+                    strategy_params=entry_info.get("market_data", {}).get("strategy_params") if entry_info.get("market_data") else None,
+                    market_snapshot=entry_info.get("market_data")
+                )
+                session.add(new_log)
+                await session.commit()
+        except Exception as db_err:
+            logger.error(f"[{symbol}] 취소 DB 기록 중 에러 (무시됨): {db_err}")
 
     async def check_active_positions_state(self):
         """

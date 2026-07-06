@@ -14,7 +14,7 @@ from sklearn.preprocessing import RobustScaler
 
 from sqlalchemy import delete
 from sqlalchemy.exc import IntegrityError
-from database import AsyncSessionLocal, MarketData_1m
+from database import AsyncSessionLocal
 from utils import clean_json_data
 from schemas import HFTFeatures1m
 from config import settings, get_logger
@@ -364,15 +364,7 @@ class HFTDataPipeline:
     # ── 6. Retention & Bootstrap ──
     async def retention_policy_loop(self):
         while True:
-            cutoff = datetime.utcnow() - timedelta(days=RETENTION_DAYS)
-            try:
-                async with AsyncSessionLocal() as session:
-                    stmt = delete(MarketData_1m).where(MarketData_1m.timestamp < cutoff)
-                    result = await session.execute(stmt)
-                    await session.commit()
-                    logger.info(f"[HFT GC] Pruned {result.rowcount} old records (Before {cutoff})")
-            except Exception as e:
-                logger.error(f"[HFT GC] Pruning Error: {e}")
+            # 1M 봉 DB Pruning 제거
             await asyncio.sleep(86400)
 
     async def start(self):

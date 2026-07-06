@@ -72,6 +72,7 @@ class DataPipeline:
                     "adjustForTimeDifference": True,  # [V18.6] Windows 시간 동기화 오차 대응 (-1021 에러 방지)
                     "recvWindow": 10000,  # [V18.6] 시간 오차 허용 범위 확대 (기존 5000 -> 10000)
                 },  # 현물(spot) -> 선물(future) 변경
+                "timeout": 30000,
             }
         )
 
@@ -84,6 +85,19 @@ class DataPipeline:
             logger.info(
                 "🧪 [TESTNET MODE] 바이낸스 선물 테스트넷 환경으로 CCXT 객체 연결이 세팅되었습니다."
             )
+
+    async def _safe_ccxt_call(self, func, *args, **kwargs):
+        """CCXT API 호출을 안전하게 감싸고, Dry Run 상황에서 AuthenticationError 발생 시 public 모드로 전환하여 재시도합니다."""
+        try:
+            return await func(*args, **kwargs)
+        except ccxt.AuthenticationError as e:
+            if getattr(settings, "DRY_RUN", True):
+                logger.warning(f"⚠️ [SafeCall] Invalid API Key in Dry Run. Switching to Public-only mode. Details: {e}")
+                self.exchange.apiKey = None
+                self.exchange.secret = None
+                return await func(*args, **kwargs)
+            else:
+                raise e
 
     async def sync_time(self):
         """바이낸스 서버와 로컬 시간을 동기화하여 -1021 에러를 방지합니다."""
@@ -107,9 +121,10 @@ class DataPipeline:
         주어진 심볼의 바이낸스 캔들 데이터를 비동기로 불러와 DataFrame으로 변환합니다.
         (V15: 1분봉 당일 누적 데이터 수집을 위해 최대 한도 1500개를 끌어옵니다)
         """
-        # [V18 (RAM 최적화)
-        candles = await self.exchange.fetch_ohlcv(
-            symbol, timeframe, since=since, limit=1000
+        # [V18.6] Rate Limit 방지를 위한 딜레이 추가
+        await asyncio.sleep(0.2)
+        candles = await self._safe_ccxt_call(
+            self.exchange.fetch_ohlcv, symbol, timeframe, since=since, limit=1000
         )
 
         df = pd.DataFrame(
@@ -136,7 +151,6 @@ class DataPipeline:
 
         df["hlc3"] = (df["high"] + df["low"] + df["close"]) / 3
         df["vol_hlc3"] = df["hlc3"] * df["volume"]
-        df["vol_hlc3_sq"] = df["hlc3"] ** 2 * df["volume"]
 
         # 누적합 대신 롤링합(rolling.sum) 적용
         rolling_vol = (
@@ -144,9 +158,6 @@ class DataPipeline:
         )
         rolling_vol_hlc3 = (
             df["vol_hlc3"].rolling(window=window_size, min_periods=min_periods).sum()
-        )
-        rolling_vol_hlc3_sq = (
-            df["vol_hlc3_sq"].rolling(window=window_size, min_periods=min_periods).sum()
         )
 
         # VWAP 계산 (0으로 나누기 방지 적용)
@@ -178,34 +189,24 @@ class DataPipeline:
         log_vol_std = log_vol.rolling(window=100, min_periods=20).std()
         df["Log_Vol_ZScore"] = (log_vol - log_vol_mean) / log_vol_std.replace(0, 1)
 
+        # ── 볼린저 밴드 및 스퀴즈 돌파 전략 지표 계산 추가 ──
+        df["BB_MA20"] = df["close"].rolling(window=20).mean()
+        df["BB_Std20"] = df["close"].rolling(window=20).std()
+        df["BB_High"] = df["BB_MA20"] + 2 * df["BB_Std20"]
+        df["BB_Low"] = df["BB_MA20"] - 2 * df["BB_Std20"]
+        
+        # Bandwidth 및 100봉 평균 밴드폭
+        df["BB_Bandwidth"] = (df["BB_High"] - df["BB_Low"]) / df["BB_MA20"].replace(0, 1)
+        df["BB_Mean_Bandwidth"] = df["BB_Bandwidth"].rolling(window=100).mean()
+
+        # Volume 20MA (pandas_ta 스키마와 결합)
+        df["Vol_SMA_20"] = df["volume"].rolling(window=20).mean()
+
+        # ATR 20
+        df["ATR_20"] = df.ta.atr(length=20) if (hasattr(df, "ta") and hasattr(df.ta, "atr")) else df["ATR_14"]
+
         return df
 
-    def calculate_fracdiff(
-        self, series: pd.Series, d: float = 0.4, window: int = 50
-    ) -> pd.Series:
-        """
-        V18: 부분 차분 (Fractional Differentiation)
-        가격 데이터의 장기 기억을 훼손하지 않으면서 정상성을 확보합니다.
-        - d: 차분 차수 (0 < d < 1, 0.4가 일반적)
-        - window: 가중치 절단 윈도우 (계산 효율)
-        """
-        # 부분 차분 가중치 산출
-        weights = [1.0]
-        for k in range(1, window):
-            w = -weights[-1] * (d - k + 1) / k
-            if abs(w) < 1e-6:
-                break
-            weights.append(w)
-        weights = np.array(weights[::-1])  # 역순 (가장 오래된 → 최신)
-
-        # 롤링 내적으로 부분 차분 시계열 생성
-        result = pd.Series(index=series.index, dtype="float64")
-        for i in range(len(weights) - 1, len(series)):
-            window_slice = series.iloc[i - len(weights) + 1 : i + 1].values
-            if len(window_slice) == len(weights):
-                result.iloc[i] = np.dot(weights, window_slice)
-
-        return result
 
     @with_exponential_backoff(max_retries=3)
     async def fetch_ohlcv_htf(
@@ -216,7 +217,9 @@ class DataPipeline:
         - 1H: EMA50/200 계산을 위해 최소 200개 필요
         - 15m: ADX·MACD 계산을 위해 최소 60개 필요
         """
-        candles = await self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+        # [V18.6] Rate Limit 방지를 위한 딜레이 추가
+        await asyncio.sleep(0.2)
+        candles = await self._safe_ccxt_call(self.exchange.fetch_ohlcv, symbol, timeframe, limit=limit)
         df = pd.DataFrame(
             candles, columns=["timestamp", "open", "high", "low", "close", "volume"]
         )
@@ -302,7 +305,7 @@ class DataPipeline:
         API 키 오류(-2015) 등이 발생할 경우 기본 메이저 알트코인 리스트를 반환합니다.
         """
         try:
-            tickers = await self.exchange.fetch_tickers()
+            tickers = await self._safe_ccxt_call(self.exchange.fetch_tickers)
 
             # USDT 기반 선형 선물 티커 필터링 (선물은 "ADA/USDT:USDT" 형태)
             usdt_pairs = {
@@ -334,7 +337,7 @@ class DataPipeline:
         """
         try:
             # fetch_order_book은 기본 10단계부터 반환, 가벼운 호출
-            orderbook = await self.exchange.fetch_order_book(symbol, limit=depth)
+            orderbook = await self._safe_ccxt_call(self.exchange.fetch_order_book, symbol, limit=depth)
             bids = orderbook["bids"]
             asks = orderbook["asks"]
 
@@ -363,7 +366,7 @@ class DataPipeline:
         현재 적용 혹은 고지된 펀딩비 (Funding Rate)를 조회합니다.
         """
         try:
-            funding = await self.exchange.fetch_funding_rate(symbol)
+            funding = await self._safe_ccxt_call(self.exchange.fetch_funding_rate, symbol)
             return float(funding.get("fundingRate", 0.0))
         except Exception as e:
             error_msg = str(e).lower()
@@ -372,3 +375,35 @@ class DataPipeline:
             else:
                 logger.warning(f"[{symbol}] 펀딩비 조회 실패: {e}")
             return 0.0
+
+    @with_exponential_backoff(max_retries=3)
+    async def fetch_top_volume_tickers(self, limit: int = 15) -> list:
+        """
+        최근 24시간 거래대금(Quote Volume) 기준 상위 15개 종목을 동적으로 추출합니다.
+        IP 차단(Rate Limit) 방지를 위해 단일 fetch_tickers() API를 호출합니다.
+        """
+        try:
+            tickers = await self._safe_ccxt_call(self.exchange.fetch_tickers)
+            
+            # USDT 선물 마켓 필터링 (CCXT 포맷: "BTC/USDT:USDT" 등)
+            usdt_futures = {
+                k: v
+                for k, v in tickers.items()
+                if k.endswith("/USDT:USDT")
+            }
+            
+            # 거래대금(quoteVolume) 기준으로 내림차순 정렬
+            sorted_tickers = sorted(
+                usdt_futures.items(),
+                key=lambda x: x[1].get("quoteVolume") or (x[1].get("volume", 0.0) * x[1].get("close", 0.0)),
+                reverse=True
+            )
+            
+            top_symbols = [item[0] for item in sorted_tickers[:limit]]
+            logger.info(f"📊 [Screener] 24시간 거래대금 상위 {limit} 종목 선정 완료: {top_symbols}")
+            return top_symbols
+        except Exception as e:
+            logger.error(f"❌ [Screener] 상위 거래대금 종목 추출 실패: {e}")
+            # 예외 시 settings에 등록된 기본 폴백 리스트를 반환
+            fallback_list = getattr(settings, "DEFAULT_FALLBACK_SYMBOLS", [])
+            return fallback_list[:limit]

@@ -6,13 +6,15 @@ from datetime import datetime, timezone, timedelta
 import pandas as pd
 from config import logger, settings
 import numpy as np
+# [pandas_ta + Numpy 2.x 호환성 패치] pandas_ta 내부 NaN 임포트 오류 우회
+np.NaN = np.nan
 import traceback
 import gc
 import time
 
 # [V18.5.1] 데이터 부족/정적 데이터로 인한 Numpy 경고(0나누기 등) 전역 억제
 np.seterr(divide="ignore", invalid="ignore")
-from database import check_db_connection, MarketSnapshot, AsyncSessionLocal
+from database import check_db_connection, AsyncSessionLocal
 from data_pipeline import DataPipeline
 from strategy import StrategyEngine, PortfolioState
 from risk_management import RiskManager
@@ -34,33 +36,13 @@ def get_today_0000_utc_timestamp() -> int:
 
 def calc_next_refresh_seconds() -> float:
     """
-    다음 종목 리프레시 시점(UTC 02:15부터 3시간 간격)까지 남은 초(seconds)를 계산합니다.
-    (예: 02:15, 05:15, 08:15, 11:15, 14:15, 17:15, 20:15, 23:15)
+    다음 종목 리프레시 시점(4시간 간격 정각)까지 남은 초(seconds)를 계산합니다.
+    (예: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC)
     """
-    now_utc = datetime.now(timezone.utc)
-
-    # 설정된 간격(SYMBOL_REFRESH_INTERVAL)으로 오늘 후보 생성
-    interval = settings.SYMBOL_REFRESH_INTERVAL
-    candidates = []
-    # 02:15부터 시작하여 24시간을 해당 간격으로 나눈 후보 생성
-    for h in range(2, 26, interval):
-        if h < 24:
-            candidates.append(
-                now_utc.replace(hour=h, minute=15, second=0, microsecond=0)
-            )
-        else:
-            # 다음날 첫 후보
-            candidates.append(
-                now_utc.replace(hour=2, minute=15, second=0, microsecond=0)
-                + timedelta(days=1)
-            )
-
-    # 현재 시각 이후의 가장 빠른 후보를 찾음
-    for target in candidates:
-        if target > now_utc:
-            return (target - now_utc).total_seconds()
-
-    return interval * 3600  # Fallback
+    now = time.time()
+    interval_sec = 4 * 3600
+    next_time = (int(now) // interval_sec + 1) * interval_sec
+    return float(next_time - now)
 
 
 def is_funding_fee_cutoff() -> bool:
@@ -163,7 +145,6 @@ cvd_history: dict[str, list] = {}
 
 # [V18 ML] 호가창 불균형(Imbalance) TWAP 내역 및 스냅샷 큐
 imbalance_history: dict[str, list] = {}
-snapshot_queue: list[dict] = []
 
 # [V18.6] 동시 진입 시그널 우선순위 큐
 entry_signal_queue: list[dict] = []
@@ -266,6 +247,10 @@ async def process_closed_kline(
     """
     if symbol not in df_map:
         return
+
+    # 캔들 마감 시, 해당 종목에 대기 중인 진입 주문이 있다면 경과 봉 수를 1 증가시킴
+    if symbol in execution.pending_entries:
+        execution.pending_entries[symbol]["bars_elapsed"] = execution.pending_entries[symbol].get("bars_elapsed", 0) + 1
 
     # [V18.2] 데이터 업데이트는 포지션 유무와 상관없이 지속 (지표 연속성 확보)
     # 진입 체크만 하단에서 필터링합니다.
@@ -425,39 +410,11 @@ async def process_closed_kline(
             except Exception as hft_err:
                 logger.warning(f"[{symbol}] HFT 피처 조회 중 일시적 오류: {hft_err}")
 
-        snapshot = {
-            "timestamp": new_dt.to_pydatetime()
-            if hasattr(new_dt, "to_pydatetime")
-            else new_dt,
-            "symbol": symbol,
-            "rsi": curr_rsi,
-            "macd_hist": macd_h,
-            "adx": adx_14,
-            "atr_14": curr_atr_14,
-            "atr_200": curr_atr_200,
-            "ema_1h_dist": ema_1h_dist,
-            "ema_15m_dist": ema_15m_dist,
-            "cvd_5m_sum": float(cvd_5m_delta),
-            "cvd_15m_sum": float(cvd_15m_delta),
-            "cvd_delta_slope": float(cvd_slope),
-            "bid_ask_imbalance": float(twap_imbalance),
-            "funding_rate_match": int(fr_match),  # 필드명 및 타입 수정
-            "log_vol_zscore": float(
-                df_ind.iloc[-1].get("Log_Vol_ZScore", 0.0)
-            ),  # 명칭 단축
-            "correlation_max": float(max_corr),
-            "nofi_1m": float(hft_feats.get("nofi_1m", 0.0)),  # 필드 추가
-        }
-
         # 3. [V18.1] 신규 진입 필터 (데이터 업데이트 이후 수행)
         if symbol in execution.active_positions or symbol in execution.pending_entries:
-            # 포지션이 있더라도 마감 스냅샷 기록은 진행
-            snapshot["long_score"] = 0
-            snapshot["short_score"] = 0
-            snapshot_queue.append(snapshot)
             return
 
-        decision = strategy.check_entry(
+        decision = await strategy.check_entry(
             symbol=symbol,
             df=df_ind,
             portfolio=portfolio,
@@ -469,13 +426,6 @@ async def process_closed_kline(
             hft_features=hft_feats,
             interval=interval,
         )
-
-        # 3. [V18] 스코어 및 확장 피처를 MarketSnapshot에 기록 (DB 적재용)
-        snapshot["buy_ratio"] = decision.get("buy_ratio", 0.5)
-        snapshot["long_score"] = decision.get("long_score")
-        snapshot["short_score"] = decision.get("short_score")
-
-        snapshot_queue.append(snapshot)
 
         if decision["signal"]:
             # [V19] 명시적으로 선물(future) 계좌만 조회하여 Margin API 호출 및 타임아웃 방지
@@ -625,32 +575,6 @@ async def orderbook_twap_loop(pipeline: DataPipeline):
         await asyncio.sleep(5)
 
 
-async def snapshot_flush_loop():
-    """
-    [V18 ML] DB 쓰기 병목(I/O 부하) 방지를 위해 큐에 쌓인
-    전 종목의 MarketSnapshot 데이터를 단일 트랜잭션으로 bulk_insert 합니다.
-    """
-    global snapshot_queue
-    while True:
-        await asyncio.sleep(10)  # 10초마다 큐 점검
-        if len(snapshot_queue) > 0:
-            # 캔들 마감이 종목별로 동시 다발적으로 이뤄지므로 전부 찰 때까지 잠시(3초) 대기
-            await asyncio.sleep(3)
-
-            items_to_insert = snapshot_queue[:]
-            snapshot_queue.clear()
-
-            try:
-                # SQLAlchemy ORM add_all을 활용한 Batch Insert
-                async with AsyncSessionLocal() as session:
-                    records = [MarketSnapshot(**item) for item in items_to_insert]
-                    session.add_all(records)
-                    await session.commit()
-                # 불필요한 로그 생략 (정상 작동 시 조용히)
-            except Exception as e:
-                logger.error(f"[Snapshot Bulk Insert] 처리 실패: {e}")
-
-
 async def signal_processor_loop(execution: ExecutionEngine):
     """
     [V18.6] 여러 종목의 캔들이 동시에 마감될 때 발생하는 복수의 진입 시그널을 수집하여,
@@ -708,14 +632,8 @@ async def signal_processor_loop(execution: ExecutionEngine):
                     market_data=sig["market_data"],
                 )
 
-                # 진입이 실제로 시작된 경우에만 등록
-                if entry_success:
-                    portfolio.register_position(
-                        symbol=sig["symbol"],
-                        direction=sig["direction"],
-                        entry_price=sig["market_price"],
-                        atr=sig["atr_val"],
-                    )
+                # 비블로킹 모드이므로 체결 시점(check_pending_orders_state)에 등록이 수행됩니다.
+                pass
             except Exception as e:
                 logger.error(
                     f"[Signal Processor] {sig['symbol']} 체결 시도 중 내부 에러: {e}"
@@ -739,84 +657,98 @@ async def chandelier_monitoring_loop(
         거래소 SL이 먼저 체결되면 portfolio 상태가 sync되어 중복 청산을 방지합니다.
     """
     while True:
-        await asyncio.sleep(30)  # 30초 주기 점검
+        await asyncio.sleep(30)  # 30쳈
+async def target_refresh_loop(pipeline: DataPipeline, execution: ExecutionEngine):
+    """
+    4시간마다 Top Volume 15종목을 갱신하고 WebSocket을 재연결합니다.
+    사용자의 수동 요청(refresh_event)이 있을 경우 즉시 수행합니다.
+    """
+    global \
+        ws_reconnect_flag, \
+        refresh_event, \
+        df_map, \
+        htf_df_1h, \
+        htf_df_15m, \
+        cvd_data, \
+        imbalance_history
 
-        # 포트폴리오에 등록된 심볼 목록 복사 (순회 중 dict 변경 방지)
-        tracked_symbols = list(portfolio.positions.keys())
-
-        if not tracked_symbols:
-            continue
+    while True:
+        wait_sec = calc_next_refresh_seconds()
+        logger.info(
+            f"⏳ [Target Refresh] 다음 정기 심볼 갱신까지 {wait_sec / 3600:.1f} 시간 대기합니다. (수동 요청 대기 중)"
+        )
 
         try:
-            # [Fix] 실시간 현재가(Tickers) 조회 (과거 3분봉 꼬리로 인한 오작동 방지)
-            tickers = await execution.exchange.fetch_tickers(tracked_symbols)
+            # 정기 스케줄까지 대기하되, 수동 이벤트 발생 시 즉시 깨어남
+            await asyncio.wait_for(refresh_event.wait(), timeout=wait_sec)
+            logger.info("⚡ [Target Refresh] 수동 즉시 새로고침 요청 감지!")
+            refresh_event.clear()
+        except asyncio.TimeoutError:
+            logger.info("🔄 [Target Refresh] 정기 심볼 갱신 타이머 작동!")
+
+        # 1. 새 종목 리스트 추출 (24시간 거래대금 상위 15개)
+        try:
+            raw_symbols = await pipeline.fetch_top_volume_tickers(
+                limit=15 + len(settings.BLACKLIST_SYMBOLS)
+            )
+            # 블랙리스트 필터링 적용
+            new_target_symbols = [
+                s for s in raw_symbols if s not in settings.BLACKLIST_SYMBOLS
+            ][:15]
         except Exception as e:
-            logger.error(f"[Chandelier Loop] Tickers Fetch Error: {e}")
+            logger.error(f"심볼 갱신 중 에러 발생: {e}. 다음 주기로 연기합니다.")
             continue
 
-        for symbol in tracked_symbols:
-            pos = portfolio.positions.get(symbol)
-            if pos is None:
-                continue
-
-            ticker = tickers.get(symbol)
-            if ticker is None or ticker.get("last") is None:
-                continue
-
-            # 실시간 현재가
-            curr_price = float(ticker["last"])
-            # [V18.2] 실시간 ATR 추출 (df_map에서 최신값 가져오기)
-            # 3분봉 데이터프레임에서 최신 ATR_14 컬럼 확보
-            df_curr = df_map.get(symbol)
-            if df_curr is not None and "ATR_14" in df_curr.columns:
-                curr_atr = float(df_curr["ATR_14"].iloc[-1])
-            else:
-                # 백업용으로 등록 시의 ATR 사용
-                curr_atr = pos.get("atr", curr_price * 0.005)
-
-            # 샹들리에 손절선 갱신 + 돌파 여부 확인
-            ce_result = strategy.check_chandelier_exit(
-                symbol=symbol,
-                portfolio=portfolio,
-                current_price=curr_price,
-                current_high=curr_price,
-                current_low=curr_price,
-                current_atr=float(curr_atr),
-            )
-
-            if ce_result["exit"]:
+        # 2. 보유 포지션 보호 (Retention)
+        active_coins = list(execution.active_positions.keys())
+        for coin in active_coins:
+            if coin not in new_target_symbols:
                 logger.warning(
-                    f"[Chandelier Exit] 🚨 {symbol} 청산 트리거! "
-                    f"현재가={curr_price:.4f}, 손절선={ce_result['chandelier_stop']:.4f}"
+                    f"🛡️ [Target Refresh] {coin} 종목은 포지션이 있어 감시 리스트에 강제 유지됩니다."
                 )
-                # 포지션 방향에 따라 청산 주문 발송
-                direction = pos["direction"]
-                close_side = "sell" if direction == "LONG" else "buy"
+                new_target_symbols.append(coin)
 
-                try:
-                    if symbol in execution.active_positions:
-                        stop_price = ce_result["chandelier_stop"]
-                        logger.warning(
-                            f"[Chandelier Exit] {symbol} 시장가 강제 청산 시도 | "
-                            f"사이드={close_side}, 손절선={stop_price:.4f}"
-                        )
+        # 3. 변경사항이 있는지 확인
+        global_target_names = getattr(settings, "CURRENT_TARGET_SYMBOLS", [])
+        if set(new_target_symbols) == set(global_target_names):
+            logger.info(
+                "✅ [Target Refresh] 감시 종목에 변화가 없습니다. 연결을 유지합니다."
+            )
+            continue
 
-                        # [V18.2] 통합 청산 메서드 호출 (REAL/DRY 및 주문취소/DB기록 일괄 처리)
-                        await execution.close_position_market(
-                            symbol, reason="Chandelier Exit"
-                        )
+        logger.info(
+            f"📈 [Target Refresh] 감시 종목이 변경되었습니다. (기존 {len(global_target_names)} -> 신규 {len(new_target_symbols)})"
+        )
 
-                        # 포지션 트래킹 삭제 로직 제거 (V18)
-                        # - 여기서 수동으로 삭제해버리면 state_machine_loop가 체결(청산)을 감지하지 못해
-                        #   DB 기록(Trade, TradeLog) 로직이 통째로 씹히는 치명적 버그가 발생합니다.
-                        # - 따라서 봇은 오직 거래소 청산 호출만 날리고, 추적망 삭제와 DB 기록은
-                        #   execution.check_active_positions_state() 폴링 루프에 전적으로 위임합니다.
+        # 4. 차집합 웜업 (Differential Warm-up)
+        # 새로 추가된 종목만 REST API 호출
+        added_symbols = set(new_target_symbols) - set(global_target_names)
+        await warm_up_differential_data(added_symbols, pipeline)
 
-                except Exception as e:
-                    logger.error(f"[Chandelier Exit] {symbol} 청산 중 에러: {e}")
+        # 5. 가비지 컬렉션 (더 이상 감시하지 않는 Old Tickers 메모리 정리)
+        removed_symbols = set(global_target_names) - set(new_target_symbols)
+        if removed_symbols:
+            logger.info(
+                f"🧹 [Target Refresh] 감시 제외 종목 메모리 정리: {removed_symbols}"
+            )
+            for rm_sym in removed_symbols:
+                df_map.pop(rm_sym, None)
+                htf_df_1h.pop(rm_sym, None)
+                htf_df_15m.pop(rm_sym, None)
+                cvd_data.pop(rm_sym, None)
+                imbalance_history.pop(rm_sym, None)
+                portfolio.close_position(
+                    rm_sym
+                )  # 혹은 남아있는 포트폴리오 가상 상태도 정리
 
+        # 6. Global 상태 업데이트 및 WebSocket 재시작 신호 발송
+        settings.CURRENT_TARGET_SYMBOLS = new_target_symbols
+        ws_reconnect_flag = True
 
 # [V18] 동적 심볼 갱신을 위한 웹소켓 재연결 플래그 및 즉시 새로고침 이벤트
+ws_reconnect_flag = False
+refresh_event = asyncio.Event()
+# 동적 심볼 겻신을 위한 웹소켓 재연결 플래그 및 즉시 새로고침 이뢤트
 ws_reconnect_flag = False
 refresh_event = asyncio.Event()
 
@@ -1051,6 +983,11 @@ async def state_machine_loop(execution: ExecutionEngine):
             await asyncio.sleep(3)
         except Exception as e:
             logger.error(f"[State Machine Error]: {e}")
+            logger.error(traceback.format_exc())
+            try:
+                notifier.send_message(f"⚠️ [State Machine Error] 발생: {e}\n{traceback.format_exc()[-300:]}")
+            except Exception as tg_e:
+                logger.error(f"텔레그램 전송 실패: {tg_e}")
             await asyncio.sleep(5)
 
 
@@ -1081,9 +1018,14 @@ async def main():
 
         app = setup_telegram_bot(execution, refresh_event)
         if app:
-            await app.initialize()
-            await app.start()
-            await app.updater.start_polling()
+            try:
+                await app.initialize()
+                await app.start()
+                await app.updater.start_polling()
+                logger.info("🤖 텔레그램 폴링 루프 시작 완료.")
+            except Exception as tg_err:
+                logger.error(f"⚠️ [Telegram] 텔레그램 봇 기동 실패 (텔레그램 제외하고 봇 기동 속행): {tg_err}")
+                app = None
 
         # [V18] 포트폴리오 최초 종목 15개 선정 및 웜업 (HFT Pipeline 가동 전)
         if not getattr(settings, "CURRENT_TARGET_SYMBOLS", None):
@@ -1112,12 +1054,11 @@ async def main():
         # [V18] 백그라운드 태스크는 최초 진입 시 한 번만 가동
         asyncio.create_task(htf_refresh_loop(pipeline))
         asyncio.create_task(orderbook_twap_loop(pipeline))
-        asyncio.create_task(snapshot_flush_loop())
         asyncio.create_task(signal_processor_loop(execution))
         # [V18.3] 12시간 주기 동적 타임프레임 갱신 루프 가동
         asyncio.create_task(target_refresh_loop(pipeline, execution))
         logger.info(
-            "[V18] 백그라운드 태스크(HTF / TWAP / Snapshot / Signal Processor / Refresher) 가동 완료."
+            "[V18] 백그라운드 태스크(HTF / TWAP / Signal Processor / Refresher) 가동 완료."
         )
 
         # V18 메인 웹소켓 루프 / 스테이트 머신 / 샹들리에 모니터링 병렬 가동
@@ -1133,7 +1074,7 @@ async def main():
                     shutdown_event.set()
 
         # 텔레그램에서 넘겨받은 이벤트 사용 (혹은 새로 생성)
-        shutdown_event = app.bot_data.get("shutdown_event", asyncio.Event())
+        shutdown_event = app.bot_data.get("shutdown_event", asyncio.Event()) if app else asyncio.Event()
 
         task_state = asyncio.create_task(
             guarded(state_machine_loop(execution), "StateMachine")

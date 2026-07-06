@@ -226,7 +226,7 @@ class Config:
 
         # 4. Global Parameters
         self.STRATEGY_VERSION = self._get_str("STRATEGY_VERSION", "V18")
-        self.TIMEFRAME = self._get_str("TIMEFRAME", "3m")
+        self.TIMEFRAME = self._get_str("TIMEFRAME", "1h")
         self.RISK_PERCENTAGE = self._get_float("RISK_PERCENTAGE", 0.005)
         self.LEVERAGE = self._get_int("LEVERAGE", 5)
         self.TIME_EXIT_MINUTES = self._get_int("TIME_EXIT_MINUTES", 60)
@@ -292,17 +292,7 @@ class Config:
         self.HTF_TIMEFRAME_1H = self._get_str("HTF_TIMEFRAME_1H", "1h")
         self.HTF_TIMEFRAME_15M = self._get_str("HTF_TIMEFRAME_15M", "15m")
 
-        # 이전 버전 키는 경고만 억제하고 동작에는 영향이 없도록 알려진 키로 등록합니다.
-        self._register_deprecated_keys()
-        self._remember_keys("BOT_READY_ENTRY_CONFIG", aliases=["bot_ready_entry_config"])
-        self._remember_keys("SCORING_RULES", aliases=["scoring_rules"])
-        self._remember_keys("SCORING_THRESHOLDS", aliases=["scoring_thresholds"])
-        self._remember_keys("ENTRY_SCORING_LONG", aliases=["entry_scoring_long"])
-        self._remember_keys("ENTRY_SCORING_SHORT", aliases=["entry_scoring_short"])
-
         self._apply_bot_ready_entry_config()
-
-        self.rebuild_scoring_rules()
         self._log_unknown_keys()
 
     def _get_settings_mtime(self):
@@ -348,7 +338,6 @@ class Config:
         self.ATR_RATIO_MULT = self._get_float("ATR_RATIO_MULT", 1.2)
         self.ATR_LONG_LEN = self._get_int("ATR_LONG_LEN", 200)
         self._apply_bot_ready_entry_config()
-        self.rebuild_scoring_rules()
         return True
 
     # [V18.6] API 장애 시 사용할 기본 메이저 알트코인 리스트
@@ -379,13 +368,6 @@ class Config:
                 self._known_keys.add(alias)
                 self._known_keys.add(str(alias).lower())
                 self._known_keys.add(str(alias).upper())
-
-    def _register_deprecated_keys(self):
-        deprecated = {
-            "ADX_THRESHOLD",  # legacy key; replaced by newer scoring/boost params
-        }
-        for key in deprecated:
-            self._remember_keys(key)
 
     def _first_raw(self, key: str, aliases=None):
         for candidate in [key] + (aliases or []):
@@ -462,207 +444,6 @@ class Config:
         unknown = sorted(k for k in self._data.keys() if k not in self._known_keys)
         if unknown:
             logger.warning("[Config] 미사용/알수없음 설정 키 감지: %s", ", ".join(unknown))
-
-    def rebuild_scoring_rules(self):
-        """settings.json 으로부터 스코어링 규칙을 다시 빌드합니다."""
-        raw_scoring_rules = self._first_raw("SCORING_RULES", aliases=["scoring_rules"])
-
-        def _normalize_tiers(tiers):
-            if not isinstance(tiers, list):
-                return []
-
-            normalized = []
-            for tier in tiers:
-                if not isinstance(tier, (list, tuple)) or len(tier) < 2:
-                    continue
-
-                try:
-                    threshold = float(tier[0])
-                    weight = float(tier[1])
-                except (TypeError, ValueError):
-                    continue
-
-                if len(tier) >= 3:
-                    normalized.append((threshold, weight, tier[2]))
-                else:
-                    normalized.append((threshold, weight))
-            return normalized
-
-        def _normalize_regime_map(regime_map):
-            if not isinstance(regime_map, dict):
-                return {}
-            return {feature: _normalize_tiers(tiers) for feature, tiers in regime_map.items()}
-
-        if isinstance(raw_scoring_rules, dict):
-            long_raw = raw_scoring_rules.get("long", {})
-            short_raw = raw_scoring_rules.get("short", {})
-            weights_raw = raw_scoring_rules.get("weights", {})
-
-            if isinstance(long_raw, dict) and isinstance(short_raw, dict):
-                self.SC_RULES_LONG = {
-                    "trend": _normalize_regime_map(long_raw.get("trend", {})),
-                    "mean_reversion": _normalize_regime_map(
-                        long_raw.get("mean_reversion", {})
-                    ),
-                }
-                self.SC_RULES_SHORT = {
-                    "trend": _normalize_regime_map(short_raw.get("trend", {})),
-                    "mean_reversion": _normalize_regime_map(
-                        short_raw.get("mean_reversion", {})
-                    ),
-                }
-
-                if isinstance(weights_raw, dict):
-                    self.SCORING_WEIGHTS = weights_raw
-                else:
-                    self.SCORING_WEIGHTS = {
-                        "atr": {"2": self._get_int("WEIGHT_ATR_2", 2)},
-                        "adx_boost": {"1": self._get_int("WEIGHT_ADX_1", 1)},
-                        "fr_boost": {"2": self._get_int("WEIGHT_FR_2", 2)},
-                        "htf_bias": {"2": self._get_int("WEIGHT_HTF_BIAS", 2)},
-                        "mtf_moment": {"2": self._get_int("WEIGHT_MTF_MOMENT", 2)},
-                        "mtf_regime": {"1": self._get_int("WEIGHT_MTF_REGIME", 1)},
-                        "vwap_dist": {"2": self._get_int("WEIGHT_VWAP_DIST", 2)},
-                    }
-                return
-
-        self.L_MACD_T1 = self._get_float("L_MACD_T1", 65)
-        self.L_MACD_W1 = self._get_float("L_MACD_W1", 1)
-        self.L_MACD_T2 = self._get_float("L_MACD_T2", 75)
-        self.L_MACD_W2 = self._get_float("L_MACD_W2", 2)
-        self.L_MACD_T4 = self._get_float("L_MACD_T4", 85)
-        self.L_MACD_W4 = self._get_float("L_MACD_W4", 4)
-        self.L_CVD_T1 = self._get_float("L_CVD_T1", 70)
-        self.L_CVD_W1 = self._get_float("L_CVD_W1", 1)
-        self.L_CVD_T2 = self._get_float("L_CVD_T2", 85)
-        self.L_CVD_W2 = self._get_float("L_CVD_W2", 2)
-        self.L_IMBAL_T1 = self._get_float("L_IMBAL_T1", 80)
-        self.L_IMBAL_W1 = self._get_float("L_IMBAL_W1", 1)
-        self.L_NOFI_T1 = self._get_float("L_NOFI_T1", 85)
-        self.L_NOFI_W1 = self._get_float("L_NOFI_W1", 1)
-        self.L_OI_T1 = self._get_float("L_OI_T1", 70)
-        self.L_OI_W1 = self._get_float("L_OI_W1", 2)
-        self.L_OI_T2 = self._get_float("L_OI_T2", 85)
-        self.L_OI_W2 = self._get_float("L_OI_W2", 4)
-        self.L_TICK_T1 = self._get_float("L_TICK_T1", 85)
-        self.L_TICK_W1 = self._get_float("L_TICK_W1", 1)
-        self.L_VOL_T1 = self._get_float("L_VOL_T1", 1.9)
-        self.L_VOL_W1 = self._get_float("L_VOL_W1", 1)
-        self.L_BUY_T1 = self._get_int("L_BUY_T1", 15)
-        self.L_BUY_W1 = self._get_int("L_BUY_W1", 1)
-
-        self.S_MACD_T1 = self._get_float("S_MACD_T1", 65)
-        self.S_MACD_W1 = self._get_float("S_MACD_W1", 1)
-        self.S_MACD_T2 = self._get_float("S_MACD_T2", 75)
-        self.S_MACD_W2 = self._get_float("S_MACD_W2", 2)
-        self.S_MACD_T4 = self._get_float("S_MACD_T4", 85)
-        self.S_MACD_W4 = self._get_float("S_MACD_W4", 4)
-        self.S_CVD_T1 = self._get_float("S_CVD_T1", 70)
-        self.S_CVD_W1 = self._get_float("S_CVD_W1", 1)
-        self.S_CVD_T2 = self._get_float("S_CVD_T2", 85)
-        self.S_CVD_W2 = self._get_float("S_CVD_W2", 2)
-        self.S_IMBAL_T1 = self._get_float("S_IMBAL_T1", 65)
-        self.S_IMBAL_W1 = self._get_float("S_IMBAL_W1", 1)
-        self.S_IMBAL_T2 = self._get_float("S_IMBAL_T2", 80)
-        self.S_IMBAL_W2 = self._get_float("S_IMBAL_W2", 2)
-        self.S_NOFI_T1 = self._get_float("S_NOFI_T1", 70)
-        self.S_NOFI_W1 = self._get_float("S_NOFI_W1", 1)
-        self.S_NOFI_T2 = self._get_float("S_NOFI_T2", 85)
-        self.S_NOFI_W2 = self._get_float("S_NOFI_W2", 2)
-        self.S_OI_T1 = self._get_float("S_OI_T1", 70)
-        self.S_OI_W1 = self._get_float("S_OI_W1", 1)
-        self.S_OI_T2 = self._get_float("S_OI_T2", 85)
-        self.S_OI_W2 = self._get_float("S_OI_W2", 2)
-        self.S_TICK_T1 = self._get_float("S_TICK_T1", 70)
-        self.S_TICK_W1 = self._get_float("S_TICK_W1", 1)
-        self.S_TICK_T2 = self._get_float("S_TICK_T2", 85)
-        self.S_TICK_W2 = self._get_float("S_TICK_W2", 2)
-        self.S_VOL_T1 = self._get_float("S_VOL_T1", 1.4)
-        self.S_VOL_W1 = self._get_float("S_VOL_W1", 1)
-        self.S_VOL_T2 = self._get_float("S_VOL_T2", 1.9)
-        self.S_VOL_W2 = self._get_float("S_VOL_W2", 2)
-        self.S_RSI_T1 = self._get_float("S_RSI_T1", 35)
-        self.S_RSI_W1 = self._get_float("S_RSI_W1", 1)
-        self.S_RSI_T2 = self._get_float("S_RSI_T2", 25)
-        self.S_RSI_W2 = self._get_float("S_RSI_W2", 2)
-        self.S_BUY_T1 = self._get_float("S_BUY_T1", 25)
-        self.S_BUY_W1 = self._get_float("S_BUY_W1", 1)
-        self.S_BUY_T2 = self._get_float("S_BUY_T2", 10)
-        self.S_BUY_W2 = self._get_float("S_BUY_W2", 2)
-
-        self.SC_RULES_LONG = {
-            "trend": {
-                "macd_hist": [
-                    (self.L_MACD_T1, self.L_MACD_W1),
-                    (self.L_MACD_T2, self.L_MACD_W2),
-                    (self.L_MACD_T4, self.L_MACD_W4),
-                ],
-                "cvd_delta_slope": [
-                    (self.L_CVD_T1, self.L_CVD_W1),
-                    (self.L_CVD_T2, self.L_CVD_W2),
-                ],
-                "bid_ask_imbalance": [(self.L_IMBAL_T1, self.L_IMBAL_W1)],
-                "nofi_1m": [(self.L_NOFI_T1, self.L_NOFI_W1)],
-                "open_interest": [
-                    (self.L_OI_T1, self.L_OI_W1),
-                    (self.L_OI_T2, self.L_OI_W2),
-                ],
-                "tick_count": [(self.L_TICK_T1, self.L_TICK_W1)],
-                "log_volume_zscore": [(self.L_VOL_T1, self.L_VOL_W1, "val")],
-            },
-            "mean_reversion": {"rsi": [], "buy_ratio": [(self.L_BUY_T1, self.L_BUY_W1)]},
-        }
-
-        self.SC_RULES_SHORT = {
-            "trend": {
-                "macd_hist": [
-                    (self.S_MACD_T1, self.S_MACD_W1),
-                    (self.S_MACD_T2, self.S_MACD_W2),
-                    (self.S_MACD_T4, self.S_MACD_W4),
-                ],
-                "cvd_delta_slope": [
-                    (self.S_CVD_T1, self.S_CVD_W1),
-                    (self.S_CVD_T2, self.S_CVD_W2),
-                ],
-                "bid_ask_imbalance": [
-                    (self.S_IMBAL_T1, self.S_IMBAL_W1),
-                    (self.S_IMBAL_T2, self.S_IMBAL_W2),
-                ],
-                "nofi_1m": [
-                    (self.S_NOFI_T1, self.S_NOFI_W1),
-                    (self.S_NOFI_T2, self.S_NOFI_W2),
-                ],
-                "open_interest": [
-                    (self.S_OI_T1, self.S_OI_W1),
-                    (self.S_OI_T2, self.S_OI_W2),
-                ],
-                "tick_count": [
-                    (self.S_TICK_T1, self.S_TICK_W1),
-                    (self.S_TICK_T2, self.S_TICK_W2),
-                ],
-                "log_volume_zscore": [
-                    (self.S_VOL_T1, self.S_VOL_W1, "val"),
-                    (self.S_VOL_T2, self.S_VOL_W2, "val"),
-                ],
-            },
-            "mean_reversion": {
-                "rsi": [(self.S_RSI_T1, self.S_RSI_W1), (self.S_RSI_T2, self.S_RSI_W2)],
-                "buy_ratio": [
-                    (self.S_BUY_T1, self.S_BUY_W1),
-                    (self.S_BUY_T2, self.S_BUY_W2),
-                ],
-            },
-        }
-
-        self.SCORING_WEIGHTS = {
-            "atr": {"2": self._get_int("WEIGHT_ATR_2", 2)},
-            "adx_boost": {"1": self._get_int("WEIGHT_ADX_1", 1)},
-            "fr_boost": {"2": self._get_int("WEIGHT_FR_2", 2)},
-            "htf_bias": {"2": self._get_int("WEIGHT_HTF_BIAS", 2)},
-            "mtf_moment": {"2": self._get_int("WEIGHT_MTF_MOMENT", 2)},
-            "mtf_regime": {"1": self._get_int("WEIGHT_MTF_REGIME", 1)},
-            "vwap_dist": {"2": self._get_int("WEIGHT_VWAP_DIST", 2)},
-        }
 
 
 class KSTFormatter(logging.Formatter):

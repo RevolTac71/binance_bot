@@ -9,11 +9,17 @@ import time
 
 class TelegramNotifier:
     def __init__(self):
-        from config import settings
-        self.bot_token = settings.TELEGRAM_BOT_TOKEN
-        self.chat_id = settings.TELEGRAM_CHAT_ID
-        self.base_url = f"https://api.telegram.org/bot{self.bot_token}"
+        self._bot_token = None
+        self._chat_id = None
+        self._base_url = None
         self._session = None
+
+    def _ensure_settings(self):
+        if self._bot_token is None:
+            from config import settings
+            self._bot_token = settings.TELEGRAM_BOT_TOKEN
+            self._chat_id = settings.TELEGRAM_CHAT_ID
+            self._base_url = f"https://api.telegram.org/bot{self._bot_token}"
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -50,21 +56,22 @@ class TelegramNotifier:
         429 에러(Too Many Requests) 발생 시 retry_after 지시만큼 대기 후 재시도합니다.
         """
         from config import logger
+        self._ensure_settings()
 
-        if not self.bot_token or not self.chat_id:
+        if not self._bot_token or not self._chat_id:
             logger.warning(
                 "텔레그램 봇 토큰이나 Chat ID가 설정되지 않아 알림을 스킵합니다."
             )
             return
 
-        url = f"{self.base_url}/sendMessage"
+        url = f"{self._base_url}/sendMessage"
         chunks = self._chunk_text(text)
 
         for i, chunk in enumerate(chunks, start=1):
             chunk_prefix = f"[{i}/{len(chunks)}]\n" if len(chunks) > 1 else ""
             message = f"{chunk_prefix}{chunk}"
 
-            payload = {"chat_id": self.chat_id, "text": message, "parse_mode": "HTML"}
+            payload = {"chat_id": self._chat_id, "text": message, "parse_mode": "HTML"}
             sent = False
 
             for attempt in range(max_retries):
@@ -93,7 +100,7 @@ class TelegramNotifier:
                         # HTML 파싱 오류(400)인 경우 안전한 평문으로 1회 폴백
                         if response.status == 400 and "can't parse entities" in text_err.lower():
                             payload = {
-                                "chat_id": self.chat_id,
+                                "chat_id": self._chat_id,
                                 "text": self._strip_html_tags(message),
                             }
                             logger.warning("HTML 파싱 오류 감지. parse_mode 없이 재시도합니다.")

@@ -20,6 +20,7 @@ strategy.py  —  StrategyEngine V18
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 import pandas as pd
 from typing import Optional
 from scipy.stats import percentileofscore
@@ -213,182 +214,13 @@ class PortfolioState:
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 전략 엔진 (V18 MTF + Chandelier + Portfolio + CVD)
+# 전략 인터페이스 및 구체 전략 클래스 (V18.6)
 # ────────────────────────────────────────────────────────────────────────────
-class StrategyEngine:
-    """[V18] 다중 시간 프레임 적응형 스캘핑 전략 엔진
 
-    Data Flow:
-        main.py (WebSocket)
-            └─→ process_closed_kline()
-                    ├─ df_3m  : 3분봉 (진입 트리거)
-                    ├─ df_1h  : 1시간봉 (거시 방향, htf_refresh_loop가 주기 공급)
-                    ├─ df_15m : 15분봉 (추세 강도/모멘텀, htf_refresh_loop가 주기 공급)
-                    └─ cvd_trend : "BUY_PRESSURE" | "SELL_PRESSURE" | None (Placeholder)
-                            └─→ strategy.check_entry(df_3m, df_1h, df_15m, cvd_trend)
-    """
-
-    def __init__(self, exchange=None):
-        self.exchange = exchange
-
-        # 세션 필터 (VWAP 리셋 후 최소 안정화 봉수)
-        self.session_filter_bars = 30
-
-    # ────────────────────────────────────────────────────────────────────────
-    # 1. HTF 추세 방향 판별 (1시간봉 EMA 배열)
-    # ────────────────────────────────────────────────────────────────────────
-    def get_htf_bias(self, df_1h: Optional[pd.DataFrame]) -> str:
-        """
-        [V18] 1H 봉의 EMA50/200 배열로 거시적 시장 방향을 판단합니다.
-
-        판단 기준:
-          - EMA50 > EMA200 * 1.002 → "BULL"  (완전한 골든크로스 상태)
-          - EMA50 < EMA200 * 0.998 → "BEAR"  (완전한 데드크로스 상태)
-          - 그 외 (근접 = 0.2% 이내) → "NEUTRAL" (배열 혼재, 신중한 접근)
-
-        Returns:
-            "BULL" | "BEAR" | "NEUTRAL"
-        """
-        # HTF 데이터가 없거나 부족하면 중립 반환
-        if df_1h is None or len(df_1h) < 50:
-            return "NEUTRAL"
-
-        last = df_1h.iloc[-1]
-        ema50 = last.get("EMA_50", None)
-        ema200 = last.get("EMA_200", None)
-
-        if ema50 is None or ema200 is None or pd.isna(ema50) or pd.isna(ema200):
-            return "NEUTRAL"
-
-        # EMA200을 기준으로 0.2% 간격 버퍼 적용 (노이즈 필터)
-        buf = ema200 * 0.002
-        if ema50 > ema200 + buf:
-            bias = "BULL"
-        elif ema50 < ema200 - buf:
-            bias = "BEAR"
-        else:
-            bias = "NEUTRAL"
-
-        logger.debug(f"[HTF 1H Bias] EMA50={ema50:.4f}, EMA200={ema200:.4f} → {bias}")
-        return bias
-
-    # ────────────────────────────────────────────────────────────────────────
-    # 2. MTF 추세 강도 / 모멘텀 판별 (15분봉 ADX + MACD)
-    # ────────────────────────────────────────────────────────────────────────
-    def get_mtf_regime(self, df_15m: Optional[pd.DataFrame]) -> dict:
-        """
-        [V18] 15m 봉의 ADX와 MACD로 현재 장세 유형과 모멘텀 방향을 반환합니다.
-
-        Returns:
-            dict:
-                "regime"      : "TREND" | "RANGE"          (장세 유형)
-                "momentum"    : "BULLISH" | "BEARISH" | "NEUTRAL"  (MACD 방향)
-                "adx"         : float | None
-                "adx_sma"     : float | None
-                "macd"        : float | None
-                "macd_signal" : float | None
-        """
-        result = {
-            "regime": "RANGE",  # 데이터 없으면 기본적으로 횡보장으로 가정
-            "momentum": "NEUTRAL",
-            "adx": None,
-            "adx_sma": None,
-            "macd": None,
-            "macd_signal": None,
-        }
-
-        if df_15m is None or len(df_15m) < 100:
-            return result
-
-        last = df_15m.iloc[-1]
-        adx = last.get("ADX_14", None)
-        adx_sma = last.get("ADX_SMA_50", None)
-        macd = last.get("MACD", None)
-        macd_s = last.get("MACD_S", None)
-
-        # ADX 기반 장세 분류 — V18
-        adx_pctl = last.get("ADX_PCTL_80", None)
-        if adx is not None and not pd.isna(adx):
-            result["adx"] = float(adx)
-            if adx_sma is not None and not pd.isna(adx_sma):
-                result["adx_sma"] = float(adx_sma)
-
-            # V18: 백분위수가 있으면 종목별 고유 기준으로 TREND/RANGE 판별
-            if adx_pctl is not None and not pd.isna(adx_pctl):
-                result["regime"] = "TREND" if adx >= float(adx_pctl) else "RANGE"
-            elif adx_sma is not None and not pd.isna(adx_sma):
-                result["regime"] = "TREND" if adx >= float(adx_sma) else "RANGE"
-            else:
-                result["regime"] = "TREND" if adx >= 20.0 else "RANGE"
-
-        # MACD 기반 모멘텀 방향 분류
-        if (
-            macd is not None
-            and macd_s is not None
-            and not pd.isna(macd)
-            and not pd.isna(macd_s)
-        ):
-            result["macd"] = float(macd)
-            result["macd_signal"] = float(macd_s)
-            if macd > macd_s:
-                result["momentum"] = "BULLISH"
-            elif macd < macd_s:
-                result["momentum"] = "BEARISH"
-
-        logger.debug(
-            f"[MTF 15m Regime] ADX={result['adx']}, 장세={result['regime']}, "
-            f"MACD={result['macd']}, 모멘텀={result['momentum']}"
-        )
-        return result
-
-    # ────────────────────────────────────────────────────────────────────────
-    # 3. 샹들리에 청산 확인 (외부 루프에서 호출)
-    # ────────────────────────────────────────────────────────────────────────
-    def check_chandelier_exit(
-        self,
-        symbol: str,
-        portfolio: PortfolioState,
-        current_price: float,
-        current_high: float,
-        current_low: float,
-        current_atr: float,
-    ) -> dict:
-        """
-        [V18] state_machine_loop에서 매 캔들 마감 시 호출합니다.
-        손절선을 갱신한 뒤, 현재가가 돌파 시 EXIT 신호를 반환합니다.
-
-        Args:
-            symbol        : 종목 심볼
-            portfolio     : PortfolioState 인스턴스 (공유 참조)
-            current_price : 현재 종가
-            current_high  : 현재 고가
-            current_low   : 현재 저가
-            current_atr   : 현재 ATR14 값
-
-        Returns:
-            dict:
-                "exit"           : bool
-                "chandelier_stop": float | None  (갱신된 손절선)
-                "reason"         : str
-        """
-        # 1. 손절선 갱신
-        new_stop = portfolio.update_chandelier(
-            symbol, current_high, current_low, current_atr
-        )
-
-        # 2. 돌파 여부 확인
-        triggered = portfolio.is_chandelier_triggered(symbol, current_price)
-
-        return {
-            "exit": triggered,
-            "chandelier_stop": new_stop,
-            "reason": "Chandelier Exit 손절선 돌파" if triggered else "정상 유지",
-        }
-
-    # ────────────────────────────────────────────────────────────────────────
-    # 4. 메인 진입 판단 함수 (V18)
-    # ────────────────────────────────────────────────────────────────────────
-    def check_entry(
+class Strategy(ABC):
+    """전략 인터페이스"""
+    @abstractmethod
+    async def check_entry(
         self,
         symbol: str,
         df: pd.DataFrame,
@@ -398,269 +230,291 @@ class StrategyEngine:
         df_15m: Optional[pd.DataFrame] = None,
         cvd_trend: Optional[str] = None,
         bid_ask_imbalance: float = 0.5,
-        all_htf_15m: Optional[dict] = None,
+        hft_features: Optional[dict] = None,
+    ) -> dict:
+        pass
+
+
+class BBSqueezeVolatilityBreakout(Strategy):
+    """
+    볼린저 밴드 수축(Squeeze) 및 변동성 돌파(Volatility Breakout) 전략 (V18.7)
+    - 밴드폭 백분위수(Percentile) 적용: 100봉 내 하위 20% 미만으로 좁아졌는가?
+    - 실시간 펀딩비 필터 (LONG < 0.1%, SHORT > -0.05%)
+    - 볼륨 프로파일 기반 매물대 저항 필터 (POC 저항선 가로막힘 차단)
+    """
+
+    def __init__(self, exchange=None, use_funding_filter=True, use_volume_profile_filter=True):
+        self.exchange = exchange
+        self.use_funding_filter = use_funding_filter
+        self.use_volume_profile_filter = use_volume_profile_filter
+        
+        # 전략 파라미터 초기화
+        self.squeeze_threshold = 0.8  # Percentile 폴백용
+        self.volume_multiplier = 2.0
+        self.atr_multiplier = 1.5
+        self.max_squeeze_duration = 12
+        
+        # 각 티커별 상태 추적 딕셔너리
+        self.ticker_status = {}
+
+    def _calculate_poc(self, df: pd.DataFrame, num_bins: int = 50) -> float:
+        """최근 200개 캔들의 종가와 거래량을 활용하여 볼륨 프로파일의 POC(Point of Control)를 산출합니다."""
+        recent_df = df.tail(200)
+        closes = recent_df["close"].astype(float)
+        volumes = recent_df["volume"].astype(float)
+
+        min_price = closes.min()
+        max_price = closes.max()
+        
+        if max_price == min_price:
+            return min_price
+        
+        bin_width = (max_price - min_price) / num_bins
+        bins = [min_price + i * bin_width for i in range(num_bins + 1)]
+        
+        bin_volumes = [0.0] * num_bins
+        for close, vol in zip(closes, volumes):
+            bin_idx = int((close - min_price) / bin_width)
+            if bin_idx >= num_bins:
+                bin_idx = num_bins - 1
+            if bin_idx < 0:
+                bin_idx = 0
+            bin_volumes[bin_idx] += vol
+            
+        poc_idx = bin_volumes.index(max(bin_volumes))
+        poc_price = min_price + (poc_idx + 0.5) * bin_width
+        return poc_price
+
+    async def check_entry(
+        self,
+        symbol: str,
+        df: pd.DataFrame,
+        portfolio: PortfolioState,
+        interval: str = "3m",
+        df_1h: Optional[pd.DataFrame] = None,
+        df_15m: Optional[pd.DataFrame] = None,
+        cvd_trend: Optional[str] = None,
+        bid_ask_imbalance: float = 0.5,
         hft_features: Optional[dict] = None,
     ) -> dict:
         """
-        [V18] 다중 시간 프레임 기반 진입 신호를 판단합니다.
-        순서: 1) 데이터 수집/정규화 -> 2) 스코어 산출(무조건 실행) -> 3) 진입 조건 필터링
+        볼린저 밴드 수축(Squeeze, 100봉 내 20% 백분위수) 상태에서 돌파(Breakout) 조건을 감시합니다.
+        펀딩비 과열 및 매물대(POC) 저항 구간일 경우 진입을 필터링하여 패스시킵니다.
         """
-        # settings.json이 런타임 중 변경되면 스코어링 임계값/규칙을 즉시 반영
-        try:
-            settings.refresh_runtime_scoring_settings()
-        except Exception as refresh_err:
-            logger.debug(f"[{symbol}] 설정 핫리로드 스킵: {refresh_err}")
-
-        l_tf = getattr(settings, "L_TIMEFRAME", "15m")
-        s_tf = getattr(settings, "S_TIMEFRAME", "3m")
-
-        # [V19.5 Dual-TF] 현재 캔들의 주기에 따라 분석 방향 결정
-        analyze_long = (interval == l_tf)
-        analyze_short = (interval == s_tf)
-
-        # ── 1. 기초 데이터 검증 및 연산 ────────────────────────────────────
-        if len(df) < 250:
-            return {"signal": None, "reason": "데이터 부족 (최소 250개 필요)"}
+        if len(df) < 100:
+            return {"signal": None, "reason": "데이터 부족 (최소 100봉 필요)"}
 
         current = df.iloc[-1]
-        market_price = float(current["close"])
-        vwap_mid = current.get("VWAP", market_price)
-        vol_sma_20 = current.get("Vol_SMA_20")
-        atr_14 = current.get("ATR_14", market_price * 0.005)
-        atr_long_len = getattr(settings, "ATR_LONG_LEN", 200)
-        atr_long = current.get(f"ATR_{atr_long_len}", atr_14)
+        close_price = float(current["close"])
+        volume = float(current["volume"])
 
-        if vol_sma_20 is None or pd.isna(atr_14) or pd.isna(vol_sma_20):
-            return {"signal": None, "reason": "지표 결측치 발생 (초동 방어)"}
+        # 지표 획득
+        ma20 = float(current.get("BB_MA20", close_price))
+        bandwidth = float(current.get("BB_Bandwidth", 0.0))
+        mean_bandwidth = float(current.get("BB_Mean_Bandwidth", 0.0))
+        atr20 = float(current.get("ATR_20", 0.0))
+        vol_ma20 = float(current.get("Vol_SMA_20", 1.0))
 
-        # ── 2. 데이터 정규화 및 피처 주입 (스코어 산출용) ───────────────────
-        from scoring import compute_live_percentiles, calculate_entry_score
+        # 티커 상태 초기화
+        if symbol not in self.ticker_status:
+            self.ticker_status[symbol] = {"in_squeeze": False, "squeeze_bars": 0}
 
-        # 외부 전달 데이터를 df 컬럼으로 주입
-        if "cvd_delta_slope" not in df.columns:
-            df["cvd_delta_slope"] = 0.0
-            if cvd_trend == "BUY_PRESSURE":
-                df.iloc[-1, df.columns.get_loc("cvd_delta_slope")] = 1.0
-            elif cvd_trend == "SELL_PRESSURE":
-                df.iloc[-1, df.columns.get_loc("cvd_delta_slope")] = -1.0
-        if "bid_ask_imbalance" not in df.columns:
-            df["bid_ask_imbalance"] = bid_ask_imbalance
-        if "ADX_14" not in df.columns and df_15m is not None and not df_15m.empty:
-            df["ADX_14"] = df_15m.iloc[-1].get("ADX_14", 20.0)
-        if "buy_ratio" not in df.columns:
-            df["buy_ratio"] = 0.5
-        if "NOFI" not in df.columns:
-            df["NOFI"] = 0.0
+        status = self.ticker_status[symbol]
 
-        if "open_interest" not in df.columns:
-            df["open_interest"] = 0.0
-        if "tick_count" not in df.columns:
-            df["tick_count"] = 0
-        if "Log_Vol_ZScore" not in df.columns:
-            df["Log_Vol_ZScore"] = 0.0
+        # 1. 존 볼린저 정석: 과거 100봉 동안의 밴드폭들 중에서 현재 밴드폭의 백분위수(Percentile) 판단
+        bandwidths = df["BB_Bandwidth"].tail(100).dropna().tolist()
+        if len(bandwidths) >= 50:
+            from scipy.stats import percentileofscore
+            pct = percentileofscore(bandwidths, bandwidth)
+            is_squeezed = (pct < 20.0)
+            logger.debug(f"[{symbol}] 밴드폭 백분위수: {pct:.1f}% (현재: {bandwidth:.6f})")
+        else:
+            is_squeezed = (bandwidth <= mean_bandwidth * self.squeeze_threshold)
 
-        if hft_features:
-            df.iloc[-1, df.columns.get_loc("open_interest")] = hft_features.get(
-                "open_interest", 0.0
-            )
-            df.iloc[-1, df.columns.get_loc("tick_count")] = hft_features.get(
-                "tick_count", 0
-            )
-            if "nofi_1m" in hft_features:
-                df.iloc[-1, df.columns.get_loc("NOFI")] = hft_features["nofi_1m"]
-            if "log_volume_zscore" in hft_features:
-                df.iloc[-1, df.columns.get_loc("Log_Vol_ZScore")] = hft_features[
-                    "log_volume_zscore"
-                ]
-
-        # 백분위수 산출
-        pctl_window = getattr(settings, "PCTL_WINDOW", 100)
-        percentiles = compute_live_percentiles(df, window=pctl_window)
-
-        # [V18.4] 상위 봉(15m) MACD_H 백분위 직접 주입 (3m df에는 15m MACD 역사가 없으므로)
-        if df_15m is not None and "MACD_H" in df_15m.columns:
-            recent_macd = df_15m["MACD_H"].tail(pctl_window).dropna()
-            if len(recent_macd) >= 20:
-                curr_macd = recent_macd.iloc[-1]
-                macd_p = float(
-                    percentileofscore(recent_macd.values, float(curr_macd), kind="rank")
-                )
-                percentiles["macd_hist_pctl"] = macd_p
-
-        # ATR 부스트 및 HTF/MTF 정보 수집
-        atr_ratio_mult = getattr(settings, "ATR_RATIO_MULT", 1.2)
-        atr_boost_flag = bool(atr_14 > (atr_long * atr_ratio_mult))
-        mtf = self.get_mtf_regime(df_15m)
-        htf_bias_str = self.get_htf_bias(df_1h)
-        mtf_moment_str = mtf.get("momentum", "NEUTRAL")
-        mtf_regime_str = mtf.get("regime", "RANGE")
-
-        percentiles["atr_boost_flag"] = atr_boost_flag
-
-        # 펀딩비 방향성 일치 여부 산출 (LONG 기준: 역펀딩비 -1일 때 보너스)
-        fr_val = hft_features.get("funding_rate", 0.0) if hft_features else 0.0
-        fr_match = 0
-        if fr_val > 0:
-            fr_match = 1
-        elif fr_val < 0:
-            fr_match = -1
-        percentiles["funding_rate_match"] = fr_match
-
-        percentiles["htf_bias"] = (
-            1 if htf_bias_str == "BULL" else (-1 if htf_bias_str == "BEAR" else 0)
-        )
-        percentiles["mtf_moment"] = (
-            1
-            if mtf_moment_str == "BULLISH"
-            else (-1 if mtf_moment_str == "BEARISH" else 0)
-        )
-        percentiles["mtf_regime"] = 1 if mtf_regime_str == "TREND" else 0
-        percentiles["vwap_dist"] = market_price - vwap_mid
-
-        scoring_inputs = dict(percentiles)
-        scoring_inputs.update(
-            {
-                "adx_15m": float(mtf["adx"]) if mtf.get("adx") is not None else 0.0,
-                "twap_imbalance": float(bid_ask_imbalance),
-                "bid_ask_imbalance": float(current.get("bid_ask_imbalance", bid_ask_imbalance)),
-                "cvd_delta_slope": float(current.get("cvd_delta_slope", 0.0)),
-                "nofi_1m": float(current.get("NOFI", 0.0)),
-                "buy_ratio": float(current.get("buy_ratio", 0.5)),
-                "open_interest": float(current.get("open_interest", 0.0)),
-                "tick_count": float(current.get("tick_count", 0.0)),
-                "log_volume_zscore": float(current.get("Log_Vol_ZScore", 0.0)),
-                "macd_hist": float(
-                    df_15m["MACD_H"].iloc[-1]
-                    if df_15m is not None and "MACD_H" in df_15m.columns and len(df_15m) > 0
-                    else current.get("MACD_H", 0.0)
-                ),
-            }
-        )
-
-        # ── 3. 스코어링 엔진 실행 (무조건 실행 - 로깅 보장) ─────────────────
-        adx_boost = getattr(settings, "ADX_BOOST_PCTL", 70.0)
-        score_result = calculate_entry_score(scoring_inputs, adx_boost_pctl=adx_boost)
-
-        long_score = score_result["long_score"]
-        short_score = score_result["short_score"]
-        raw_signal = score_result["signal"]
-        score_detail = score_result["detail"]
-
-        # [V18.3] 진입 유형(entry_type) 선제적 판별 (로그용)
-        # MACD 점수가 1점 이상이면 TREND, 아니면 SCALP로 분류 (V18.4 기준 조정 가능)
-        entry_type = (
-            "TREND_MACD"
-            if (
-                score_result.get("l_macd", 0) >= 1 or score_result.get("s_macd", 0) >= 1
-            )
-            else "SCALP_CVD"
-        )
-
-        # ── 4. 진입 조건 필터링 (Pure Scoring 기반) ───────────────────────
-        min_score_long = getattr(settings, "MIN_SCORE_LONG", 18)
-        min_score_short = getattr(settings, "MIN_SCORE_SHORT", 17)
-        signal_type = None
-        reason = ""
-
-        # 롱 진입 검증
-        if analyze_long and raw_signal == 1 and long_score >= min_score_long:
-            # [V18.4] MACD 하드 필터 체크
-            if settings.MACD_FILTER_ENABLED:
-                macd_p = percentiles.get("macd_hist_pctl", 50.0)
-                if macd_p <= 50.0:
-                    raw_signal = None  # 필터 탈락
-                    logger.info(
-                        f"[{symbol}] LONG 시그널 발생했으나 MACD 하드 필터에 의해 차단됨 (Pctl: {macd_p:.1f} <= 50)"
-                    )
-
-        # 숏 진입 검증
-        if analyze_short and raw_signal == -1 and short_score >= min_score_short:
-            # [V18.4] MACD 하드 필터 체크
-            if settings.MACD_FILTER_ENABLED:
-                macd_p = percentiles.get("macd_hist_pctl", 50.0)
-                if macd_p >= 50.0:
-                    raw_signal = None  # 필터 탈락
-                    logger.info(
-                        f"[{symbol}] SHORT 시그널 발생했으나 MACD 하드 필터에 의해 차단됨 (Pctl: {macd_p:.1f} >= 50)"
-                    )
-
-        # 필터 통과 후 최종 시그널 결정
-        if analyze_long and raw_signal == 1 and long_score >= min_score_long:
-            signal_type = "LONG"
-            reason = f"[V18 SCORE LONG] {score_detail} (≥{min_score_long}, Type={entry_type})"
-        elif analyze_short and raw_signal == -1 and short_score >= min_score_short:
-            signal_type = "SHORT"
-            reason = f"[V18 SCORE SHORT] {score_detail} (≥{min_score_short}, Type={entry_type})"
-
-        # 탈락 사유 기록 (조건 미달 시)
-        if not signal_type:
-            if raw_signal == 1:
-                reason = f"[{entry_type}] LONG 점수 미달: {long_score} < {min_score_long} ({score_detail})"
-            elif raw_signal == -1:
-                reason = f"[{entry_type}] SHORT 점수 미달: {short_score} < {min_score_short} ({score_detail})"
+        if is_squeezed:
+            if not status["in_squeeze"]:
+                status["in_squeeze"] = True
+                status["squeeze_bars"] = 1
+                logger.info(f"⏳ [{symbol}] 볼린저 밴드 수축(Squeeze 하위 20% 미만) 돌입! (진입 감시 시작)")
             else:
-                reason = f"[{entry_type}] No Signal ({score_detail})"
+                status["squeeze_bars"] += 1
+                logger.debug(f"⏳ [{symbol}] 스퀴즈 상태 유지 중 ({status['squeeze_bars']}봉째)")
+        else:
+            if status["in_squeeze"]:
+                status["squeeze_bars"] += 1
+                logger.debug(f"⏳ [{symbol}] 스퀴즈 돌파 감시 연장 ({status['squeeze_bars']}봉째)")
 
-        # entry_type은 위에서 선제 판별됨
+        # 스퀴즈 타임아웃 해제 (최대 12봉 경과 시 만료)
+        if status["in_squeeze"] and status["squeeze_bars"] > self.max_squeeze_duration:
+            logger.info(
+                f"🔕 [{symbol}] 스퀴즈 감시 시간 만료 (Squeeze Timeout, {status['squeeze_bars']}봉 경과). 상태 리셋."
+            )
+            status["in_squeeze"] = False
+            status["squeeze_bars"] = 0
 
-        # [V18.2] Excess Score 산출 (임계치 대비 여유 점수)
-        excess_score = 0
-        if signal_type == "LONG":
-            excess_score = int(long_score - min_score_long)
-        elif signal_type == "SHORT":
-            excess_score = int(short_score - min_score_short)
+        signal = None
+        reason = "신호 없음"
 
-        # 최종 진단 로그
-        if not reason and not signal_type:
-            reason = f"V18 점수 미달 (L={long_score}/{min_score_long}, S={short_score}/{min_score_short})"
+        # 2. 돌파(Breakout) 조건 검사 (스퀴즈 상태일 때만 유효)
+        if status["in_squeeze"]:
+            upper_channel = ma20 + (atr20 * self.atr_multiplier)
+            lower_channel = ma20 - (atr20 * self.atr_multiplier)
+            
+            # 거래량 조건: 20일 평균 거래량의 volume_multiplier 배수 돌파
+            volume_condition = (volume >= vol_ma20 * self.volume_multiplier)
 
-        logger.info(
-            f"[{symbol}] [V18 Analysis] {reason if not signal_type else 'MATCH'} "
-            f"(Strength: +{excess_score if signal_type else 0}, Type: {entry_type})"
-        )
+            if close_price > upper_channel and volume_condition:
+                signal = "LONG"
+                reason = f"[Squeeze Breakout LONG] 종가({close_price:.4f}) > 상단채널({upper_channel:.4f}) 및 거래량 돌파"
+            elif close_price < lower_channel and volume_condition:
+                signal = "SHORT"
+                reason = f"[Squeeze Breakout SHORT] 종가({close_price:.4f}) < 하단채널({lower_channel:.4f}) 및 거래량 돌파"
+            else:
+                reason = (
+                    f"스퀴즈 감시 중 ({status['squeeze_bars']}/{self.max_squeeze_duration}봉 | "
+                    f"종가: {close_price:.4f}, Upper: {upper_channel:.4f}, Lower: {lower_channel:.4f}, "
+                    f"거래량 {volume:.1f} (기준 {vol_ma20 * self.volume_multiplier:.1f})"
+                )
+        else:
+            reason = "스퀴즈 비활성 상태"
 
-        # [V18] 시장 데이터 스냅샷 (Pydantic)
+        # 3. 추가 실전 필터 결합 (Funding Rate & Volume Profile POC)
+        if signal:
+            # 3.1 펀딩비 필터 검사
+            funding_rate = 0.0
+            if self.use_funding_filter:
+                try:
+                    if self.exchange:
+                        funding_data = await self.exchange.fetch_funding_rate(symbol)
+                        funding_rate = float(funding_data.get("fundingRate", 0.0))
+                    else:
+                        funding_rate = float((hft_features or {}).get("funding_rate", 0.0))
+                except Exception as fe:
+                    logger.warning(f"[{symbol}] 실시간 펀딩비 fetch 실패 (폴백 적용): {fe}")
+                    funding_rate = float((hft_features or {}).get("funding_rate", 0.0))
+                
+                if signal == "LONG" and funding_rate > 0.001:
+                    logger.info(f"🚫 [{symbol}] LONG 진입 차단: 펀딩비 과열 상태 ({funding_rate*100:.3f}% > 0.1%)")
+                    signal = None
+                    reason = f"펀딩비 롱과열 차단 ({funding_rate*100:.3f}%)"
+                elif signal == "SHORT" and funding_rate < -0.0005:
+                    logger.info(f"🚫 [{symbol}] SHORT 진입 차단: 펀딩비 숏스퀴즈 위험 ({funding_rate*100:.3f}% < -0.05%)")
+                    signal = None
+                    reason = f"펀딩비 숏과열 차단 ({funding_rate*100:.3f}%)"
+
+        if signal:
+            # 3.2 볼륨 프로파일 매물대(POC) 필터 검사
+            if self.use_volume_profile_filter:
+                poc_price = self._calculate_poc(df)
+                
+                if signal == "LONG" and (close_price < poc_price <= close_price * 1.02):
+                    logger.info(f"🚫 [{symbol}] LONG 진입 차단: 매물대 저항대 인접 (POC: {poc_price:.4f}, 범위: {close_price:.4f} ~ {close_price * 1.02:.4f})")
+                    signal = None
+                    reason = f"매물대 POC 저항 차단 (POC: {poc_price:.4f})"
+                elif signal == "SHORT" and (close_price * 0.98 <= poc_price < close_price):
+                    logger.info(f"🚫 [{symbol}] SHORT 진입 차단: 매물대 지지대 인접 (POC: {poc_price:.4f}, 범위: {close_price * 0.98:.4f} ~ {close_price:.4f})")
+                    signal = None
+                    reason = f"매물대 POC 지지 차단 (POC: {poc_price:.4f})"
+
+        # 최종 신호 발생 시 상태 리셋
+        if signal:
+            status["in_squeeze"] = False
+            status["squeeze_bars"] = 0
+
+        # DB 기록용 시장 스냅샷 데이터 생성
         market_data_obj = None
-        if signal_type:
-            market_data_obj = MarketDataSnapshot(
-                rsi=float(current.get("RSI", 50)),
-                volume=float(current["volume"]),
-                atr_14=float(atr_14),
-                adx_15m=float(mtf["adx"]) if mtf.get("adx") else None,
-                mtf_bias_1h=str(htf_bias_str),
-                regime=str(mtf_regime_str),
-                twap_imbalance=float(bid_ask_imbalance),
-                long_score=int(long_score),
-                short_score=int(short_score),
-                excess_score=int(excess_score),
-                entry_type=str(entry_type),
-                # [V18.4] Settings Snapshot
-                timeframe=str(getattr(settings, "TIMEFRAME", "3m")),
-                min_score_long=int(min_score_long),
-                min_score_short=int(min_score_short),
-                long_tp_mult=float(getattr(settings, "LONG_TP_MULT", 5.0)),
-                long_sl_mult=float(getattr(settings, "LONG_SL_MULT", 1.5)),
-                short_tp_mult=float(getattr(settings, "SHORT_TP_MULT", 5.0)),
-                short_sl_mult=float(getattr(settings, "SHORT_SL_MULT", 1.5)),
-                macd_filter_enabled=bool(
-                    getattr(settings, "MACD_FILTER_ENABLED", True)
-                ),
-                # [V19] 상세 스코어 및 백분위수 전체 저장
-                scores=score_result.get("scores"),
-                percentiles=score_result.get("percentiles"),
-            ).model_dump(exclude_none=True)
+        if signal:
+            market_data_obj = {
+                "close": close_price,
+                "volume": volume,
+                "bandwidth": bandwidth,
+                "mean_bandwidth": mean_bandwidth,
+                "ma20": ma20,
+                "atr20": atr20,
+                "vol_ma20": vol_ma20,
+                "squeeze_bars": status["squeeze_bars"],
+                "strategy_params": {
+                    "squeeze_threshold": self.squeeze_threshold,
+                    "volume_multiplier": self.volume_multiplier,
+                    "atr_multiplier": self.atr_multiplier,
+                    "max_squeeze_duration": self.max_squeeze_duration,
+                    "use_funding_filter": self.use_funding_filter,
+                    "use_volume_profile_filter": self.use_volume_profile_filter,
+                }
+            }
 
         return {
-            "signal": signal_type,
-            "market_price": market_price,
-            "atr_val": float(atr_14),
-            "vwap_mid": float(vwap_mid),
+            "signal": signal,
+            "market_price": close_price,
+            "atr_val": atr20,
             "reason": reason,
             "market_data": market_data_obj,
-            "long_score": long_score,
-            "short_score": short_score,
-            "excess_score": excess_score,
-            "nofi_1m": float(df["NOFI"].iloc[-1]),
-            "buy_ratio": float(df["buy_ratio"].iloc[-1]),
-            "entry_type": entry_type,
+            "long_score": 100 if signal == "LONG" else 0,
+            "short_score": 100 if signal == "SHORT" else 0,
+            "excess_score": 0,
+            "entry_type": "BB_SQUEEZE_BREAKOUT",
+        }
+
+
+class StrategyEngine:
+    """[V18.7] 전략 패턴 컨텍스트
+    - 진입 신호 판단은 구체 전략 인스턴스 BBSqueezeVolatilityBreakout 에 위임합니다.
+    - 샹들리에 익절 감시 기능 공통 적용.
+    """
+
+    def __init__(self, exchange=None):
+        self.exchange = exchange
+        self.session_filter_bars = 30
+        
+        # 구체 전략 패턴 세팅 (펀딩비 및 매물대 필터 기본 활성화)
+        self.strategy = BBSqueezeVolatilityBreakout(
+            exchange=exchange,
+            use_funding_filter=True,
+            use_volume_profile_filter=True
+        )
+
+    async def check_entry(
+        self,
+        symbol: str,
+        df: pd.DataFrame,
+        portfolio: PortfolioState,
+        interval: str = "3m",
+        df_1h: Optional[pd.DataFrame] = None,
+        df_15m: Optional[pd.DataFrame] = None,
+        cvd_trend: Optional[str] = None,
+        bid_ask_imbalance: float = 0.5,
+        hft_features: Optional[dict] = None,
+    ) -> dict:
+        """독립적인 전략 클래스의 check_entry 로 포워딩합니다."""
+        return await self.strategy.check_entry(
+            symbol=symbol,
+            df=df,
+            portfolio=portfolio,
+            interval=interval,
+            df_1h=df_1h,
+            df_15m=df_15m,
+            cvd_trend=cvd_trend,
+            bid_ask_imbalance=bid_ask_imbalance,
+            hft_features=hft_features,
+        )
+
+    def check_chandelier_exit(
+        self,
+        symbol: str,
+        portfolio: PortfolioState,
+        current_price: float,
+        current_high: float,
+        current_low: float,
+        current_atr: float,
+    ) -> dict:
+        """샹들리에 동적 익절/손절선을 갱신하고 돌파 여부를 감시합니다."""
+        new_stop = portfolio.update_chandelier(
+            symbol, current_high, current_low, current_atr
+        )
+        triggered = portfolio.is_chandelier_triggered(symbol, current_price)
+
+        return {
+            "exit": triggered,
+            "chandelier_stop": new_stop,
+            "reason": "Chandelier Exit 손절선 돌파" if triggered else "정상 유지"
         }

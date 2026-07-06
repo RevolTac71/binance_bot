@@ -14,55 +14,9 @@ Base = declarative_base()
 # ==========================================
 
 
-class MarketSnapshot(Base):
-    """
-    1분/3분 캔들 마감 시점의 시장 맥락(Market Context)을 수집하는 Feature 테이블.
-    비지도 학습(분류) 및 지도 학습(예측)의 독립 변수(X)로 활용됩니다.
-    """
-
-    __tablename__ = "market_snapshots"
-
-    snapshot_id = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp = Column(DateTime, index=True)
-    symbol = Column(String(50), index=True)
-
-    # 1. 가격 및 오실레이터 (Price & Oscillators)
-    rsi = Column(Float, nullable=True)
-    macd_hist = Column(Float, nullable=True)
-    adx = Column(Float, nullable=True)
-    atr_14 = Column(Float, nullable=True)
-    atr_200 = Column(Float, nullable=True)
-
-    # 2. 다중 시간 프레임 (MTF)
-    ema_1h_dist = Column(Float, nullable=True)  # (현재가 - 1h_EMA) / 1h_EMA
-    ema_15m_dist = Column(Float, nullable=True)  # (현재가 - 15m_EMA) / 15m_EMA
-
-    # 3. 오더플로우 및 잔량 (Orderflow & Microstructure)
-    cvd_5m_sum = Column(Float, nullable=True)
-    cvd_15m_sum = Column(Float, nullable=True)
-    cvd_delta_slope = Column(Float, nullable=True)
-    bid_ask_imbalance = Column(Float, nullable=True)  # TWAP 30s
-
-    # 4. 기타 시장 정보
-    funding_rate_match = Column(
-        Integer, nullable=True
-    )  # [V18.6] 1(양수), 0, -1(음수) 매칭 필드
-
-    # 5. V18 확장 피처
-    log_vol_zscore = Column(Float, nullable=True)  # 로그 변환 거래량 Z-Score
-    correlation_max = Column(Float, nullable=True)  # 동조화 최대 상관계수
-    nofi_1m = Column(Float, nullable=True)  # [V18.6] 정문화된 Order Flow Imbalance
-
-    # 6. V18 스코어링 피처
-    buy_ratio = Column(Float, nullable=True)
-    long_score = Column(Integer, nullable=True)
-    short_score = Column(Integer, nullable=True)
-
-
 class TradeLog(Base):
     """
-    개별 매매의 상세 내역과 성과, 슬리피지를 기록하고
-    추후 배치 스크립트가 MFE/MAE 등의 미래 데이터(Label, Y)를 업데이트하는 테이블.
+    개별 매매의 상세 내역과 성과, 슬리피지를 기록하는 테이블.
     """
 
     __tablename__ = "trade_logs"
@@ -70,13 +24,13 @@ class TradeLog(Base):
     trade_id = Column(Integer, primary_key=True, autoincrement=True)
     symbol = Column(String(50), index=True)
     direction = Column(String(20))  # 'LONG' or 'SHORT'
-    action = Column(String(50), nullable=True)  # 'BUY', 'SELL', 'PARTIAL_CLOSED' 등
+    action = Column(String(50), nullable=True)  # 'BUY', 'SELL', 'CANCEL', 'MANUAL' 등
     qty = Column(Float)
 
     # 진입 스펙
     entry_time = Column(DateTime, index=True)
     target_price = Column(Float)  # 진입 시점 당시 의도했던 기준가/최우선호가
-    execution_price = Column(Float)  # Chasing 완료 결과 실제 평단가
+    execution_price = Column(Float)  # 실제 평단가
     slippage = Column(Float)  # (실제 - 목표) 차이 등
     entry_reason = Column(Text)
     execution_time_ms = Column(
@@ -88,50 +42,19 @@ class TradeLog(Base):
     exit_price = Column(Float, nullable=True)
     exit_reason = Column(
         Text, nullable=True
-    )  # 'TP', 'SL', 'Chandelier', 'Time', 'Manual' 등
+    )  # 'TP', 'SL', 'Chandelier', 'Timeout', 'Manual' 등
     realized_pnl = Column(Float, nullable=True)
-    last_pnl_at = Column(DateTime, nullable=True)  # [V18.4] PnL 합산 기준 시점 영속화
     roi_pct = Column(Float, nullable=True)
 
-    # [V18.1] DRY_RUN 영속화 및 복구를 위한 필드
+    # DRY_RUN 영속화 및 복구를 위한 필드
     dry_run = Column(Boolean, default=True, index=True)
     tp_price = Column(Float, nullable=True)
     sl_price = Column(Float, nullable=True)
 
-    # [V18.2] 진입 시점의 시장 지표 스냅샷 및 파라미터 캡처
-    market_data = Column(JSONB, nullable=False, default=dict)
-    params = Column(Text, nullable=True)
-
-    # 지연 모델링 레이블 (MFE, MAE 및 수익률) - Offline 배치로 UPDATE 됨
-    mfe = Column(
-        Float, nullable=True
-    )  # 최대 가용 수익 구간 (Maximum Favorable Excursion)
-    mae = Column(
-        Float, nullable=True
-    )  # 최대 노출 손실 구간 (Maximum Adverse Excursion)
-    ret_5m = Column(Float, nullable=True)  # 진입 5분 뒤 % 수익률
-    ret_15m = Column(Float, nullable=True)  # 진입 15분 뒤 % 수익률
-    ret_30m = Column(Float, nullable=True)  # 진입 30분 뒤 % 수익률
-
-
-class MarketData_1m(Base):
-    """
-    [V18 HFT] 인메모리 파이프라인 전용 1분 단위 압축 스냅샷
-    원시 틱 데이터를 DB에 적재하지 않고, OHLCV와 파생지표(OI, 펀딩비, OFI 등)를
-    단일 JSON 컬럼으로 통합 보관하여 DB 부하(Write)를 최소화합니다.
-    """
-
-    __tablename__ = "market_data_1m"
-
-    timestamp = Column(DateTime, primary_key=True, index=True)
-    symbol = Column(String(50), primary_key=True)
-    open = Column(Float, nullable=True)
-    high = Column(Float, nullable=True)
-    low = Column(Float, nullable=True)
-    close = Column(Float, nullable=True)
-    volume = Column(Float, nullable=True)
-    # 펀딩비, 미결제약정(OI), 머신러닝 피처(OFI 등) 압축 적재
-    features = Column(JSONB, nullable=True)
+    # 전략 메타데이터
+    strategy_name = Column(String(100), nullable=True)
+    strategy_params = Column(JSONB, nullable=True)  # 진입 시점 설정 값 (Squeeze threshold 등)
+    market_snapshot = Column(JSONB, nullable=True)  # 진입 시점 지표 스냅샷 (RSI, Bandwidth 등)
 
 
 from sqlalchemy.pool import NullPool
@@ -168,7 +91,7 @@ async def check_db_connection():
         async with AsyncSessionLocal() as session:
             await session.execute(text("SELECT 1 FROM trade_logs LIMIT 1"))
             logger.info(
-                "Supabase 연결 점검 및 테이블(trade_logs, market_snapshots) 준비 완료."
+                "Supabase 연결 점검 및 테이블(trade_logs) 준비 완료."
             )
             return True
     except Exception as e:
