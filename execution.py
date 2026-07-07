@@ -84,75 +84,73 @@ class ExecutionEngine:
         norm = self._normalize_symbol(symbol)
         return any(self._normalize_symbol(k) == norm for k in container.keys())
 
-    def _snapshot_params(self) -> str:
+    def _snapshot_params(self) -> dict:
         """
-        거래 시점의 전략 파라미터를 JSON 문자열로 직렬화하여 반환합니다.
+        거래 시점의 전략 파라미터를 dict로 반환합니다.
         나중에 백테스트 / ML 모델링 시 각 거래의 환경 변수를 재현하는 데 활용됩니다.
         """
-        return json.dumps(
-            {
-                # 기본 전략 파라미터
-                "strategy_version": getattr(settings, "STRATEGY_VERSION", "UNKNOWN"),
-                "timeframe": getattr(settings, "TIMEFRAME", "3m"),
-                "risk_percentage": getattr(settings, "RISK_PERCENTAGE", None),
-                "leverage": getattr(settings, "LEVERAGE", None),
-                # ATR 및 변동성 파라미터
-                "atr_ratio_mult": getattr(settings, "ATR_RATIO_MULT", None),
-                "atr_long_len": getattr(settings, "ATR_LONG_LEN", None),
-                # 손익 관리 파라미터
-                "sl_mult": getattr(settings, "SL_MULT", None),
-                "tp_mult": getattr(settings, "TP_MULT", None),
-                "chandelier_mult": getattr(settings, "CHANDELIER_MULT", None),
-                "chandelier_atr_len": getattr(settings, "CHANDELIER_ATR_LEN", None),
-                "breakeven_trigger_mult": getattr(
-                    settings, "BREAKEVEN_TRIGGER_MULT", None
-                ),
-                "breakeven_profit_mult": getattr(
-                    settings, "BREAKEVEN_PROFIT_MULT", None
-                ),
-                # V18 스코어링 엔진 파라미터
-                "macd_filter_enabled": getattr(settings, "MACD_FILTER_ENABLED", True),
-                "min_score_long": getattr(settings, "MIN_SCORE_LONG", 18),
-                "min_score_short": getattr(settings, "MIN_SCORE_SHORT", 17),
-                "pctl_window": getattr(settings, "PCTL_WINDOW", None),
-                "adx_boost_pctl": getattr(settings, "ADX_BOOST_PCTL", None),
-                "scoring_thresholds": getattr(settings, "SCORING_THRESHOLDS", {}),
-                # V18.5 방향별/익손절별 세분화 모드
-                "long_tp_mode": getattr(settings, "LONG_TP_MODE", "ATR"),
-                "long_sl_mode": getattr(settings, "LONG_SL_MODE", "ATR"),
-                "short_tp_mode": getattr(settings, "SHORT_TP_MODE", "PERCENT"),
-                "short_sl_mode": getattr(settings, "SHORT_SL_MODE", "ATR"),
-                "long_tp_mult": getattr(settings, "LONG_TP_MULT", 5.0),
-                "long_sl_mult": getattr(settings, "LONG_SL_MULT", 1.5),
-                "short_tp_mult": getattr(settings, "SHORT_TP_MULT", 5.0),
-                "short_sl_mult": getattr(settings, "SHORT_SL_MULT", 1.5),
-                "long_tp_pct": getattr(settings, "LONG_TP_PCT", 0.05),
-                "long_sl_pct": getattr(settings, "LONG_SL_PCT", 0.02),
-                "short_tp_pct": getattr(settings, "SHORT_TP_PCT", 0.03),
-                "short_sl_pct": getattr(settings, "SHORT_SL_PCT", 0.015),
-                "fee_rate": getattr(settings, "FEE_RATE", 0.00045),
-                # 포트폴리오 관리 파라미터
-                "max_concurrent_same_dir": getattr(
-                    settings, "MAX_CONCURRENT_SAME_DIR", None
-                ),
-                "max_trades": getattr(settings, "MAX_TRADES", None),
-                "loss_cooldown_minutes": getattr(
-                    settings, "LOSS_COOLDOWN_MINUTES", None
-                ),
-                # 체결 관리 파라미터
-                "kelly_sizing": getattr(settings, "KELLY_SIZING", False),
-                "kelly_min_trades": getattr(settings, "KELLY_MIN_TRADES", None),
-                "kelly_max_fraction": getattr(settings, "KELLY_MAX_FRACTION", None),
-                "chasing_wait_sec": getattr(settings, "CHASING_WAIT_SEC", None),
-                "partial_tp_ratio": getattr(settings, "PARTIAL_TP_RATIO", None),
-                # MTF 필터 파라미터
-                "htf_timeframe_1h": getattr(settings, "HTF_TIMEFRAME_1H", None),
-                "htf_timeframe_15m": getattr(settings, "HTF_TIMEFRAME_15M", None),
-                # [V19] 상세 스코어링 규칙 정적 스냅샷 (최적화 분석용)
-                "bot_ready_entry_config": getattr(settings, "BOT_READY_ENTRY_CONFIG", {}),
-            },
-            ensure_ascii=False,
-        )
+        return {
+            # 기본 전략 파라미터
+            "strategy_version": getattr(settings, "STRATEGY_VERSION", "UNKNOWN"),
+            "timeframe": getattr(settings, "TIMEFRAME", "3m"),
+            "risk_percentage": getattr(settings, "RISK_PERCENTAGE", None),
+            "leverage": getattr(settings, "LEVERAGE", None),
+            # ATR 및 변동성 파라미터
+            "atr_ratio_mult": getattr(settings, "ATR_RATIO_MULT", None),
+            "atr_long_len": getattr(settings, "ATR_LONG_LEN", None),
+            # 손익 관리 파라미터
+            "sl_mult": getattr(settings, "SL_MULT", None),
+            "tp_mult": getattr(settings, "TP_MULT", None),
+            "chandelier_mult": getattr(settings, "CHANDELIER_MULT", None),
+            "chandelier_atr_len": getattr(settings, "CHANDELIER_ATR_LEN", None),
+            "breakeven_trigger_mult": getattr(
+                settings, "BREAKEVEN_TRIGGER_MULT", None
+            ),
+            "breakeven_profit_mult": getattr(
+                settings, "BREAKEVEN_PROFIT_MULT", None
+            ),
+            # V18 스코어링 엔진 파라미터
+            "macd_filter_enabled": getattr(settings, "MACD_FILTER_ENABLED", True),
+            "min_score_long": getattr(settings, "MIN_SCORE_LONG", 18),
+            "min_score_short": getattr(settings, "MIN_SCORE_SHORT", 17),
+            "pctl_window": getattr(settings, "PCTL_WINDOW", None),
+            "adx_boost_pctl": getattr(settings, "ADX_BOOST_PCTL", None),
+            "scoring_thresholds": getattr(settings, "SCORING_THRESHOLDS", {}),
+            # V18.5 방향별/익손절별 세분화 모드
+            "long_tp_mode": getattr(settings, "LONG_TP_MODE", "ATR"),
+            "long_sl_mode": getattr(settings, "LONG_SL_MODE", "ATR"),
+            "short_tp_mode": getattr(settings, "SHORT_TP_MODE", "PERCENT"),
+            "short_sl_mode": getattr(settings, "SHORT_SL_MODE", "ATR"),
+            "long_tp_mult": getattr(settings, "LONG_TP_MULT", 5.0),
+            "long_sl_mult": getattr(settings, "LONG_SL_MULT", 1.5),
+            "short_tp_mult": getattr(settings, "SHORT_TP_MULT", 5.0),
+            "short_sl_mult": getattr(settings, "SHORT_SL_MULT", 1.5),
+            "long_tp_pct": getattr(settings, "LONG_TP_PCT", 0.05),
+            "long_sl_pct": getattr(settings, "LONG_SL_PCT", 0.02),
+            "short_tp_pct": getattr(settings, "SHORT_TP_PCT", 0.03),
+            "short_sl_pct": getattr(settings, "SHORT_SL_PCT", 0.015),
+            "fee_rate": getattr(settings, "FEE_RATE", 0.00045),
+            # 포트폴리오 관리 파라미터
+            "max_concurrent_same_dir": getattr(
+                settings, "MAX_CONCURRENT_SAME_DIR", None
+            ),
+            "max_trades": getattr(settings, "MAX_TRADES", None),
+            "loss_cooldown_minutes": getattr(
+                settings, "LOSS_COOLDOWN_MINUTES", None
+            ),
+            # 체결 관리 파라미터
+            "kelly_sizing": getattr(settings, "KELLY_SIZING", False),
+            "kelly_min_trades": getattr(settings, "KELLY_MIN_TRADES", None),
+            "kelly_max_fraction": getattr(settings, "KELLY_MAX_FRACTION", None),
+            "chasing_wait_sec": getattr(settings, "CHASING_WAIT_SEC", None),
+            "partial_tp_ratio": getattr(settings, "PARTIAL_TP_RATIO", None),
+            # MTF 필터 파라미터
+            "htf_timeframe_1h": getattr(settings, "HTF_TIMEFRAME_1H", None),
+            "htf_timeframe_15m": getattr(settings, "HTF_TIMEFRAME_15M", None),
+            # [V19] 상세 스코어링 규칙 정적 스냅샷 (최적화 분석용)
+            "bot_ready_entry_config": getattr(settings, "BOT_READY_ENTRY_CONFIG", {}),
+        }
+
 
     async def sync_state_from_exchange(self):
         """
@@ -645,7 +643,7 @@ class ExecutionEngine:
                         entry_reason=f"진입 주문 취소: {reason}",
                         realized_pnl=0.0,
                         dry_run=settings.DRY_RUN,
-                        params=self._snapshot_params(),
+                        strategy_params=self._snapshot_params(),
                     )
                     session.add(new_log)
                     await session.commit()
@@ -999,6 +997,17 @@ class ExecutionEngine:
             except Exception as close_err:
                 logger.error(f"❌ [{symbol}] 최소 노셔널 미만 부분 체결분 시장가 청산 실패: {close_err}")
                 logger.error(traceback.format_exc())
+                try:
+                    import html
+                    await notifier.send_message(
+                        f"🚨 <b>[긴급 청산 실패]</b>\n"
+                        f"심볼: <code>{symbol}</code>\n"
+                        f"가치: <code>{notional_value:.2f} USDT</code> (수량: <code>{filled_qty}</code>, 평단: <code>{avg_price:.4f}</code>)\n"
+                        f"오류: <code>{html.escape(str(close_err))}</code>\n"
+                        f"⚠️ 부분 포지션이 방치될 위험이 있으므로 즉시 거래소에서 수동 청산 여부를 확인하십시오!"
+                    )
+                except Exception as tg_err:
+                    logger.error(f"❌ 텔레그램 경고 알림 전송 실패: {tg_err}")
             
             # DB 기록 및 대기큐 제거
             await self._write_cancel_log(symbol, entry_info, f"최소금액 미만 부분 체결 시장가 긴급 청산 ({notional_value:.2f} USDT)")
@@ -1175,7 +1184,7 @@ class ExecutionEngine:
                                 entry_reason=f"외부/수동 진입 감지 ({side})",
                                 realized_pnl=0.0,
                                 dry_run=settings.DRY_RUN,
-                                params=self._snapshot_params(),
+                                strategy_params=self._snapshot_params(),
                             )
                             session.add(new_log)
                             await session.commit()
@@ -1381,7 +1390,7 @@ class ExecutionEngine:
                                         entry_reason="분할 익절(Partial TP) 체결 감지",
                                         realized_pnl=partial_pnl,
                                         dry_run=False,
-                                        params=self._snapshot_params(),
+                                        strategy_params=self._snapshot_params(),
                                     )
                                     session.add(new_log)
                                     await session.commit()
@@ -1679,7 +1688,7 @@ class ExecutionEngine:
                             entry_reason=f"청산 완료: {exit_reason}",
                             realized_pnl=realized_pnl,
                             dry_run=settings.DRY_RUN,
-                            params=self._snapshot_params(),
+                            strategy_params=self._snapshot_params(),
                         )
                         session.add(new_hist)
 
@@ -1857,7 +1866,7 @@ class ExecutionEngine:
                     entry_reason=reason,
                     realized_pnl=0.0,
                     dry_run=False,
-                    params=self._snapshot_params(),
+                    strategy_params=self._snapshot_params(),
                 )
                 session.add(new_log)
                 await session.commit()
@@ -1956,7 +1965,7 @@ class ExecutionEngine:
                     entry_reason=f"[DRY_RUN] {reason}",
                     realized_pnl=realized_pnl,
                     dry_run=True,
-                    params=self._snapshot_params(),
+                    strategy_params=self._snapshot_params(),
                 )
                 session.add(new_hist)
 

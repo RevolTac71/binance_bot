@@ -22,9 +22,18 @@ def load_data():
         trades_df = pd.read_sql(
             "SELECT * FROM trade_logs ORDER BY entry_time DESC LIMIT 100", engine
         )
-        balance_df = pd.read_sql(
-            "SELECT * FROM balance_history ORDER BY timestamp ASC LIMIT 500", engine
-        )
+        
+        # balance_history 테이블이 존재하지 않으므로 trade_logs의 realized_pnl 누적합으로 자산 흐름 생성
+        if not trades_df.empty:
+            # 시간 순(과거 -> 현재)으로 정렬하여 누적합 계산
+            temp_df = trades_df.dropna(subset=['entry_time']).sort_values('entry_time').copy()
+            temp_df['realized_pnl'] = temp_df['realized_pnl'].fillna(0.0)
+            temp_df['balance'] = temp_df['realized_pnl'].cumsum()
+            # 대시보드 차트 시각화 구조에 맞게 필드명과 컬럼 추출
+            balance_df = temp_df.rename(columns={'entry_time': 'timestamp'})[['timestamp', 'balance']]
+        else:
+            balance_df = pd.DataFrame(columns=['timestamp', 'balance'])
+            
         return trades_df, balance_df
     except Exception as e:
         st.error(f"DB 데이터를 불러오는데 실패했습니다: {e}")

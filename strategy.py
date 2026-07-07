@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import pandas as pd
+import numpy as np
 from typing import Optional
 from scipy.stats import percentileofscore
 from schemas import MarketDataSnapshot
@@ -261,6 +262,7 @@ class BBSqueezeVolatilityBreakout(Strategy):
         """
         [V18.7] 최근 200개 캔들의 종가와 거래량을 활용하여 볼륨 프로파일의 POC(Point of Control)를 산출합니다.
         ATR 변동성 해상도를 대조 평가하여 Bins의 개수를 유동적(30~200)으로 결정해 가격 왜곡을 최소화합니다.
+        (NumPy 벡터화 최적화 적용으로 CPU 점유율을 최소화합니다.)
         """
         recent_df = df.tail(200)
         closes = recent_df["close"].astype(float)
@@ -287,18 +289,16 @@ class BBSqueezeVolatilityBreakout(Strategy):
 
         bin_width = price_range / num_bins
         
-        bin_volumes = [0.0] * num_bins
-        for close, vol in zip(closes, volumes):
-            bin_idx = int((close - min_price) / bin_width)
-            if bin_idx >= num_bins:
-                bin_idx = num_bins - 1
-            if bin_idx < 0:
-                bin_idx = 0
-            bin_volumes[bin_idx] += vol
-            
-        poc_idx = bin_volumes.index(max(bin_volumes))
+        # NumPy 벡터화 연산으로 각 close에 대응하는 bin index를 일괄 계산 및 클리핑
+        bin_indices = ((closes.values - min_price) / bin_width).astype(int)
+        np.clip(bin_indices, 0, num_bins - 1, out=bin_indices)
+        
+        # np.bincount를 활용하여 각 bin index 별로 volume을 누적합
+        bin_volumes = np.bincount(bin_indices, weights=volumes.values, minlength=num_bins)
+        
+        poc_idx = np.argmax(bin_volumes)
         poc_price = min_price + (poc_idx + 0.5) * bin_width
-        return poc_price
+        return float(poc_price)
 
     async def check_entry(
         self,
