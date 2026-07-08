@@ -452,7 +452,6 @@ async def process_closed_kline(
             df_15m=df_15m,
             cvd_trend=cvd_trend,
             bid_ask_imbalance=twap_imbalance,
-            all_htf_15m=htf_df_15m,
             hft_features=hft_feats,
             interval=interval,
         )
@@ -687,100 +686,39 @@ async def chandelier_monitoring_loop(
         거래소 SL이 먼저 체결되면 portfolio 상태가 sync되어 중복 청산을 방지합니다.
     """
     while True:
-        await asyncio.sleep(30)  # 30쳈
-async def target_refresh_loop(pipeline: DataPipeline, execution: ExecutionEngine):
-    """
-    4시간마다 Top Volume 15종목을 갱신하고 WebSocket을 재연결합니다.
-    사용자의 수동 요청(refresh_event)이 있을 경우 즉시 수행합니다.
-    """
-    global \
-        ws_reconnect_flag, \
-        refresh_event, \
-        df_map, \
-        htf_df_1h, \
-        htf_df_15m, \
-        cvd_data, \
-        imbalance_history
-
-    while True:
-        wait_sec = calc_next_refresh_seconds()
-        logger.info(
-            f"⏳ [Target Refresh] 다음 정기 심볼 갱신까지 {wait_sec / 3600:.1f} 시간 대기합니다. (수동 요청 대기 중)"
-        )
-
+        await asyncio.sleep(30)  # 30초마다 샹들리에 손절선 점검
         try:
-            # 정기 스케줄까지 대기하되, 수동 이벤트 발생 시 즉시 깨어남
-            await asyncio.wait_for(refresh_event.wait(), timeout=wait_sec)
-            logger.info("⚡ [Target Refresh] 수동 즉시 새로고침 요청 감지!")
-            refresh_event.clear()
-        except asyncio.TimeoutError:
-            logger.info("🔄 [Target Refresh] 정기 심볼 갱신 타이머 작동!")
+            symbols_to_check = list(portfolio.positions.keys())
+            for sym in symbols_to_check:
+                pos = portfolio.positions.get(sym)
+                if not pos:
+                    continue
 
-        # 1. 새 종목 리스트 추출 (24시간 거래대금 상위 15개)
-        try:
-            raw_symbols = await pipeline.fetch_top_volume_tickers(
-                limit=15 + len(settings.BLACKLIST_SYMBOLS)
-            )
-            # 블랙리스트 필터링 적용
-            new_target_symbols = [
-                s for s in raw_symbols if s not in settings.BLACKLIST_SYMBOLS
-            ][:15]
-        except Exception as e:
-            logger.error(f"심볼 갱신 중 에러 발생: {e}. 다음 주기로 연기합니다.")
-            continue
+                # 현재 가격 데이터 참조
+                df = df_map.get(sym)
+                if df is None or df.empty:
+                    continue
 
-        # 2. 보유 포지션 보호 (Retention)
-        active_coins = list(execution.active_positions.keys())
-        for coin in active_coins:
-            if coin not in new_target_symbols:
-                logger.warning(
-                    f"🛡️ [Target Refresh] {coin} 종목은 포지션이 있어 감시 리스트에 강제 유지됩니다."
+                current_price = float(df.iloc[-1]["close"])
+                current_high = float(df.iloc[-1]["high"])
+                current_low = float(df.iloc[-1]["low"])
+                current_atr = float(df.iloc[-1].get("ATR_14", current_price * 0.005))
+
+                result = strategy.check_chandelier_exit(
+                    sym, portfolio, current_price, current_high, current_low, current_atr
                 )
-                new_target_symbols.append(coin)
 
-        # 3. 변경사항이 있는지 확인
-        global_target_names = getattr(settings, "CURRENT_TARGET_SYMBOLS", [])
-        if set(new_target_symbols) == set(global_target_names):
-            logger.info(
-                "✅ [Target Refresh] 감시 종목에 변화가 없습니다. 연결을 유지합니다."
-            )
-            continue
-
-        logger.info(
-            f"📈 [Target Refresh] 감시 종목이 변경되었습니다. (기존 {len(global_target_names)} -> 신규 {len(new_target_symbols)})"
-        )
-
-        # 4. 차집합 웜업 (Differential Warm-up)
-        # 새로 추가된 종목만 REST API 호출
-        added_symbols = set(new_target_symbols) - set(global_target_names)
-        await warm_up_differential_data(added_symbols, pipeline)
-
-        # 5. 가비지 컬렉션 (더 이상 감시하지 않는 Old Tickers 메모리 정리)
-        removed_symbols = set(global_target_names) - set(new_target_symbols)
-        if removed_symbols:
-            logger.info(
-                f"🧹 [Target Refresh] 감시 제외 종목 메모리 정리: {removed_symbols}"
-            )
-            for rm_sym in removed_symbols:
-                df_map.pop(rm_sym, None)
-                htf_df_1h.pop(rm_sym, None)
-                htf_df_15m.pop(rm_sym, None)
-                cvd_data.pop(rm_sym, None)
-                imbalance_history.pop(rm_sym, None)
-                portfolio.close_position(
-                    rm_sym
-                )  # 혹은 남아있는 포트폴리오 가상 상태도 정리
-
-        # 6. Global 상태 업데이트 및 WebSocket 재시작 신호 발송
-        settings.CURRENT_TARGET_SYMBOLS = new_target_symbols
-        ws_reconnect_flag = True
-
-# [V18] 동적 심볼 갱신을 위한 웹소켓 재연결 플래그 및 즉시 새로고침 이벤트
-ws_reconnect_flag = False
-refresh_event = asyncio.Event()
-# 동적 심볼 겻신을 위한 웹소켓 재연결 플래그 및 즉시 새로고침 이뢤트
-ws_reconnect_flag = False
-refresh_event = asyncio.Event()
+                if result["exit"]:
+                    logger.info(
+                        f"🕯️ [{sym}] 샹들리에 손절선 돌파 감지! 시장가 청산 요청. "
+                        f"(현재가: {current_price:.4f}, 손절선: {result['chandelier_stop']:.4f})"
+                    )
+                    await execution.close_position_market(
+                        symbol=sym,
+                        reason="Chandelier Exit (동적 추적 손절)",
+                    )
+        except Exception as e:
+            logger.error(f"[ChandelierMonitor] 오류: {e}")
 
 
 async def target_refresh_loop(pipeline: DataPipeline, execution: ExecutionEngine):
