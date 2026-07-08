@@ -721,6 +721,11 @@ async def chandelier_monitoring_loop(
             logger.error(f"[ChandelierMonitor] 오류: {e}")
 
 
+# [V18] 동적 심볼 갱신을 위한 웹소켓 재연결 플래그 및 즉시 새로고침 이벤트 (모듈 레벨 전역 선언)
+ws_reconnect_flag = False
+refresh_event = asyncio.Event()
+
+
 async def target_refresh_loop(pipeline: DataPipeline, execution: ExecutionEngine):
     """
     12시간(오프셋 기준)마다 Top Volume 15종목을 갱신하고 WebSocket을 재연결합니다.
