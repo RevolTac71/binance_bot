@@ -13,8 +13,8 @@
 - `docs/`: 아키텍처와 전략 설계 문서
 - `requirements.txt`, `settings.json`: 의존성과 설정
 
-## 사용 전 확인
+## 거래 설정
 
-실행은 설정 및 자격 증명에 따라 **실제 거래·주문 또는 외부 서비스 접근을 유발할 수 있습니다.** 환경, 거래 모드, 권한, 위험 설정과 데이터베이스 연결을 확인하세요. 이 README 작성 과정에서는 프로그램을 실행하거나 거래 모드를 검증하지 않았습니다.
+실행은 설정 및 자격 증명에 따라 **실제 거래·주문 또는 외부 서비스 접근을 유발할 수 있습니다.** `config.py`에서 `DRY_RUN`의 기본값은 `True`로 설정되어 있습니다.
 
-전략 설명은 [전략 문서](docs/strategies/bb_squeeze_breakout.md) 및 [아키텍처 문서](docs/blueprints/architecture_blueprint.md)를 참고하세요. 문서는 실제 코드와 차이가 있을 수 있습니다. API 키나 계정 정보는 저장소에 커밋하지 마세요.
+전략 설명은 [전략 문서](docs/strategies/bb_squeeze_breakout.md) 및 [아키텍처 문서](docs/blueprints/architecture_blueprint.md)를 참고하세요. API 키나 계정 정보는 저장소에 커밋하지 마세요.
